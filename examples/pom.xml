@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.cymoo</groupId>
+        <artifactId>colleen-parent</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>examples</artifactId>
+    <packaging>pom</packaging>
+
+    <modules>
+        <module>hello-world</module>
+        <module>todo-app</module>
+        <module>sub-app</module>
+        <module>auth-app</module>
+        <module>render-html</module>
+        <module>testing</module>
+        <module>signed-cookie</module>
+        <module>upload-app</module>
+        <module>sse</module>
+        <module>event-system</module>
+        <module>error-handling</module>
+        <module>validator</module>
+        <module>serve-static</module>
+        <module>jooq-sqlite</module>
+        <module>custom-extractor</module>
+        <module>extractor</module>
+        <module>redis</module>
+        <module>jdbc</module>
+        <module>auto-reload</module>
+    </modules>
+
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+</project>

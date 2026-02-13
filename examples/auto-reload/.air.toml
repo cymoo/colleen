@@ -1,0 +1,31 @@
+root = "."
+
+tmp_dir = "target/air"
+
+[build]
+# Incremental compile using standard maven
+cmd = "mvn -T 1C -q -DskipTests compile"
+
+bin = "mvn"
+
+# Use maven exec plugin to run application
+full_bin = "mvn -q exec:java"
+
+include_ext = ["kt", "java", "xml", "yml", "yaml", "properties"]
+
+exclude_dir = ["target", ".git", ".idea", ".vscode"]
+
+# debounce time
+delay = 400
+
+stop_on_error = true
+
+# graceful restart
+kill_signal = "SIGTERM"
+kill_delay = 1
+
+[log]
+level = "info"
+
+[misc]
+clean_on_exit = true

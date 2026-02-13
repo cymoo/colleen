@@ -1,0 +1,62 @@
+# ==================================================
+# Maven
+# ==================================================
+target/
+
+# Maven release & plugins
+pom.xml.versionsBackup
+pom.xml.releaseBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+.flattened-pom.xml
+
+# Maven Wrapper (keep)
+!.mvn/wrapper/maven-wrapper.jar
+
+# Generated API documentation
+docs/api/
+
+# ==================================================
+# Kotlin
+# ==================================================
+.kotlin/
+.ksp/
+.kapt/
+
+# ==================================================
+# Testing
+# ==================================================
+surefire-reports/
+failsafe-reports/
+*.log
+
+# ==================================================
+# GPG / Signing (Central)
+# ==================================================
+*.asc
+*.sig
+
+# ==================================================
+# Credentials / Local config
+# ==================================================
+.env
+.env.*
+settings.xml
+
+# ==================================================
+# IDE
+# ==================================================
+.idea/
+*.iml
+.vscode/
+.history/
+
+# ==================================================
+# OS / Editor
+# ==================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
