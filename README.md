@@ -49,6 +49,24 @@ The goal is not to maximize features, but to maximize understandability and cont
 
 ## Quick Start
 
+### Installation
+
+**Maven**
+
+```xml
+<dependency>
+    <groupId>io.github.cymoo</groupId>
+    <artifactId>colleen</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+**Gradle (Kotlin DSL)**
+
+```kotlin
+implementation("io.github.cymoo:colleen:0.1.0")
+```
+
 ### Hello World
 
 ```kotlin
