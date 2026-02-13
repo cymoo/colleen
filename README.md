@@ -1,5 +1,7 @@
 # Colleen Web Framework
 
+[中文文档](README-zh.md)
+
 ## Table of Contents
 
 1. [Introduction](#introduction)

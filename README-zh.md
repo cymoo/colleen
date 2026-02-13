@@ -1,5 +1,7 @@
 # Colleen Web 框架
 
+[English Documentation](README.md)
+
 ## 目录
 
 1. [简介](#简介)
