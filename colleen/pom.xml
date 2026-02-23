@@ -16,6 +16,7 @@
 
     <name>Colleen Web Framework</name>
     <description>A lightweight web framework for Kotlin and Java</description>
+    <url>https://github.com/cymoo/colleen</url>
 
     <dependencies>
         <!-- Kotlin Standard Library -->
