@@ -861,9 +861,9 @@ class Colleen {
     /**
      * Registers a pre-built service instance (Java-compatible).
      *
-     * @param clazz     the service class
-     * @param instance  the service instance to register
-     * @param qualifier optional qualifier to distinguish instances of the same type
+     * @param clazz     the service class.
+     * @param instance  the service instance to register.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
      */
     @JvmOverloads
     fun <T : Any> provide(clazz: Class<T>, instance: T, qualifier: Any? = null) {
@@ -871,31 +871,35 @@ class Colleen {
     }
 
     /**
-     * Registers a service using a factory function (Java-compatible).
+     * Registers a lazily initialized singleton service (Java-compatible).
      *
-     * @param clazz     the service class
-     * @param qualifier optional qualifier to distinguish instances of the same type
-     * @param lifetime  defines the lifetime and caching behavior. Defaults to [Lifetime.Singleton]
-     * @param factory   a function that creates instances of the service
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @param factory   a function that creates the service instance.
      */
     @JvmOverloads
-    fun <T : Any> provide(
+    fun <T : Any> provideSingleton(
         clazz: Class<T>,
         qualifier: Any? = null,
-        lifetime: Lifetime = Lifetime.Singleton,
-        factory: () -> T
+        factory: () -> T,
     ) {
-        when (lifetime) {
-            Lifetime.Singleton -> serviceContainer.registerSingleton(clazz, qualifier, factory)
-            Lifetime.Transient -> serviceContainer.registerTransient(clazz, qualifier, factory)
-        }
+        serviceContainer.registerSingleton(clazz, qualifier, factory)
     }
 
     /**
-     * Registers a singleton-free service by lifetime without a qualifier (Java-compatible).
+     * Registers a transient service (Java-compatible).
+     *
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @param factory   a function that creates a new instance on every resolution.
      */
-    fun <T : Any> provide(clazz: Class<T>, lifetime: Lifetime, factory: () -> T) {
-        provide(clazz, null, lifetime, factory)
+    @JvmOverloads
+    fun <T : Any> provideTransient(
+        clazz: Class<T>,
+        qualifier: Any? = null,
+        factory: () -> T,
+    ) {
+        serviceContainer.registerTransient(clazz, qualifier, factory)
     }
 
     fun get(path: String, handler: VoidHandler) = get(path) { ctx -> handler.invoke(ctx) }

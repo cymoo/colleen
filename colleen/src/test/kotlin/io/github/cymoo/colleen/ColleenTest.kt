@@ -433,7 +433,7 @@ class ColleenTest {
         var callCount = 0
 
         // Act
-        app.provide(TestService::class.java, Lifetime.Singleton) {
+        app.provideSingleton(TestService::class.java) {
             callCount++
             TestService(callCount)
         }
@@ -456,7 +456,7 @@ class ColleenTest {
         var callCount = 0
 
         // Act
-        app.provide(TestService::class.java, Lifetime.Transient) {
+        app.provideTransient(TestService::class.java) {
             callCount++
             TestService(callCount)
         }
@@ -479,7 +479,7 @@ class ColleenTest {
         var callCount = 0
 
         // Act
-        app.provide(TestService::class.java) {
+        app.provideSingleton(TestService::class.java) {
             callCount++
             TestService()
         }
