@@ -329,6 +329,12 @@ data class Context(
         app.serviceContainer.getOrNull(kClass, qualifier)
             ?: parentContext?.resolveService(kClass, qualifier)
 
+    @PublishedApi
+    internal fun resolveQualifier(name: String): Any =
+        app.serviceContainer.lookupQualifier(name)
+            ?: parentContext?.resolveQualifier(name)
+            ?: name
+
     // ========================================================================
     // Request Delegates
     // ========================================================================

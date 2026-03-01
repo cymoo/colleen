@@ -181,6 +181,39 @@ internal fun cx(method: Method, instance: Any? = null): Handler {
 @Retention(AnnotationRetention.RUNTIME)
 annotation class Param(val value: String = "")
 
+/**
+ * Declares a qualifier for a handler function parameter, enabling the
+ * framework to resolve a specific service registration when multiple
+ * instances of the same type are registered under different qualifiers.
+ *
+ * The [name] is matched against registered qualifier objects using
+ * [ServiceContainer.lookupQualifier]:
+ * - If a non-String qualifier (e.g. an `object`) with a matching simple
+ *   class name was registered, that object is used as the lookup key.
+ * - Otherwise [name] itself is used as a plain String qualifier.
+ *
+ * Both exact case and lowercase are tried, so `@Qualifier("Primary")`
+ * and `@Qualifier("primary")` are equivalent.
+ *
+ * ### Example
+ * ```kotlin
+ * object Primary
+ * object Replica
+ *
+ * app.provide<DataSource>(Primary) { HikariDataSource(primaryConfig) }
+ * app.provide<DataSource>(Replica) { HikariDataSource(replicaConfig) }
+ *
+ * // Resolved automatically — no extra registration step required
+ * fun handler(
+ *     @Qualifier("Primary") primary: DataSource,
+ *     @Qualifier("Replica") replica: DataSource,
+ * ): String = primary.query("SELECT 1")
+ * ```
+ */
+@Target(AnnotationTarget.VALUE_PARAMETER)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Qualifier(val name: String)
+
 // ========================================================================
 // Base class and interface
 // ========================================================================
@@ -551,19 +584,29 @@ class Form<T>(value: T) : ParamExtractor<T>(value) {
 private fun buildExtractor(paramName: String, param: Parameter): (Context) -> Any? {
     val wrapperClass = param.type.getRawClass()
 
-    // Direct Context parameter
+    // 1. Direct Context parameter
     if (wrapperClass == Context::class.java) {
         return { it }
     }
 
-    // Check if it's a ParamExtractor
+    // 2. ParamExtractor
     if (ParamExtractor::class.java.isAssignableFrom(wrapperClass)) {
         val factory = getExtractorFactory(wrapperClass)
         return factory.build(paramName, param)
     }
 
-    // Fallback to service injection
-    return { ctx -> ctx.getServiceOrNull(wrapperClass) }
+    // 3. Service injection
+    val qualifierName = param.getAnnotation(Qualifier::class.java)?.name
+    val kClass = wrapperClass.kotlin
+
+    return if (qualifierName == null) {
+        { ctx -> ctx.resolveService(kClass, null) }
+    } else {
+        { ctx ->
+            val qualifier = ctx.resolveQualifier(qualifierName)
+            ctx.resolveService(kClass, qualifier)
+        }
+    }
 }
 
 /**

@@ -55,14 +55,14 @@ Colleen 是一个轻量级、类型安全的 Kotlin / Java Web 框架。
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.1.0")
+implementation("io.github.cymoo:colleen:0.2.0")
 ```
 
 ### Hello World
@@ -262,7 +262,7 @@ Colleen 提供了一组完整示例，覆盖常见功能与集成方式：
 - **[upload-app](examples/upload-app/src/main/kotlin/Main.kt)** - 文件上传与下载，包含大小校验与静态资源管理等
 - **[extractor](examples/extractor/src/main/kotlin/Main.kt)** - 参数提取全景示例（路径、查询、表单、JSON、Header、Cookie、文件）
 - **[custom-extractor](examples/custom-extractor/src/main/kotlin/Main.kt)** - 自定义领域参数提取器（BearerToken、Pagination、DateRange）
-- **[jooq-sqlite](examples/jooq-sqlite/src/main/kotlin/)** - JOOQ 集成示例，包含代码生成、连接池与类型安全查询
+- **[jooq-sqlite](examples/jooq-sqlite/src/main/kotlin)** - JOOQ 集成示例，包含代码生成、连接池与类型安全查询
 - **[render-html](examples/render-html/src/main/kotlin/Main.kt)** - Pebble 模板引擎集成，用于动态 HTML 渲染
 - **[serve-static](examples/serve-static/src/main/kotlin/Main.kt)** - 静态文件服务，支持缓存控制、自动索引与安全策略
 - **[error-handling](examples/error-handling/src/main/kotlin/Main.kt)** - 全局异常处理、子应用异常传播与自定义错误中间件
@@ -1567,11 +1567,11 @@ Colleen 内置一个轻量级依赖注入（DI）容器，用于管理应用级�
 
 设计目标：
 
-- 显式、可预测
-- 不依赖基于反射的构造函数注入
-- 与子应用（Sub-Application）兼容
+* 显式、可预测
+* 不依赖基于反射的构造函数注入
+* 与子应用（Sub-Application）完全兼容
 
-整个 DI 机制强调类型驱动、显式注册、按需解析。
+整个 DI 系统强调类型驱动、显式注册和分层解析。
 
 ### 注册服务
 
@@ -1579,12 +1579,11 @@ Colleen 内置一个轻量级依赖注入（DI）容器，用于管理应用级�
 
 #### 单例（Singleton）
 
-单例服务按需创建（延迟初始化），并在后续解析中复用同一实例。
+单例服务按需创建（延迟初始化），并在后续解析中复用同一实例：
 
 ```kotlin
 // 注册现有实例
-val userService = UserService()
-app.provide(userService)
+app.provide(UserService())
 
 // 注册工厂（延迟创建单例）
 app.provide { UserService() }
@@ -1592,24 +1591,53 @@ app.provide { UserService() }
 
 #### 瞬态（Transient）
 
-瞬态服务在每次解析时都会创建新实例。
+瞬态服务在每次解析时都会创建新实例：
 
 ```kotlin
-app.provide(Lifetime.Transient) { UserService() }
+app.provide(singleton = false) { UserService() }
 ```
 
 适用于：
 
-- 无状态对象
-- 轻量级计算型服务
-- 明确需要隔离实例的场景
+* 无状态对象
+* 轻量级服务
+* 需要实例隔离的场景
+
+#### 使用 Qualifier 区分服务实例
+
+当需要注册同一类型的多个实例时，可以使用 qualifier 进行区分。
+
+推荐使用 Kotlin 的 `object` 作为 qualifier，具有以下优势：
+
+* 编译期类型安全
+* 支持 IDE 重构
+* 避免字符串错误
+
+对于简单场景，也可以使用字符串作为 qualifier。
+
+```kotlin
+object Primary
+object Replica
+
+app.provide(qualifier = Primary) { HikariDataSource(primaryConfig) }
+app.provide(qualifier = Replica) { HikariDataSource(replicaConfig) }
+
+// 带 qualifier 的瞬态服务
+app.provide(qualifier = Primary, singleton = false) { HikariDataSource(primaryConfig) }
+
+// 带 qualifier 的现有实例
+app.provide(HikariDataSource(primaryConfig), qualifier = Primary)
+
+// 使用字符串 qualifier
+app.provide(qualifier = "primary") { HikariDataSource(primaryConfig) }
+```
 
 ### 注入服务
 
 服务可以通过两种方式获取：
 
-- 从请求上下文显式获取
-- 作为 handler 参数自动解析
+* 从请求上下文显式获取
+* 作为 handler 参数自动解析
 
 #### 在 handler 中显式获取
 
@@ -1618,19 +1646,29 @@ app.get("/users") { ctx ->
     val userService = ctx.getService<UserService>()
     userService.findAll()
 }
+
+// 使用 qualifier
+app.get("/report") { ctx ->
+    val primary = ctx.getService<DataSource>(Primary)
+    val replica = ctx.getService<DataSource>(Replica)
+    replica.query("SELECT ...")
+}
 ```
 
 #### 作为 handler 函数参数
 
-Handler 函数可以声明多种类型的参数，Colleen 按规则自动解析。
+Handler 函数可以声明多种类型的参数，Colleen 会自动解析。
 
-参数解析规则如下：
+参数解析规则：
 
-- `Context` 类型 → 注入当前请求上下文
+* `Context` 类型
+  → 注入当前请求上下文
 
-- `ParamExtractor` 类型 → 从请求中提取（路径、查询、请求头、请求体等）
+* `ParamExtractor` 类型
+  → 从请求中提取数据（路径参数、Query、Header、Body 等）
 
-- 其他类型 → 视为服务，从 DI 容器中解析
+* 其他类型
+  → 视为服务，从 DI 容器中解析
 
 ```kotlin
 fun getUsers(userService: UserService): List<User> {
@@ -1640,9 +1678,40 @@ fun getUsers(userService: UserService): List<User> {
 app.get("/users", ::getUsers)
 ```
 
-#### 在 controller 中使用
+如果需要注入带 qualifier 的服务，可以使用 `@Qualifier` 注解，并指定 qualifier 名称。
 
-Controller 是普通的 Kotlin 或 Java 类，其依赖通过构造函数显式传入。
+当 qualifier 使用 Kotlin `object` 注册时，使用其类名（不区分大小写）：
+
+```kotlin
+object Primary
+object Replica
+
+app.provide(qualifier = Primary) { HikariDataSource(primaryConfig) }
+app.provide(qualifier = Replica) { HikariDataSource(replicaConfig) }
+
+fun getReport(
+    @Qualifier("Primary") primary: DataSource,
+    @Qualifier("Replica") replica: DataSource,
+): String {
+    return replica.query("SELECT ...")
+}
+
+app.get("/report", ::getReport)
+```
+
+如果 qualifier 使用字符串注册，则直接使用该字符串：
+
+```kotlin
+app.provide(qualifier = "primary") { HikariDataSource(primaryConfig) }
+
+fun getReport(@Qualifier("primary") ds: DataSource): String {
+    return ds.query("SELECT ...")
+}
+```
+
+#### 在 Controller 中使用
+
+Controller 是普通的 Kotlin 或 Java 类，其依赖通过构造函数显式提供：
 
 ```kotlin
 @Controller("/users")
@@ -1656,26 +1725,29 @@ class UserController(
     }
 
     @Get("/{id}")
-    fun get(id: Path<Int>): User = userService.findById(id.value)
+    fun get(id: Path<Int>): User {
+        return userService.findById(id.value)
+    }
 }
 
 // 注册 controller
 app.addController(UserController(UserService()))
 ```
 
-Controller 方法的参数解析规则与普通 handler 一致：
+Controller 方法的参数解析规则与普通 handler 完全一致：
 
-- `Context` → 注入请求上下文
-- `ParamExtractor` → 请求数据提取
-- 其他类型 → 作为服务从容器解析
+* `Context` → 注入请求上下文
+* `ParamExtractor` → 从请求提取数据
+* 其他类型 → 作为服务从 DI 容器解析
+* `@Qualifier` → 用于解析指定实例
 
 ### 服务解析机制
 
-服务采用分层查找策略进行解析：
+服务解析采用分层查找策略：
 
 1. 当前应用的服务容器
-2. 父应用容器
-3. 祖先容器（递归向上）
+2. 父应用的服务容器
+3. 祖先应用的服务容器（递归向上）
 
 ```kotlin
 val mainApp = Colleen()
@@ -1689,14 +1761,15 @@ mainApp.mount("/api", apiApp)
 
 在 `apiApp` 中：
 
-- `UserService` 从 `apiApp` 容器解析
-- `DatabaseService` 从 `mainApp` 容器解析
+* `UserService` 从 `apiApp` 容器解析
+* `DatabaseService` 从 `mainApp` 容器解析
 
 这种分层机制带来的好处：
 
-1. 基础设施服务可在顶层共享
-2. 领域服务可在子应用中隔离
-3. 模块化结构更加清晰。
+* 基础设施服务可以在顶层统一提供
+* 子应用可以定义自己的领域服务
+* 模块之间职责清晰，互不干扰
+* 支持构建结构清晰的模块化应用
 
 ---
 

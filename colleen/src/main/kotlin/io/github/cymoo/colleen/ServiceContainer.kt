@@ -85,6 +85,10 @@ class ServiceContainer {
     @PublishedApi
     internal val factories = ConcurrentHashMap<ServiceKey, () -> Any>()
 
+    // Maps qualifier simple class name (case-insensitive) -> qualifier object
+    // Built automatically whenever a non-String qualifier is registered.
+    private val qualifierRegistry = ConcurrentHashMap<String, Any>()
+
     // ========================================================================
     // Registration
     // ========================================================================
@@ -101,6 +105,7 @@ class ServiceContainer {
         instance: T,
         qualifier: Any? = null,
     ): ServiceContainer {
+        trackQualifier(qualifier)
         instances[ServiceKey(T::class, qualifier)] = instance
         return this
     }
@@ -118,6 +123,7 @@ class ServiceContainer {
         qualifier: Any? = null,
         noinline factory: () -> T,
     ): ServiceContainer {
+        trackQualifier(qualifier)
         val key = ServiceKey(T::class, qualifier)
         factories[key] = { instances.computeIfAbsent(key) { factory() } }
         return this
@@ -136,23 +142,37 @@ class ServiceContainer {
         qualifier: Any? = null,
         noinline factory: () -> T,
     ): ServiceContainer {
+        trackQualifier(qualifier)
         factories[ServiceKey(T::class, qualifier)] = factory
         return this
     }
 
     /**
-     * Binds an interface [TInterface] to a concrete implementation [TImpl].
+     * Records a non-String qualifier in the registry so it can later be
+     * resolved by name via [lookupQualifier].
      *
-     * Resolving [TInterface] will delegate to the registered [TImpl] service.
+     * Only object/singleton qualifiers benefit from this — plain String
+     * qualifiers are passed through as-is and need no registration.
      *
-     * @param qualifier optional qualifier applied to the interface binding.
+     * Anonymous objects (no simpleName) are silently ignored; they cannot
+     * be referenced by name anyway.
      */
-    inline fun <reified TInterface : Any, reified TImpl : TInterface> bind(
-        qualifier: Any? = null,
-    ): ServiceContainer {
-        factories[ServiceKey(TInterface::class, qualifier)] = { get<TImpl>() }
-        return this
+    @PublishedApi
+    internal fun trackQualifier(qualifier: Any?) {
+        if (qualifier == null || qualifier is String) return
+        val name = qualifier::class.simpleName ?: return
+        // Store under both original case and lowercase for flexible lookup
+        qualifierRegistry[name] = qualifier
+        qualifierRegistry[name.lowercase()] = qualifier
     }
+
+    /**
+     * Looks up a qualifier object by name in this container's registry.
+     * Returns the registered object if found, null otherwise.
+     * Callers are responsible for fallback behavior (e.g. walking up the context chain).
+     */
+    fun lookupQualifier(name: String): Any? =
+        qualifierRegistry[name] ?: qualifierRegistry[name.lowercase()]
 
     // ========================================================================
     // Retrieval — reified entry points (delegate to KClass overloads below)
@@ -331,6 +351,7 @@ class ServiceContainer {
         instance: T,
         qualifier: Any? = null,
     ): ServiceContainer {
+        trackQualifier(qualifier)
         instances[ServiceKey(clazz.kotlin, qualifier)] = instance
         return this
     }
@@ -340,6 +361,7 @@ class ServiceContainer {
         qualifier: Any? = null,
         factory: () -> T,
     ): ServiceContainer {
+        trackQualifier(qualifier)
         val key = ServiceKey(clazz.kotlin, qualifier)
         factories[key] = { instances.computeIfAbsent(key) { factory() } }
         return this
@@ -350,6 +372,7 @@ class ServiceContainer {
         qualifier: Any? = null,
         factory: () -> T,
     ): ServiceContainer {
+        trackQualifier(qualifier)
         factories[ServiceKey(clazz.kotlin, qualifier)] = factory
         return this
     }

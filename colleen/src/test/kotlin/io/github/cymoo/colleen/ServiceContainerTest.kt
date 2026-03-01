@@ -249,37 +249,6 @@ class ServiceContainerTest {
     }
 
     // ========================================================================
-    // bind
-    // ========================================================================
-
-    @Nested
-    inner class Bind {
-
-        @Test
-        fun `resolving the interface returns an instance of the bound implementation`() {
-            container.registerSingleton { UserRepository() }
-            container.bind<Repository, UserRepository>()
-            assertNotNull(container.get<Repository>())
-        }
-
-        @Test
-        fun `bound interface delegates to the same singleton instance`() {
-            container.registerSingleton { UserRepository() }
-            container.bind<Repository, UserRepository>()
-            assertSame(container.get<UserRepository>(), container.get<Repository>())
-        }
-
-        @Test
-        fun `bind supports qualifier`() {
-            container.registerSingleton { UserRepository() }
-            container.bind<Repository, UserRepository>(qualifier = Primary)
-            assertNotNull(container.get<Repository>(Primary))
-            // No-qualifier binding must remain absent
-            assertNull(container.getOrNull<Repository>())
-        }
-    }
-
-    // ========================================================================
     // get / getOrNull / getOrDefault / getOrElse
     // ========================================================================
 
