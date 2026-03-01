@@ -621,6 +621,148 @@ class ExtractorTest {
     }
 
     // ============================================
+    // Qualifier-based Service injection
+    // ============================================
+
+    object Primary
+    object Replica
+
+    class QualifiedService(val value: String)
+
+    // --- object qualifier ---
+
+    fun handlerWithPrimaryQualifier(@Qualifier("Primary") svc: QualifiedService) = svc.value
+    fun handlerWithReplicaQualifier(@Qualifier("Replica") svc: QualifiedService) = svc.value
+
+    @Test
+    fun `should inject service with object qualifier (exact case)`() {
+        app.provide(qualifier = Primary) { QualifiedService("primary-value") }
+        app.provide(qualifier = Replica) { QualifiedService("replica-value") }
+
+        val ctx = createContext()
+        assertEquals("primary-value", cx(::handlerWithPrimaryQualifier)(ctx))
+        assertEquals("replica-value", cx(::handlerWithReplicaQualifier)(ctx))
+    }
+
+    fun handlerWithLowercaseQualifier(@Qualifier("primary") svc: QualifiedService) = svc.value
+
+    @Test
+    fun `should inject service with object qualifier (case-insensitive)`() {
+        app.provide(qualifier = Primary) { QualifiedService("primary-value") }
+
+        val ctx = createContext()
+        assertEquals("primary-value", cx(::handlerWithLowercaseQualifier)(ctx))
+    }
+
+    // --- string qualifier ---
+
+    fun handlerWithStringQualifier(@Qualifier("db-main") svc: QualifiedService) = svc.value
+
+    @Test
+    fun `should inject service with string qualifier`() {
+        app.provide(qualifier = "db-main") { QualifiedService("string-qualified") }
+
+        val ctx = createContext()
+        assertEquals("string-qualified", cx(::handlerWithStringQualifier)(ctx))
+    }
+
+    // --- qualifier not matched ---
+
+    object Unregistered
+
+    fun handlerWithUnregisteredQualifierNullable(@Qualifier("Unregistered") svc: QualifiedService?) = svc
+
+    @Test
+    fun `should get null when qualified service not found and parameter is nullable`() {
+        val ctx = createContext()
+        assertNull(cx(::handlerWithUnregisteredQualifierNullable)(ctx))
+    }
+
+    fun handlerWithUnregisteredQualifierNonNull(@Qualifier("Unregistered") svc: QualifiedService) = svc
+
+    @Test
+    fun `should throw when qualified service not found and parameter is non-null`() {
+        val ctx = createContext()
+        assertThrows<IllegalArgumentException> {
+            cx(::handlerWithUnregisteredQualifierNonNull)(ctx)
+        }
+    }
+
+    fun handlerWithUnregisteredQualifierDefault(
+        @Qualifier("Unregistered") svc: QualifiedService = QualifiedService("default"),
+    ) = svc.value
+
+    @Test
+    fun `should use default value when qualified service not found`() {
+        val ctx = createContext()
+        assertEquals("default", cx(::handlerWithUnregisteredQualifierDefault)(ctx))
+    }
+
+    // --- same type, multiple qualifiers are isolated ---
+
+    fun handlerWithBothQualifiers(
+        @Qualifier("Primary") primary: QualifiedService,
+        @Qualifier("Replica") replica: QualifiedService,
+    ) = "${primary.value}:${replica.value}"
+
+    @Test
+    fun `should resolve different instances for different qualifiers of same type`() {
+        app.provide(qualifier = Primary) { QualifiedService("primary-value") }
+        app.provide(qualifier = Replica) { QualifiedService("replica-value") }
+
+        val ctx = createContext()
+        assertEquals("primary-value:replica-value", cx(::handlerWithBothQualifiers)(ctx))
+    }
+
+    fun handlerNoQualifier(svc: QualifiedService) = svc.value
+
+    @Test
+    fun `should not resolve qualified service when no qualifier annotation present`() {
+        // only qualified registrations exist — unqualified lookup must fail
+        app.provide(qualifier = Primary) { QualifiedService("primary-value") }
+
+        val ctx = createContext()
+        assertThrows<IllegalArgumentException> {
+            cx(::handlerNoQualifier)(ctx)
+        }
+    }
+
+    // --- qualifier resolution in parent-child app hierarchy ---
+
+    fun handlerResolvesFromParent(@Qualifier("Primary") svc: QualifiedService) = svc.value
+
+    @Test
+    fun `should resolve qualified service from parent app when not found in child`() {
+        val parent = Colleen()
+        parent.provide(qualifier = Primary) { QualifiedService("parent-primary") }
+
+        val child = Colleen()
+        parent.mount("/child", child)
+
+        child.get("/test", ::handlerResolvesFromParent)
+
+        val testClient = TestClient(parent)
+        val rv = testClient.get("/child/test").send()
+        assertEquals("parent-primary", rv.text())
+    }
+
+    @Test
+    fun `should prefer child app qualified service over parent`() {
+        val parent = Colleen()
+        parent.provide(qualifier = Primary) { QualifiedService("parent-primary") }
+
+        val child = Colleen()
+        child.provide(qualifier = Primary) { QualifiedService("child-primary") }
+        parent.mount("/child", child)
+
+        child.get("/test", ::handlerResolvesFromParent)
+
+        val testClient = TestClient(parent)
+        val rv = testClient.get("/child/test").send()
+        assertEquals("child-primary", rv.text())
+    }
+
+    // ============================================
     // Mixed params extract
     // ============================================
 

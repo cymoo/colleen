@@ -57,14 +57,14 @@ The goal is not to maximize features, but to maximize understandability and cont
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.1.0")
+implementation("io.github.cymoo:colleen:0.2.0")
 ```
 
 ### Hello World
@@ -266,7 +266,7 @@ Colleen comes with comprehensive examples demonstrating various features and int
   query, form, JSON, headers, cookies, files)
 - **[custom-extractor](examples/custom-extractor/src/main/kotlin/Main.kt)** - Domain-specific parameter extractors (
   BearerToken, Pagination, DateRange)
-- **[jooq-sqlite](examples/jooq-sqlite/src/main/kotlin/)** - JOOQ integration with code generation, connection
+- **[jooq-sqlite](examples/jooq-sqlite/src/main/kotlin)** - JOOQ integration with code generation, connection
   pooling, and type-safe queries
 - **[render-html](examples/render-html/src/main/kotlin/Main.kt)** - Pebble template engine integration for dynamic HTML
   rendering
@@ -1604,8 +1604,7 @@ Singleton services are created lazily and reused for all resolutions:
 
 ```kotlin
 // Register an existing instance
-val userService = UserService()
-app.provide(userService)
+app.provide(UserService())
 
 // Register a factory (lazy singleton)
 app.provide { UserService() }
@@ -1616,7 +1615,30 @@ app.provide { UserService() }
 Transient services are created every time they are retrieved:
 
 ```kotlin
-app.provide(Lifetime.Transient) { UserService() }
+app.provide(singleton = false) { UserService() }
+```
+
+#### Qualifier-based Registration
+
+When multiple instances of the same type are needed, distinguish them with a qualifier.
+The recommended approach is to use a Kotlin `object` as the qualifier — it is compile-time
+safe and IDE refactor-friendly. A plain `String` also works for simpler cases.
+
+```kotlin
+object Primary
+object Replica
+
+app.provide(qualifier = Primary) { HikariDataSource(primaryConfig) }
+app.provide(qualifier = Replica) { HikariDataSource(replicaConfig) }
+
+// Transient with qualifier
+app.provide(qualifier = Primary, singleton = false) { HikariDataSource(primaryConfig) }
+
+// Pre-built instance with qualifier
+app.provide(HikariDataSource(primaryConfig), qualifier = Primary)
+
+// String qualifier
+app.provide(qualifier = "primary") { HikariDataSource(primaryConfig) }
 ```
 
 ### Injecting Services
@@ -1627,8 +1649,15 @@ Services can be retrieved explicitly from the request context or resolved as han
 
 ```kotlin
 app.get("/users") { ctx ->
-    val userService = ctx.getService<UserService>()
+    val userService = ctx.getService()
     userService.findAll()
+}
+
+// With qualifier
+app.get("/report") { ctx ->
+    val primary = ctx.getService(Primary)
+    val replica  = ctx.getService(Replica)
+    replica.query("SELECT ...")
 }
 ```
 
@@ -1643,11 +1672,42 @@ Colleen resolves parameters using the following rules:
 - All other parameter types are treated as services and resolved from the dependency injection container
 
 ```kotlin
-fun getUsers(userService: UserService): List<User> {
+fun getUsers(userService: UserService): List {
     return userService.findAll()
 }
 
 app.get("/users", ::getUsers)
+```
+
+To inject a qualified service as a handler parameter, annotate it with `@Qualifier` and pass
+the qualifier's name. When the qualifier was registered as a Kotlin `object`, use its class
+simple name (case-insensitive):
+
+```kotlin
+object Primary
+object Replica
+
+app.provide(qualifier = Primary) { HikariDataSource(primaryConfig) }
+app.provide(qualifier = Replica) { HikariDataSource(replicaConfig) }
+
+fun getReport(
+    @Qualifier("Primary") primary: DataSource,
+    @Qualifier("Replica") replica: DataSource,
+): String {
+    return replica.query("SELECT ...")
+}
+
+app.get("/report", ::getReport)
+```
+
+If the qualifier was registered as a plain `String`, use that string directly:
+
+```kotlin
+app.provide(qualifier = "primary") { HikariDataSource(primaryConfig) }
+
+fun getReport(@Qualifier("primary") ds: DataSource): String {
+    return ds.query("SELECT ...")
+}
 ```
 
 #### In Controllers
@@ -1660,13 +1720,13 @@ class UserController(
     private val userService: UserService,
 ) {
     @Get
-    fun list(auditService: AuditService): List<User> {
+    fun list(auditService: AuditService): List {
         auditService.record("list users")
         return userService.findAll()
     }
 
     @Get("/{id}")
-    fun get(id: Path<Int>): User = userService.findById(id.value)
+    fun get(id: Path): User = userService.findById(id.value)
 }
 
 // Register controller
@@ -1674,7 +1734,8 @@ app.addController(UserController(UserService()))
 ```
 
 Controller handler methods follow the same parameter resolution rules as handler functions:
-non-`Context` and non-`ParamExtractor` parameters are resolved as services.
+non-`Context` and non-`ParamExtractor` parameters are resolved as services, and `@Qualifier`
+works the same way.
 
 ### Service Resolution
 
@@ -1694,7 +1755,7 @@ apiApp.provide { UserService() }
 mainApp.mount("/api", apiApp)
 ```
 
-Within apiApp handlers:
+Within `apiApp` handlers:
 
 - `UserService` is resolved from `apiApp`
 - `DatabaseService` is resolved from `mainApp`

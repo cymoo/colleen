@@ -1,19 +1,34 @@
 package io.github.cymoo.colleen
 
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import kotlin.test.*
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
-// Test interfaces and classes
-interface UserService
-class UserServiceImpl : UserService
+// ============================================================================
+// Fixtures
+// ============================================================================
 
-interface DatabaseService
-class DatabaseServiceImpl : DatabaseService
+private interface Repository
+private interface Cache
 
-class SimpleService
-class AnotherService
+private class UserRepository : Repository
+private class OrderRepository : Repository
+private class MemoryCache : Cache
+
+private data class Named(val name: String)
+
+// Qualifier objects — preferred over strings for type safety
+private object Primary
+private object Replica
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 class ServiceContainerTest {
 
@@ -24,417 +39,653 @@ class ServiceContainerTest {
         container = ServiceContainer()
     }
 
-    // ==================== registerInstance Tests ====================
+    // ========================================================================
+    // registerInstance
+    // ========================================================================
 
-    @Test
-    fun `registerInstance should store a singleton instance`() {
-        val service = SimpleService()
-        container.registerInstance(service)
+    @Nested
+    inner class RegisterInstance {
 
-        val retrieved = container.get<SimpleService>()
-        assertEquals(service, retrieved)
-    }
-
-    @Test
-    fun `registerInstance should return the container for chaining`() {
-        val result = container.registerInstance(SimpleService())
-        assertEquals(container, result)
-    }
-
-    @Test
-    fun `registerInstance should return the same instance on multiple retrieval`() {
-        val service = SimpleService()
-        container.registerInstance(service)
-
-        val first = container.get<SimpleService>()
-        val second = container.get<SimpleService>()
-        assertEquals(first, second)
-    }
-
-    @Test
-    fun `registerInstance should override previous instance`() {
-        val service1 = SimpleService()
-        val service2 = SimpleService()
-
-        container.registerInstance(service1)
-        container.registerInstance(service2)
-
-        val retrieved = container.get<SimpleService>()
-        assertEquals(service2, retrieved)
-    }
-
-    // ==================== registerTransient Tests ====================
-
-    @Test
-    fun `registerTransient should create a new instance each time`() {
-        container.registerTransient { SimpleService() }
-
-        val first = container.get<SimpleService>()
-        val second = container.get<SimpleService>()
-
-        assertTrue(first !== second)
-    }
-
-    @Test
-    fun `registerTransient should return the container for chaining`() {
-        val result = container.registerTransient { SimpleService() }
-        assertEquals(container, result)
-    }
-
-    @Test
-    fun `registerTransient should support parameterized creation`() {
-        var creationCount = 0
-        container.registerTransient {
-            creationCount++
-            SimpleService()
+        @Test
+        fun `returns the exact instance that was registered`() {
+            val instance = UserRepository()
+            container.registerInstance<Repository>(instance)
+            assertSame(instance, container.get<Repository>())
         }
 
-        container.get<SimpleService>()
-        container.get<SimpleService>()
-
-        assertEquals(2, creationCount)
-    }
-
-    // ==================== registerSingleton Tests ====================
-
-    @Test
-    fun `registerSingleton should create instance only once`() {
-        var creationCount = 0
-        container.registerSingleton {
-            creationCount++
-            SimpleService()
+        @Test
+        fun `overwrites a previously registered instance of the same type`() {
+            val first = UserRepository()
+            val second = UserRepository()
+            container.registerInstance<Repository>(first)
+            container.registerInstance<Repository>(second)
+            assertSame(second, container.get<Repository>())
         }
 
-        val first = container.get<SimpleService>()
-        val second = container.get<SimpleService>()
+        @Test
+        fun `overwrites a previously registered factory of the same type`() {
+            // registerInstance should take precedence over a prior registerSingleton
+            container.registerSingleton<Repository> { OrderRepository() }
+            val instance = UserRepository()
+            container.registerInstance<Repository>(instance)
+            assertSame(instance, container.get<Repository>())
+        }
 
-        assertEquals(first, second)
-        assertEquals(1, creationCount)
-    }
+        @Test
+        fun `supports string qualifier`() {
+            val primary = UserRepository()
+            val replica = OrderRepository()
+            container.registerInstance<Repository>(primary, qualifier = "primary")
+            container.registerInstance<Repository>(replica, qualifier = "replica")
+            assertSame(primary, container.get<Repository>("primary"))
+            assertSame(replica, container.get<Repository>("replica"))
+        }
 
-    @Test
-    fun `registerSingleton should return the container for chaining`() {
-        val result = container.registerSingleton { SimpleService() }
-        assertEquals(container, result)
-    }
+        @Test
+        fun `supports object qualifier`() {
+            val primary = UserRepository()
+            val replica = OrderRepository()
+            container.registerInstance<Repository>(primary, qualifier = Primary)
+            container.registerInstance<Repository>(replica, qualifier = Replica)
+            assertSame(primary, container.get<Repository>(Primary))
+            assertSame(replica, container.get<Repository>(Replica))
+        }
 
-    @Test
-    fun `registerSingleton should cache instance after first retrieval`() {
-        container.registerSingleton { SimpleService() }
-        container.get<SimpleService>()
+        @Test
+        fun `no-qualifier and qualified registrations coexist independently`() {
+            val default = UserRepository()
+            val qualified = OrderRepository()
+            container.registerInstance<Repository>(default)
+            container.registerInstance<Repository>(qualified, qualifier = Primary)
+            assertSame(default, container.get<Repository>())
+            assertSame(qualified, container.get<Repository>(Primary))
+        }
 
-        assertTrue(container.instances.containsKey(SimpleService::class))
-    }
-
-    // ==================== bind Tests ====================
-
-    @Test
-    fun `bind should map interface to implementation`() {
-        container.registerInstance<UserServiceImpl>(UserServiceImpl())
-        container.bind<UserService, UserServiceImpl>()
-
-        val userService = container.get<UserService>()
-        assertTrue(userService is UserServiceImpl)
-    }
-
-    @Test
-    fun `bind should return the container for chaining`() {
-        container.registerInstance<UserServiceImpl>(UserServiceImpl())
-        val result = container.bind<UserService, UserServiceImpl>()
-        assertEquals(container, result)
-    }
-
-    @Test
-    fun `bind should throw when implementation is not registered`() {
-        container.bind<UserService, UserServiceImpl>()
-        assertThrows<NoSuchElementException> {
-            container.get<UserService>()
+        @Test
+        fun `supports chaining`() {
+            val result = container
+                .registerInstance(UserRepository())
+                .registerInstance(MemoryCache())
+            assertSame(container, result)
         }
     }
 
-    @Test
-    fun `bind should work with factory registered implementation`() {
-        container.registerTransient { UserServiceImpl() }
-        container.bind<UserService, UserServiceImpl>()
+    // ========================================================================
+    // registerSingleton
+    // ========================================================================
 
-        val first = container.get<UserService>()
-        val second = container.get<UserService>()
+    @Nested
+    inner class RegisterSingleton {
 
-        assertTrue(first is UserServiceImpl)
-        assertTrue(first !== second)
-    }
+        @Test
+        fun `factory is invoked lazily - not called until first retrieval`() {
+            var invocations = 0
+            container.registerSingleton<Repository> { invocations++; UserRepository() }
+            assertEquals(0, invocations)
+            container.get<Repository>()
+            assertEquals(1, invocations)
+        }
 
-    // ==================== get Tests ====================
+        @Test
+        fun `factory is invoked exactly once across multiple sequential retrievals`() {
+            var invocations = 0
+            container.registerSingleton<Repository> { invocations++; UserRepository() }
+            repeat(5) { container.get<Repository>() }
+            assertEquals(1, invocations)
+        }
 
-    @Test
-    fun `get should retrieve registered instance`() {
-        val service = SimpleService()
-        container.registerInstance(service)
+        @Test
+        fun `returns the same instance on every retrieval`() {
+            container.registerSingleton { UserRepository() }
+            val a = container.get<UserRepository>()
+            val b = container.get<UserRepository>()
+            assertSame(a, b)
+        }
 
-        val retrieved = container.get<SimpleService>()
-        assertEquals(service, retrieved)
-    }
+        @Test
+        fun `qualifiers produce independent singleton instances`() {
+            var primaryCount = 0
+            var replicaCount = 0
+            container.registerSingleton<Repository>(Primary) { primaryCount++; UserRepository() }
+            container.registerSingleton<Repository>(Replica) { replicaCount++; OrderRepository() }
 
-    @Test
-    fun `get should throw NoSuchElementException when service not registered`() {
-        assertThrows<NoSuchElementException> {
-            container.get<SimpleService>()
+            repeat(3) {
+                container.get<Repository>(Primary)
+                container.get<Repository>(Replica)
+            }
+
+            assertEquals(1, primaryCount)
+            assertEquals(1, replicaCount)
+        }
+
+        @Test
+        fun `factory is invoked exactly once under concurrent access`() {
+            // Validates that computeIfAbsent (or equivalent) is used internally,
+            // not Kotlin's getOrPut which does not guarantee single invocation.
+            val invocations = AtomicInteger(0)
+            val threadCount = 50
+            val latch = CountDownLatch(1)
+            val executor = Executors.newFixedThreadPool(threadCount)
+
+            container.registerSingleton<Repository> {
+                invocations.incrementAndGet()
+                Thread.sleep(10) // widen the race window
+                UserRepository()
+            }
+
+            val futures = (1..threadCount).map {
+                executor.submit { latch.await(); container.get<Repository>() }
+            }
+            latch.countDown()
+            futures.forEach { it.get() }
+            executor.shutdown()
+
+            assertEquals(1, invocations.get())
+        }
+
+        @Test
+        fun `all concurrent callers receive the same instance`() {
+            val threadCount = 50
+            val latch = CountDownLatch(1)
+            val executor = Executors.newFixedThreadPool(threadCount)
+            val results = mutableListOf<Repository>()
+
+            container.registerSingleton<Repository> {
+                Thread.sleep(10)
+                UserRepository()
+            }
+
+            val futures = (1..threadCount).map {
+                executor.submit<Repository> { latch.await(); container.get() }
+            }
+            latch.countDown()
+            futures.forEach { results.add(it.get()) }
+            executor.shutdown()
+
+            // Every thread must have received the exact same instance
+            val first = results.first()
+            assertTrue(results.all { it === first })
         }
     }
 
-    @Test
-    fun `get with KClass should retrieve registered service`() {
-        val service = SimpleService()
-        container.registerInstance(service)
+    // ========================================================================
+    // registerTransient
+    // ========================================================================
 
-        val retrieved = container.get(SimpleService::class)
-        assertEquals(service, retrieved)
-    }
+    @Nested
+    inner class RegisterTransient {
 
-    @Test
-    fun `get with KClass should throw when service not registered`() {
-        assertThrows<NoSuchElementException> {
-            container.get(SimpleService::class)
+        @Test
+        fun `factory is invoked on every retrieval`() {
+            var invocations = 0
+            container.registerTransient<Repository> { invocations++; UserRepository() }
+            repeat(3) { container.get<Repository>() }
+            assertEquals(3, invocations)
+        }
+
+        @Test
+        fun `each retrieval returns a distinct instance`() {
+            container.registerTransient { UserRepository() }
+            val a = container.get<UserRepository>()
+            val b = container.get<UserRepository>()
+            assertNotSame(a, b)
+        }
+
+        @Test
+        fun `qualified transient services are independent`() {
+            var primaryCount = 0
+            var replicaCount = 0
+            container.registerTransient<Repository>(Primary) { primaryCount++; UserRepository() }
+            container.registerTransient<Repository>(Replica) { replicaCount++; OrderRepository() }
+
+            repeat(3) {
+                container.get<Repository>(Primary)
+                container.get<Repository>(Replica)
+            }
+
+            assertEquals(3, primaryCount)
+            assertEquals(3, replicaCount)
         }
     }
 
-    @Test
-    fun `get should prioritize instance over factory`() {
-        val instance = SimpleService()
-        container.registerInstance(instance)
-        container.registerTransient { SimpleService() }
+    // ========================================================================
+    // get / getOrNull / getOrDefault / getOrElse
+    // ========================================================================
 
-        val retrieved = container.get<SimpleService>()
-        assertEquals(instance, retrieved)
-    }
+    @Nested
+    inner class Retrieval {
 
-    // ==================== getOrNull Tests ====================
-
-    @Test
-    fun `getOrNull should return service if registered`() {
-        val service = SimpleService()
-        container.registerInstance(service)
-
-        val retrieved = container.getOrNull<SimpleService>()
-        assertEquals(service, retrieved)
-    }
-
-    @Test
-    fun `getOrNull should return null if not registered`() {
-        val retrieved = container.getOrNull<SimpleService>()
-        assertNull(retrieved)
-    }
-
-    @Test
-    fun `getOrNull with KClass should return service if registered`() {
-        val service = SimpleService()
-        container.registerInstance(service)
-
-        val retrieved = container.getOrNull(SimpleService::class)
-        assertEquals(service, retrieved)
-    }
-
-    @Test
-    fun `getOrNull with KClass should return null if not registered`() {
-        val retrieved = container.getOrNull(SimpleService::class)
-        assertNull(retrieved)
-    }
-
-    // ==================== getOrDefault Tests ====================
-
-    @Test
-    fun `getOrDefault should return registered service`() {
-        val service = SimpleService()
-        val default = SimpleService()
-        container.registerInstance(service)
-
-        val retrieved = container.getOrDefault(default)
-        assertEquals(service, retrieved)
-    }
-
-    @Test
-    fun `getOrDefault should return default if not registered`() {
-        val default = SimpleService()
-        val retrieved = container.getOrDefault(default)
-        assertEquals(default, retrieved)
-    }
-
-    // ==================== getOrElse Tests ====================
-
-    @Test
-    fun `getOrElse should return registered service`() {
-        val service = SimpleService()
-        container.registerInstance(service)
-
-        val retrieved = container.getOrElse { SimpleService() }
-        assertEquals(service, retrieved)
-    }
-
-    @Test
-    fun `getOrElse should call factory if not registered`() {
-        var factoryCalled = false
-        container.getOrElse {
-            factoryCalled = true
-            SimpleService()
+        @Test
+        fun `get throws NoSuchElementException for unregistered service`() {
+            assertThrows<NoSuchElementException> { container.get<Repository>() }
         }
-        assertTrue(factoryCalled)
-    }
 
-    // ==================== has Tests ====================
+        @Test
+        fun `get error message includes the type name`() {
+            val ex = assertThrows<NoSuchElementException> { container.get<Repository>() }
+            assertTrue(ex.message!!.contains("Repository"))
+        }
 
-    @Test
-    fun `has should return true if instance registered`() {
-        container.registerInstance(SimpleService())
-        assertTrue(container.has<SimpleService>())
-    }
+        @Test
+        fun `get error message includes the qualifier`() {
+            val ex = assertThrows<NoSuchElementException> {
+                container.get<Repository>("primary")
+            }
+            assertTrue(ex.message!!.contains("primary"))
+        }
 
-    @Test
-    fun `has should return true if factory registered`() {
-        container.registerTransient { SimpleService() }
-        assertTrue(container.has<SimpleService>())
-    }
+        @Test
+        fun `getOrNull returns null for unregistered service`() {
+            assertNull(container.getOrNull<Repository>())
+        }
 
-    @Test
-    fun `has should return true if singleton registered`() {
-        container.registerSingleton { SimpleService() }
-        assertTrue(container.has<SimpleService>())
-    }
+        @Test
+        fun `getOrNull returns null when qualifier does not match`() {
+            container.registerInstance<Repository>(UserRepository(), qualifier = Primary)
+            assertNull(container.getOrNull<Repository>(Replica))
+            assertNull(container.getOrNull<Repository>())
+        }
 
-    @Test
-    fun `has should return false if not registered`() {
-        assertFalse(container.has<SimpleService>())
-    }
+        @Test
+        fun `getOrDefault returns the registered instance when present`() {
+            val instance = UserRepository()
+            container.registerInstance<Repository>(instance)
+            assertSame(instance, container.getOrDefault<Repository>(OrderRepository()))
+        }
 
-    // ==================== remove Tests ====================
+        @Test
+        fun `getOrDefault returns the default value when not registered`() {
+            val default = UserRepository()
+            assertSame(default, container.getOrDefault<Repository>(default))
+        }
 
-    @Test
-    fun `remove should remove registered instance`() {
-        container.registerInstance(SimpleService())
-        val removed = container.remove<SimpleService>()
+        @Test
+        fun `getOrDefault respects qualifier`() {
+            val instance = UserRepository()
+            container.registerInstance<Repository>(instance, qualifier = Primary)
+            val default = OrderRepository()
+            // Wrong qualifier → default
+            assertSame(default, container.getOrDefault<Repository>(default, qualifier = Replica))
+            // Correct qualifier → registered instance
+            assertSame(instance, container.getOrDefault<Repository>(default, qualifier = Primary))
+        }
 
-        assertTrue(removed)
-        assertFalse(container.has<SimpleService>())
-    }
+        @Test
+        fun `getOrElse returns the registered instance when present`() {
+            val instance = UserRepository()
+            container.registerInstance<Repository>(instance)
+            assertSame(instance, container.getOrElse<Repository> { OrderRepository() })
+        }
 
-    @Test
-    fun `remove should remove registered factory`() {
-        container.registerTransient { SimpleService() }
-        val removed = container.remove<SimpleService>()
+        @Test
+        fun `getOrElse invokes the fallback factory when not registered`() {
+            val fallback = UserRepository()
+            val result = container.getOrElse<Repository> { fallback }
+            assertSame(fallback, result)
+        }
 
-        assertTrue(removed)
-        assertFalse(container.has<SimpleService>())
-    }
+        @Test
+        fun `getOrElse fallback factory is not invoked when service is present`() {
+            container.registerInstance<Repository>(UserRepository())
+            var factoryInvoked = false
+            container.getOrElse<Repository> { factoryInvoked = true; OrderRepository() }
+            assertFalse(factoryInvoked)
+        }
 
-    @Test
-    fun `remove should return false if service not registered`() {
-        val removed = container.remove<SimpleService>()
-        assertFalse(removed)
-    }
-
-    @Test
-    fun `remove should make service unavailable`() {
-        container.registerInstance(SimpleService())
-        container.remove<SimpleService>()
-
-        assertThrows<NoSuchElementException> {
-            container.get<SimpleService>()
+        @Test
+        fun `instance map takes precedence over factory map for the same key`() {
+            // Register a factory first, then override with a direct instance.
+            val instance = UserRepository()
+            container.registerSingleton<Repository> { OrderRepository() }
+            container.registerInstance<Repository>(instance)
+            assertSame(instance, container.get<Repository>())
         }
     }
 
-    // ==================== clear Tests ====================
+    // ========================================================================
+    // getAll
+    // ========================================================================
 
-    @Test
-    fun `clear should remove all instances`() {
-        container.registerInstance(SimpleService())
-        container.registerInstance(AnotherService())
-        container.clear()
+    @Nested
+    inner class GetAll {
 
-        assertFalse(container.has<SimpleService>())
-        assertFalse(container.has<AnotherService>())
+        @Test
+        fun `returns empty list when no services of the type are registered`() {
+            assertTrue(container.getAll<Repository>().isEmpty())
+        }
+
+        @Test
+        fun `returns all instances regardless of qualifier`() {
+            val a = UserRepository()
+            val b = OrderRepository()
+            container.registerInstance<Repository>(a)
+            container.registerInstance<Repository>(b, qualifier = Primary)
+            val all = container.getAll<Repository>()
+            assertEquals(2, all.size)
+            assertTrue(all.contains(a))
+            assertTrue(all.contains(b))
+        }
+
+        @Test
+        fun `resolves unresolved singleton factories eagerly`() {
+            container.registerSingleton<Repository> { UserRepository() }
+            container.registerSingleton<Repository>(Primary) { OrderRepository() }
+            assertEquals(2, container.getAll<Repository>().size)
+        }
+
+        @Test
+        fun `does not include services of a different type`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.registerInstance<Cache>(MemoryCache())
+            assertEquals(1, container.getAll<Repository>().size)
+        }
+
+        @Test
+        fun `singleton factory is cached after getAll resolves it`() {
+            var invocations = 0
+            container.registerSingleton<Repository> { invocations++; UserRepository() }
+            container.getAll<Repository>()  // triggers resolution and caching
+            container.get<Repository>()     // should use cached instance
+            assertEquals(1, invocations)
+        }
+
+        @Test
+        fun `already-cached instances are not re-created during getAll`() {
+            var invocations = 0
+            container.registerSingleton<Repository> { invocations++; UserRepository() }
+            container.get<Repository>()     // resolve and cache
+            container.getAll<Repository>()  // must not invoke factory again
+            assertEquals(1, invocations)
+        }
     }
 
-    @Test
-    fun `clear should remove all factories`() {
-        container.registerTransient { SimpleService() }
-        container.registerTransient { AnotherService() }
-        container.clear()
+    // ========================================================================
+    // has
+    // ========================================================================
 
-        assertFalse(container.has<SimpleService>())
-        assertFalse(container.has<AnotherService>())
+    @Nested
+    inner class Has {
+
+        @Test
+        fun `returns false for unregistered service`() {
+            assertFalse(container.has<Repository>())
+        }
+
+        @Test
+        fun `returns true after registerInstance`() {
+            container.registerInstance<Repository>(UserRepository())
+            assertTrue(container.has<Repository>())
+        }
+
+        @Test
+        fun `returns true after registerSingleton`() {
+            container.registerSingleton<Repository> { UserRepository() }
+            assertTrue(container.has<Repository>())
+        }
+
+        @Test
+        fun `returns true after registerTransient`() {
+            container.registerTransient<Repository> { UserRepository() }
+            assertTrue(container.has<Repository>())
+        }
+
+        @Test
+        fun `qualifier must match exactly`() {
+            container.registerInstance<Repository>(UserRepository(), qualifier = Primary)
+            assertFalse(container.has<Repository>())          // no qualifier
+            assertFalse(container.has<Repository>(Replica))   // wrong qualifier
+            assertTrue(container.has<Repository>(Primary))    // correct qualifier
+        }
     }
 
-    @Test
-    fun `clear should clear both instances and factories`() {
-        container.registerInstance(SimpleService())
-        container.registerTransient { AnotherService() }
-        container.clear()
+    // ========================================================================
+    // remove
+    // ========================================================================
 
-        assertEquals(0, container.registeredServices.size)
+    @Nested
+    inner class Remove {
+
+        @Test
+        fun `returns false when service is not registered`() {
+            assertFalse(container.remove<Repository>())
+        }
+
+        @Test
+        fun `returns true and removes a registered instance`() {
+            container.registerInstance<Repository>(UserRepository())
+            assertTrue(container.remove<Repository>())
+            assertFalse(container.has<Repository>())
+        }
+
+        @Test
+        fun `returns true and removes a registered factory`() {
+            container.registerSingleton<Repository> { UserRepository() }
+            assertTrue(container.remove<Repository>())
+            assertFalse(container.has<Repository>())
+        }
+
+        @Test
+        fun `removes both instance and factory when both exist for the same key`() {
+            // Manually put both to simulate the edge case
+            container.registerSingleton<Repository> { UserRepository() }
+            container.get<Repository>() // triggers caching into instances map
+            // Now both maps contain the key; remove should clear both
+            assertTrue(container.remove<Repository>())
+            assertFalse(container.has<Repository>())
+            assertNull(container.getOrNull<Repository>())
+        }
+
+        @Test
+        fun `only removes the entry matching the qualifier`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.registerInstance<Repository>(OrderRepository(), qualifier = Primary)
+            container.remove<Repository>(Primary)
+            assertTrue(container.has<Repository>())
+            assertFalse(container.has<Repository>(Primary))
+        }
+
+        @Test
+        fun `service is not retrievable after removal`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.remove<Repository>()
+            assertNull(container.getOrNull<Repository>())
+        }
     }
 
-    // ==================== registeredServices Tests ====================
+    // ========================================================================
+    // clear
+    // ========================================================================
 
-    @Test
-    fun `registeredServices should return all registered service types`() {
-        container.registerInstance(SimpleService())
-        container.registerTransient { AnotherService() }
+    @Nested
+    inner class Clear {
 
-        val services = container.registeredServices
-        assertEquals(2, services.size)
-        assertTrue(SimpleService::class in services)
-        assertTrue(AnotherService::class in services)
+        @Test
+        fun `removes all registered services across all types`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.registerSingleton<Cache> { MemoryCache() }
+            container.registerTransient { Named("x") }
+            container.clear()
+            assertFalse(container.has<Repository>())
+            assertFalse(container.has<Cache>())
+            assertFalse(container.has<Named>())
+        }
+
+        @Test
+        fun `registeredServices is empty after clear`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.clear()
+            assertTrue(container.registeredServices.isEmpty())
+        }
+
+        @Test
+        fun `container is usable again after clear`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.clear()
+            val newInstance = OrderRepository()
+            container.registerInstance<Repository>(newInstance)
+            assertSame(newInstance, container.get<Repository>())
+        }
     }
 
-    @Test
-    fun `registeredServices should be empty initially`() {
-        assertEquals(0, container.registeredServices.size)
+    // ========================================================================
+    // registeredServices
+    // ========================================================================
+
+    @Nested
+    inner class RegisteredServices {
+
+        @Test
+        fun `is empty for a fresh container`() {
+            assertTrue(container.registeredServices.isEmpty())
+        }
+
+        @Test
+        fun `contains keys for all registered services`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.registerSingleton<Cache> { MemoryCache() }
+            val keys = container.registeredServices
+            assertTrue(keys.contains(ServiceKey(Repository::class)))
+            assertTrue(keys.contains(ServiceKey(Cache::class)))
+        }
+
+        @Test
+        fun `includes qualifier in the reported key`() {
+            container.registerInstance<Repository>(UserRepository(), qualifier = Primary)
+            val keys = container.registeredServices
+            assertTrue(keys.contains(ServiceKey(Repository::class, Primary)))
+            assertFalse(keys.contains(ServiceKey(Repository::class)))
+        }
+
+        @Test
+        fun `reflects removal - key is absent after remove`() {
+            container.registerInstance<Repository>(UserRepository())
+            container.remove<Repository>()
+            assertFalse(container.registeredServices.contains(ServiceKey(Repository::class)))
+        }
     }
 
-    @Test
-    fun `registeredServices should not duplicate services`() {
-        container.registerInstance(SimpleService())
-        container.registerTransient { SimpleService() }
+    // ========================================================================
+    // ServiceKey
+    // ========================================================================
 
-        val services = container.registeredServices
-        assertEquals(1, services.count { it == SimpleService::class })
+    @Nested
+    inner class ServiceKeyTest {
+
+        @Test
+        fun `keys with same type and no qualifier are equal`() {
+            assertEquals(ServiceKey(Repository::class), ServiceKey(Repository::class))
+        }
+
+        @Test
+        fun `keys with same type and same string qualifier are equal`() {
+            assertEquals(
+                ServiceKey(Repository::class, "primary"),
+                ServiceKey(Repository::class, "primary"),
+            )
+        }
+
+        @Test
+        fun `keys with same type and same object qualifier are equal`() {
+            assertEquals(
+                ServiceKey(Repository::class, Primary),
+                ServiceKey(Repository::class, Primary),
+            )
+        }
+
+        @Test
+        fun `keys with same type but different qualifiers are not equal`() {
+            assertNotEquals(
+                ServiceKey(Repository::class, Primary),
+                ServiceKey(Repository::class, Replica),
+            )
+        }
+
+        @Test
+        fun `key with null qualifier differs from key with non-null qualifier`() {
+            assertNotEquals(
+                ServiceKey(Repository::class, null),
+                ServiceKey(Repository::class, Primary),
+            )
+        }
+
+        @Test
+        fun `keys with different types are not equal`() {
+            assertNotEquals(
+                ServiceKey(Repository::class),
+                ServiceKey(Cache::class),
+            )
+        }
+
+        @Test
+        fun `string qualifier and object with same toString are not equal`() {
+            // "Primary" string != Primary object — qualifier equality is by identity/equals,
+            // not by string representation
+            assertNotEquals(
+                ServiceKey(Repository::class, "Primary"),
+                ServiceKey(Repository::class, Primary),
+            )
+        }
     }
 
-    // ==================== Integration Tests ====================
+    // ========================================================================
+    // Java Compatibility
+    // ========================================================================
 
-    @Test
-    fun `should support method chaining`() {
-        val result = container
-            .registerInstance(SimpleService())
-            .registerTransient { AnotherService() }
-            .registerSingleton { UserServiceImpl() }
+    @Nested
+    inner class JavaCompatibility {
 
-        assertEquals(container, result)
-        assertEquals(3, container.registeredServices.size)
-    }
+        @Test
+        fun `registerInstance via Class returns the registered instance`() {
+            val instance = UserRepository()
+            container.registerInstance(Repository::class.java, instance)
+            assertSame(instance, container.get<Repository>())
+        }
 
-    @Test
-    fun `should handle multiple service types`() {
-        val simpleService = SimpleService()
-        container.registerInstance(simpleService)
-        container.registerTransient { AnotherService() }
-        container.registerSingleton { UserServiceImpl() }
+        @Test
+        fun `registerSingleton via Class invokes factory exactly once`() {
+            var invocations = 0
+            container.registerSingleton(Repository::class.java) { invocations++; UserRepository() }
+            repeat(3) { container.get<Repository>() }
+            assertEquals(1, invocations)
+        }
 
-        assertEquals(simpleService, container.get<SimpleService>())
-        assertNotNull(container.get<AnotherService>())
-        assertNotNull(container.get<UserServiceImpl>())
-    }
+        @Test
+        fun `registerTransient via Class invokes factory on every retrieval`() {
+            var invocations = 0
+            container.registerTransient(Repository::class.java) { invocations++; UserRepository() }
+            repeat(3) { container.get<Repository>() }
+            assertEquals(3, invocations)
+        }
 
-    @Test
-    fun `should support complex service graph`() {
-        container.registerSingleton { UserServiceImpl() }
-        container.registerSingleton { DatabaseServiceImpl() }
-        container.bind<UserService, UserServiceImpl>()
-        container.bind<DatabaseService, DatabaseServiceImpl>()
+        @Test
+        fun `Java registration with qualifier is retrievable with the same qualifier`() {
+            val instance = UserRepository()
+            container.registerInstance(Repository::class.java, instance, qualifier = Primary)
+            assertSame(instance, container.get<Repository>(Primary))
+            assertNull(container.getOrNull<Repository>())
+        }
 
-        val userService = container.get<UserService>()
-        val databaseService = container.get<DatabaseService>()
+        @Test
+        fun `Java singleton is thread-safe - invoked exactly once under concurrency`() {
+            val invocations = AtomicInteger(0)
+            val threadCount = 50
+            val latch = CountDownLatch(1)
+            val executor = Executors.newFixedThreadPool(threadCount)
 
-        assertTrue(userService is UserServiceImpl)
-        assertTrue(databaseService is DatabaseServiceImpl)
+            container.registerSingleton(Repository::class.java) {
+                invocations.incrementAndGet()
+                Thread.sleep(10)
+                UserRepository()
+            }
+
+            val futures = (1..threadCount).map {
+                executor.submit { latch.await(); container.get<Repository>() }
+            }
+            latch.countDown()
+            futures.forEach { it.get() }
+            executor.shutdown()
+
+            assertEquals(1, invocations.get())
+        }
     }
 }

@@ -216,34 +216,44 @@ class Colleen {
     // ========================================================================
 
     /**
-     * Registers a service instance for dependency injection.
+     * Registers a pre-built service instance.
      *
-     * @param T the service type
-     * @param instance the service instance to register
+     * ```kotlin
+     * app.provide(MyService())
+     * app.provide(MyService(), qualifier = Primary)
+     * ```
+     *
+     * @param instance  the service instance to register.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
      */
-    inline fun <reified T : Any> provide(instance: T) {
-        serviceContainer.registerInstance(instance)
+    inline fun <reified T : Any> provide(instance: T, qualifier: Any? = null) {
+        serviceContainer.registerInstance(instance, qualifier)
     }
 
     /**
-     * Registers a service provider with the given lifetime.
+     * Registers a service using a factory function.
      *
-     * The service will be created using the supplied [factory] function.
-     * How often the factory is invoked depends on the specified [lifetime]:
+     * ```kotlin
+     * app.provide { Database.connect(config) }
+     * app.provide(singleton = false) { HttpClient() }
+     * app.provide(qualifier = Primary) { HikariDataSource(primaryConfig) }
+     * ```
      *
-     * - [Lifetime.Singleton]: the factory is invoked lazily and only once;
-     *   the same instance is returned for all subsequent resolutions.
-     * - [Lifetime.Transient]: the factory is invoked on every resolution,
-     *   producing a new instance each time.
-     *
-     * @param lifetime defines the lifetime and caching behavior of the service.
-     *                 Defaults to [Lifetime.Singleton].
-     * @param factory a function that creates instances of the service.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @param singleton if `true` (default), the factory is invoked once and the
+     *                  result cached; if `false`, a new instance is created on
+     *                  every resolution.
+     * @param factory   the factory function used to create the service instance.
      */
-    inline fun <reified T : Any> provide(lifetime: Lifetime = Lifetime.Singleton, noinline factory: () -> T) {
-        when (lifetime) {
-            Lifetime.Singleton -> serviceContainer.registerSingleton(factory)
-            Lifetime.Transient -> serviceContainer.registerTransient(factory)
+    inline fun <reified T : Any> provide(
+        qualifier: Any? = null,
+        singleton: Boolean = true,
+        noinline factory: () -> T,
+    ) {
+        if (singleton) {
+            serviceContainer.registerSingleton(qualifier, factory)
+        } else {
+            serviceContainer.registerTransient(qualifier, factory)
         }
     }
 
@@ -849,41 +859,47 @@ class Colleen {
     }
 
     /**
-     * Registers a service instance for dependency injection (Java-compatible).
+     * Registers a pre-built service instance (Java-compatible).
      *
-     * @param clazz the service class
-     * @param instance the service instance to register
+     * @param clazz     the service class.
+     * @param instance  the service instance to register.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
      */
-    fun <T : Any> provide(clazz: Class<T>, instance: T) {
-        serviceContainer.registerInstance(clazz, instance)
+    @JvmOverloads
+    fun <T : Any> provide(clazz: Class<T>, instance: T, qualifier: Any? = null) {
+        serviceContainer.registerInstance(clazz, instance, qualifier)
     }
 
     /**
-     * Registers a service provider with the given lifetime (Java-compatible).
+     * Registers a lazily initialized singleton service (Java-compatible).
      *
-     * @param clazz the service class to bind
-     * @param lifetime defines the lifetime and caching behavior of the service
-     * @param factory a function that creates instances of the service
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @param factory   a function that creates the service instance.
      */
-    fun <T : Any> provide(clazz: Class<T>, lifetime: Lifetime, factory: () -> T) {
-        when (lifetime) {
-            Lifetime.Singleton -> serviceContainer.registerSingleton(clazz, factory)
-            Lifetime.Transient -> serviceContainer.registerTransient(clazz, factory)
-        }
+    @JvmOverloads
+    fun <T : Any> provideSingleton(
+        clazz: Class<T>,
+        qualifier: Any? = null,
+        factory: () -> T,
+    ) {
+        serviceContainer.registerSingleton(clazz, qualifier, factory)
     }
 
     /**
-     * Registers a singleton service provider (Java-compatible).
+     * Registers a transient service (Java-compatible).
+     *
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @param factory   a function that creates a new instance on every resolution.
      */
-    fun <T : Any> provideSingleton(clazz: Class<T>, factory: () -> T) {
-        provide(clazz, Lifetime.Singleton, factory)
-    }
-
-    /**
-     * Registers a transient service provider (Java-compatible).
-     */
-    fun <T : Any> provideTransient(clazz: Class<T>, factory: () -> T) {
-        provide(clazz, Lifetime.Transient, factory)
+    @JvmOverloads
+    fun <T : Any> provideTransient(
+        clazz: Class<T>,
+        qualifier: Any? = null,
+        factory: () -> T,
+    ) {
+        serviceContainer.registerTransient(clazz, qualifier, factory)
     }
 
     fun get(path: String, handler: VoidHandler) = get(path) { ctx -> handler.invoke(ctx) }

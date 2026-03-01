@@ -253,28 +253,87 @@ data class Context(
      * Retrieves a required service instance.
      *
      * Resolution order:
-     * - Current app's service container
-     * - Parent contexts (if any)
+     * - Current app's service container.
+     * - Parent contexts, walking up the chain until found.
      *
-     * @return the registered service instance
-     * @throws IllegalStateException if the service is not registered
+     * ```kotlin
+     * // No qualifier — original API unchanged
+     * val db = ctx.getService<Database>()
+     *
+     * // Object qualifier (recommended)
+     * val primary = ctx.getService<DataSource>(Primary)
+     *
+     * // String qualifier
+     * val primary = ctx.getService<DataSource>("primary")
+     * ```
+     *
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @throws IllegalStateException if the service is not registered.
+     * @see getServiceOrNull
      */
-    inline fun <reified T : Any> getService(): T =
-        getService(T::class) ?: error("Service ${T::class.simpleName} not registered")
+    inline fun <reified T : Any> getService(qualifier: Any? = null): T =
+        resolveService(T::class, qualifier)
+            ?: error("Service ${T::class.simpleName}(qualifier=$qualifier) not registered")
 
     /**
-     * Retrieves an optional service instance.
+     * Retrieves an optional service instance, or `null` if not registered.
      *
      * Resolution order:
-     * - Current app's service container
-     * - Parent contexts (if any)
+     * - Current app's service container.
+     * - Parent contexts, walking up the chain until found.
      *
-     * This method should be used when the service is optional or conditionally
-     * registered.
+     * Use this method when the service is optional or conditionally registered.
      *
-     * @return the service instance, or `null` if not registered
+     * ```kotlin
+     * val db = ctx.getServiceOrNull<Database>()
+     * val replica = ctx.getServiceOrNull<DataSource>(Replica)
+     * ```
+     *
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @see getService
      */
-    inline fun <reified T : Any> getServiceOrNull(): T? = getService(T::class)
+    inline fun <reified T : Any> getServiceOrNull(qualifier: Any? = null): T? =
+        resolveService(T::class, qualifier)
+
+    /**
+     * Retrieves all registered instances of type [T] from the current app,
+     * regardless of qualifier.
+     *
+     * Useful for plugin-style registrations where multiple implementations of
+     * the same interface are registered under different qualifiers.
+     *
+     * ```kotlin
+     * app.provide<EventHandler>(qualifier = "audit")   { AuditHandler() }
+     * app.provide<EventHandler>(qualifier = "metrics") { MetricsHandler() }
+     *
+     * val handlers = ctx.getServices<EventHandler>()
+     * handlers.forEach { it.handle(event) }
+     * ```
+     *
+     * Note: only searches the current app's container; parent contexts are not
+     * traversed to avoid unintended merging of registrations across app scopes.
+     */
+    inline fun <reified T : Any> getServices(): List<T> =
+        app.serviceContainer.getAll(T::class)
+
+    /**
+     * Internal recursive resolver shared by all public retrieval methods.
+     *
+     * Walks up the context chain (current app → parent contexts) until the
+     * service is found, or returns `null` if not registered anywhere.
+     *
+     * Must be non-inline to allow recursion via [parentContext].
+     */
+    @PublishedApi
+    internal fun <T : Any> resolveService(kClass: KClass<T>, qualifier: Any? = null): T? =
+        app.serviceContainer.getOrNull(kClass, qualifier)
+            ?: parentContext?.resolveService(kClass, qualifier)
+
+    @PublishedApi
+    internal fun resolveQualifier(name: String): Any =
+        app.serviceContainer.lookupQualifier(name)
+            ?: parentContext?.resolveQualifier(name)
+            ?: name
 
     // ========================================================================
     // Request Delegates
@@ -503,19 +562,6 @@ data class Context(
         )
     }
 
-    /**
-     * Retrieves a service instance from the dependency injection container.
-     *
-     * Searches current app's container first, then parent contexts if not found.
-     *
-     * @param kClass the service class
-     * @return the service instance, or `null` if not registered
-     */
-    @PublishedApi
-    internal fun <T : Any> getService(kClass: KClass<T>): T? =
-        app.serviceContainer.getOrNull(kClass)
-            ?: parentContext?.getService(kClass)
-
     // ========================================================================
     // Java Compatibility
     // ========================================================================
@@ -523,29 +569,33 @@ data class Context(
     /**
      * Retrieves a required service instance (Java-compatible).
      *
-     * Resolution order:
-     * - Current app's service container
-     * - Parent contexts (if any)
-     *
-     * @param clazz the service class
-     * @return the registered service instance
-     * @throws IllegalStateException if the service is not registered
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @throws IllegalStateException if the service is not registered.
      */
-    fun <T : Any> getService(clazz: Class<T>): T =
-        getService(clazz.kotlin)
-            ?: error("Service ${clazz.simpleName} not registered")
+    @JvmOverloads
+    fun <T : Any> getService(clazz: Class<T>, qualifier: Any? = null): T =
+        resolveService(clazz.kotlin, qualifier)
+            ?: error("Service ${clazz.simpleName}(qualifier=$qualifier) not registered")
 
     /**
-     * Retrieves an optional service instance (Java-compatible).
+     * Retrieves an optional service instance (Java-compatible), or `null` if
+     * not registered.
      *
-     * Resolution order:
-     * - Current app's service container
-     * - Parent contexts (if any)
-     *
-     * @param clazz the service class
-     * @return the service instance, or `null` if not registered
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
      */
-    fun <T : Any> getServiceOrNull(clazz: Class<T>): T? = getService(clazz.kotlin)
+    @JvmOverloads
+    fun <T : Any> getServiceOrNull(clazz: Class<T>, qualifier: Any? = null): T? =
+        resolveService(clazz.kotlin, qualifier)
+
+    /**
+     * Retrieves all registered instances of [clazz] type (Java-compatible).
+     *
+     * @param clazz the service class.
+     */
+    fun <T : Any> getServices(clazz: Class<T>): List<T> =
+        app.serviceContainer.getAll(clazz.kotlin)
 
     /**
      * Parses query parameters into an object of the specified class (Java-compatible).
