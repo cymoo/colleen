@@ -1649,14 +1649,14 @@ Services can be retrieved explicitly from the request context or resolved as han
 
 ```kotlin
 app.get("/users") { ctx ->
-    val userService = ctx.getService()
+    val userService = ctx.getService<UserService>()
     userService.findAll()
 }
 
 // With qualifier
 app.get("/report") { ctx ->
-    val primary = ctx.getService(Primary)
-    val replica  = ctx.getService(Replica)
+  val primary = ctx.getService<DataSource>(Primary)
+  val replica = ctx.getService<DataSource>(Replica)
     replica.query("SELECT ...")
 }
 ```
@@ -1672,7 +1672,7 @@ Colleen resolves parameters using the following rules:
 - All other parameter types are treated as services and resolved from the dependency injection container
 
 ```kotlin
-fun getUsers(userService: UserService): List {
+fun getUsers(userService: UserService): List<User> {
     return userService.findAll()
 }
 
@@ -1720,13 +1720,13 @@ class UserController(
     private val userService: UserService,
 ) {
     @Get
-    fun list(auditService: AuditService): List {
+    fun list(auditService: AuditService): List<User> {
         auditService.record("list users")
         return userService.findAll()
     }
 
     @Get("/{id}")
-    fun get(id: Path): User = userService.findById(id.value)
+    fun get(id: Path<Int>): User = userService.findById(id.value)
 }
 
 // Register controller
