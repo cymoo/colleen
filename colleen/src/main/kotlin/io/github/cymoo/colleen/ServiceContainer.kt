@@ -49,7 +49,6 @@ data class ServiceKey(
  * - **Transient** services: a fresh instance is created on every resolution.
  * - **Qualifier-based** multi-registration: multiple instances of the same
  *   type can be registered and retrieved using a qualifier (string or object).
- * - **Interface binding**: bind an interface to a concrete implementation.
  * - **Bulk retrieval**: retrieve all registered instances of a given type.
  *
  * All mutating operations are thread-safe via [ConcurrentHashMap].
