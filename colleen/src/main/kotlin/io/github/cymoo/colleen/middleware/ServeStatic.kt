@@ -210,7 +210,6 @@ class ServeStatic @JvmOverloads constructor(
 
         if (checkNotModified(ctx, resource)) {
             ctx.status(304).empty()
-            // ctx.status(304)
             return
         }
 
