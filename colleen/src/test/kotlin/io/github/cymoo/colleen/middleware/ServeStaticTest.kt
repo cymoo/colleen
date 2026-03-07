@@ -433,7 +433,7 @@ class ServeStaticTest {
 
         // Assert
         assertEquals(304, ctx.response.status)
-        assertEquals("0", ctx.response.headers["Content-Length"])
+        assertNull(ctx.response.headers["Content-Length"])
     }
 
     @Test
@@ -805,5 +805,229 @@ class ServeStaticTest {
 
         // Assert
         assertEquals(200, ctx.response.status)
+    }
+}
+
+/**
+ * Supplementary tests for [ServeStatic], covering gaps in the original suite:
+ *
+ * - baseUrl prefix collision (e.g. /staticx must not match /static)
+ * - Exact baseUrl match without trailing slash serving the root index
+ * - classpath resource serving (both happy path and error cases)
+ * - 304 response must not carry a Content-Length header (RFC 7230 §3.3)
+ * - HEAD response carries metadata headers but no body
+ */
+class ServeStaticSupplementaryTest {
+
+    @TempDir
+    lateinit var tempDir: Path
+
+    private lateinit var testDir: File
+    private lateinit var app: Colleen
+    private lateinit var ctx: Context
+    private var nextCalled = false
+
+    @BeforeEach
+    fun setUp() {
+        testDir = tempDir.toFile()
+        app = Colleen()
+        nextCalled = false
+    }
+
+    @AfterEach
+    fun tearDown() {
+        if (::ctx.isInitialized) {
+            (ctx.response.body as? ResponseBody.Stream)?.input?.close()
+        }
+    }
+
+    private fun next() {
+        nextCalled = true
+    }
+
+    private fun createContext(method: String, path: String, headers: Map<String, String> = emptyMap()): Context {
+        val request = Request(
+            method = method,
+            path = path,
+            queryString = "",
+            headers = Headers().apply { headers.forEach { (k, v) -> set(k, v) } },
+            stream = ByteArray(0).inputStream(),
+        )
+        return Context(request = request, app = app).apply { ctx = this }
+    }
+
+    // ========================================================================
+    // baseUrl Prefix Collision Tests
+    // ========================================================================
+
+    @Test
+    fun `should not match path that merely starts with baseUrl string`() {
+        // Regression test for the /staticx-matches-/static bug.
+        // "/staticx/file.txt".startsWith("/static") is true, but "/staticx/" != "/static/"
+        // so the middleware must pass through.
+        File(testDir, "file.txt").writeText("content")
+        val middleware = ServeStatic(testDir.path, baseUrl = "/static")
+        val ctx = createContext("GET", "/staticx/file.txt")
+
+        middleware.invoke(ctx, ::next)
+
+        assertTrue(nextCalled, "Path /staticx/ must not match baseUrl /static")
+    }
+
+    @Test
+    fun `should not match path whose name shares a prefix with baseUrl but has no separator`() {
+        File(testDir, "file.txt").writeText("content")
+        val middleware = ServeStatic(testDir.path, baseUrl = "/assets")
+        val ctx = createContext("GET", "/assets2/file.txt")
+
+        middleware.invoke(ctx, ::next)
+
+        assertTrue(nextCalled)
+    }
+
+    @Test
+    fun `should match exact baseUrl without trailing slash and serve root index`() {
+        // GET /static  (no trailing slash) should resolve to index.html at the root.
+        File(testDir, "index.html").writeText("<h1>Root</h1>")
+        val middleware = ServeStatic(testDir.path, baseUrl = "/static")
+        val ctx = createContext("GET", "/static")
+
+        middleware.invoke(ctx, ::next)
+
+        assertFalse(nextCalled, "Exact baseUrl match should be handled, not passed through")
+        assertEquals(200, ctx.response.status)
+    }
+
+    // ========================================================================
+    // 304 Response Header Tests
+    // ========================================================================
+
+    @Test
+    fun `304 response must not include Content-Length header`() {
+        // RFC 7230 §3.3: a 304 response must not include a message body,
+        // and Content-Length would misrepresent the absent body.
+        val file = File(testDir, "cached.css").apply { writeText("body{}") }
+        val middleware = ServeStatic(testDir.path)
+        val lastModified = Instant.ofEpochMilli(file.lastModified())
+            .atOffset(ZoneOffset.UTC)
+            .format(DateTimeFormatter.RFC_1123_DATE_TIME)
+
+        val ctx = createContext("GET", "/static/cached.css", mapOf("if-modified-since" to lastModified))
+        middleware.invoke(ctx, ::next)
+
+        assertEquals(304, ctx.response.status)
+        assertNull(
+            ctx.response.headers["Content-Length"],
+            "304 must not carry Content-Length (RFC 7230 §3.3)"
+        )
+        assertNull(
+            ctx.response.headers["Content-Type"],
+            "304 must not carry Content-Type"
+        )
+    }
+
+    @Test
+    fun `304 response must not include a body`() {
+        val file = File(testDir, "style.css").apply { writeText("body{}") }
+        val middleware = ServeStatic(testDir.path)
+        val lastModified = Instant.ofEpochMilli(file.lastModified())
+            .atOffset(ZoneOffset.UTC)
+            .format(DateTimeFormatter.RFC_1123_DATE_TIME)
+
+        val ctx = createContext("GET", "/static/style.css", mapOf("if-modified-since" to lastModified))
+        middleware.invoke(ctx, ::next)
+
+        assertEquals(304, ctx.response.status)
+        // body should be null or empty — no stream should have been opened
+        val body = ctx.response.body
+        assertTrue(body is ResponseBody.Empty, "304 must have no body")
+    }
+
+    // ========================================================================
+    // HEAD Response Tests
+    // ========================================================================
+
+    @Test
+    fun `HEAD response must include metadata headers but no body`() {
+        File(testDir, "data.txt").writeText("hello")
+        val middleware = ServeStatic(testDir.path)
+        val ctx = createContext("HEAD", "/static/data.txt")
+
+        middleware.invoke(ctx, ::next)
+
+        assertEquals(200, ctx.response.status)
+        assertNotNull(ctx.response.headers["Content-Type"])
+        assertNotNull(ctx.response.headers["Content-Length"])
+        assertNotNull(ctx.response.headers["Last-Modified"])
+        // No stream body should be opened for HEAD
+        val body = ctx.response.body
+        assertTrue(body is ResponseBody.Unset, "HEAD must have no body")
+    }
+
+    // ========================================================================
+    // Classpath Resource Tests
+    // ========================================================================
+
+    @Test
+    fun `should serve file from classpath`() {
+        // Assumes src/test/resources/static-test/hello.txt exists with content "hello from classpath"
+        val middleware = ServeStatic("classpath:static-test")
+        val ctx = createContext("GET", "/static/hello.txt")
+
+        middleware.invoke(ctx, ::next)
+
+        assertFalse(nextCalled, "Classpath resource should be served, not passed through")
+        assertEquals(200, ctx.response.status)
+        assertNotNull(ctx.response.headers["Content-Type"])
+    }
+
+    @Test
+    fun `should return not-found for missing classpath resource`() {
+        val middleware = ServeStatic("classpath:static-test", fallthrough = true)
+        val ctx = createContext("GET", "/static/nonexistent.txt")
+
+        middleware.invoke(ctx, ::next)
+
+        assertTrue(nextCalled, "Missing classpath resource should fall through")
+    }
+
+    @Test
+    fun `should throw NotFound for missing classpath resource when fallthrough is false`() {
+        val middleware = ServeStatic("classpath:static-test", fallthrough = false)
+        val ctx = createContext("GET", "/static/missing.txt")
+
+        assertFailsWith<NotFound> {
+            middleware.invoke(ctx, ::next)
+        }
+    }
+
+    @Test
+    fun `should reject path traversal for classpath resolver`() {
+        // normalizePath must block ".." escape before it reaches the classloader.
+        val middleware = ServeStatic("classpath:static-test")
+        val ctx = createContext("GET", "/static/../../secret")
+
+        middleware.invoke(ctx, ::next)
+
+        assertTrue(nextCalled, "Path traversal via classpath resolver must be rejected")
+    }
+
+    @Test
+    fun `should serve classpath index file for directory-style URL`() {
+        // Assumes src/test/resources/static-test/sub/index.html exists.
+        val middleware = ServeStatic("classpath:static-test")
+        val ctx = createContext("GET", "/static/sub")
+
+        middleware.invoke(ctx, ::next)
+
+        assertFalse(nextCalled)
+        assertEquals(200, ctx.response.status)
+    }
+
+    @Test
+    fun `should reject invalid classpath root`() {
+        assertFailsWith<IllegalArgumentException> {
+            ServeStatic("classpath:nonexistent-root-that-does-not-exist")
+        }
     }
 }

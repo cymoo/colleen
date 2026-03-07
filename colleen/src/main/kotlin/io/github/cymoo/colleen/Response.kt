@@ -85,7 +85,7 @@ data class Response(
 
     /** Explicitly set an empty response body */
     fun empty() {
-        status = 204
+        if (status == 200) status = 204
         body = ResponseBody.Empty
     }
 
