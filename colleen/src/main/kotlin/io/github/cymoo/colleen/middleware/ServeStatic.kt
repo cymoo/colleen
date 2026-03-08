@@ -186,11 +186,16 @@ class ServeStatic @JvmOverloads constructor(
     }
 
     override fun invoke(ctx: Context, next: Next) {
-        if ((ctx.method != "GET" && ctx.method != "HEAD") || !ctx.path.startsWith("$baseUrl/") && ctx.path != baseUrl) {
-            next(); return
+        val normalizedBase = baseUrl.trimEnd('/')
+
+        val pathMatches = ctx.path == normalizedBase || ctx.path.startsWith("$normalizedBase/")
+
+        if ((ctx.method != "GET" && ctx.method != "HEAD") || !pathMatches) {
+            next()
+            return
         }
 
-        val rawPath = ctx.path.removePrefix(baseUrl).trimStart('/')
+        val rawPath = ctx.path.removePrefix(normalizedBase).trimStart('/')
 
         // Reject null bytes and un-normalizable paths early to avoid ambiguous resolver behavior.
         if ('\u0000' in rawPath) return handleNotFound(next)

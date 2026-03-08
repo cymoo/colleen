@@ -1030,4 +1030,41 @@ class ServeStaticSupplementaryTest {
             ServeStatic("classpath:nonexistent-root-that-does-not-exist")
         }
     }
+
+    @Test
+    fun `should serve file when baseUrl is root slash`() {
+        File(testDir, "app.js").writeText("console.log(1)")
+        val middleware = ServeStatic(testDir.path, baseUrl = "/")
+        val ctx = createContext("GET", "/app.js")
+
+        middleware.invoke(ctx, ::next)
+
+        assertFalse(nextCalled, "baseUrl='/' should match any path")
+        assertEquals(200, ctx.response.status)
+    }
+
+    @Test
+    fun `should serve index when baseUrl is root slash and path is slash`() {
+        File(testDir, "index.html").writeText("<h1>Home</h1>")
+        val middleware = ServeStatic(testDir.path, baseUrl = "/")
+        val ctx = createContext("GET", "/")
+
+        middleware.invoke(ctx, ::next)
+
+        assertFalse(nextCalled)
+        assertEquals(200, ctx.response.status)
+    }
+
+    @Test
+    fun `should serve nested file when baseUrl is root slash`() {
+        val sub = File(testDir, "assets").apply { mkdirs() }
+        File(sub, "style.css").writeText("body{}")
+        val middleware = ServeStatic(testDir.path, baseUrl = "/")
+        val ctx = createContext("GET", "/assets/style.css")
+
+        middleware.invoke(ctx, ::next)
+
+        assertFalse(nextCalled)
+        assertEquals(200, ctx.response.status)
+    }
 }
