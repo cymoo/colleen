@@ -271,6 +271,9 @@ class OpenApiTest {
         assertTrue(pathItem.containsKey("post"))
         assertTrue(pathItem.containsKey("put"))
         assertTrue(pathItem.containsKey("delete"))
+        assertTrue(pathItem.containsKey("patch"))
+        assertTrue(pathItem.containsKey("head"))
+        assertTrue(pathItem.containsKey("options"))
     }
 
     @Test
