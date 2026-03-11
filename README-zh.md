@@ -33,6 +33,7 @@ Colleen 是一个轻量级、类型安全的 Kotlin / Java Web 框架。
 - 可组合的中间件
 - 自动参数提取
 - 清晰直接的依赖注入
+- 自动生成 OpenAPI 文档
 - 基于虚拟线程的同步请求处理模型
 
 设计理念：
@@ -55,14 +56,14 @@ Colleen 是一个轻量级、类型安全的 Kotlin / Java Web 框架。
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.2.3</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.2.3")
+implementation("io.github.cymoo:colleen:0.3.0")
 ```
 
 ### Hello World
@@ -258,6 +259,7 @@ class MyApp {
 Colleen 提供了一组完整示例，覆盖常见功能与集成方式：
 
 - **[todo-app](examples/todo-app/src/main/kotlin/Main.kt)** - RESTful TODO API，包含 JSON 处理、参数验证与 CORS
+- **[openapi](examples/openapi/src/main/kotlin/Main.kt)** - 使用 OpenAPI 生成 API 文档，并提供 Swagger UI 交互界面
 - **[auth-app](examples/auth-app/src/main/kotlin/Main.kt)** - 用户认证示例，包含自定义中间件与服务注入
 - **[upload-app](examples/upload-app/src/main/kotlin/Main.kt)** - 文件上传与下载，包含大小校验与静态资源管理等
 - **[extractor](examples/extractor/src/main/kotlin/Main.kt)** - 参数提取全景示例（路径、查询、表单、JSON、Header、Cookie、文件）

@@ -33,6 +33,7 @@ It emphasizes:
 - Composable middleware
 - Automatic parameter extraction
 - Clear dependency injection
+- Automatic OpenAPI schema generation
 - Synchronous request handling on virtual threads
 
 Design principles:
@@ -57,14 +58,14 @@ The goal is not to maximize features, but to maximize understandability and cont
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.2.3</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.2.3")
+implementation("io.github.cymoo:colleen:0.3.0")
 ```
 
 ### Hello World
@@ -260,6 +261,7 @@ class MyApp {
 Colleen comes with comprehensive examples demonstrating various features and integration patterns:
 
 - **[todo-app](examples/todo-app/src/main/kotlin/Main.kt)** - RESTful TODO API with JSON handling, validation, and CORS
+- **[openapi](examples/openapi/src/main/kotlin/Main.kt)** - API documentation with OpenAPI support and interactive Swagger UI
 - **[auth-app](examples/auth-app/src/main/kotlin/Main.kt)** - User authentication with custom middleware and service injection
 - **[upload-app](examples/upload-app/src/main/kotlin/Main.kt)** - File upload/download with size validation and static file management
 - **[extractor](examples/extractor/src/main/kotlin/Main.kt)** - Comprehensive parameter extraction examples (path,
