@@ -32,6 +32,7 @@
         <module>extractor</module>
         <module>redis</module>
         <module>jdbc</module>
+        <module>openapi</module>
         <module>auto-reload</module>
     </modules>
 
