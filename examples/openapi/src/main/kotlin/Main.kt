@@ -2,17 +2,29 @@ import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.extension.*
 import io.github.cymoo.colleen.middleware.Cors
 import io.github.cymoo.colleen.middleware.RequestLogger
+import java.math.BigDecimal
+import java.time.Instant
+import java.time.LocalDate
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Restful TODO Application — OpenAPI integration example.
  *
- * Demonstrates how to annotate handler functions with OpenAPI metadata and
- * wire up the [enableOpenApi] extension so that the spec and Swagger UI are
- * served automatically alongside the application routes.
+ * NOTE: All annotations shown here (@Summary, @Tags, @ParamDesc, etc.) are
+ * optional. The OpenAPI extension works out of the box with sensible defaults;
+ * add annotations only when you want to enrich or customize the generated spec.
  *
- * Endpoints added by [enableOpenApi]:
+ * Demonstrates the full feature set of the OpenAPI extension:
+ *   - @Summary / @Description / @Tags for operation metadata
+ *   - @ParamDesc / @ResponseDesc for parameter and response docs
+ *   - @Hidden to exclude operations or entire controllers from the spec
+ *   - enableOpenApi(filter = ...) for programmatic route exclusion
+ *   - @Schema with name / hidden / type / format overrides on DTO fields
+ *   - Extended type support: UUID, LocalDate, Instant, BigDecimal, etc.
+ *
+ * Endpoints added by enableOpenApi():
  *   GET /openapi.json  — OpenAPI 3.0.3 JSON specification
  *   GET /swagger-ui    — Interactive Swagger UI page
  */
@@ -31,13 +43,41 @@ data class Todo(
     @Schema(description = "Whether the task has been completed", example = "false")
     val completed: Boolean = false,
 
-    @Schema(description = "Unix timestamp (ms) when the todo was created", example = "1700000000000")
-    val createdAt: Long = System.currentTimeMillis(),
+    // UUID — demonstrates uuid format support
+    @Schema(description = "Idempotency key for deduplication", example = "550e8400-e29b-41d4-a716-446655440000")
+    val idempotencyKey: UUID = UUID.randomUUID(),
+
+    // LocalDate — demonstrates date format support
+    @Schema(description = "Due date for this task", example = "2024-12-31")
+    val dueDate: LocalDate? = null,
+
+    // Instant serialized as Unix ms — @Schema(type, format) overrides the inferred schema.
+    // Use this when the actual JSON representation differs from the Java type
+    // (e.g. Instant serialized as a long rather than an ISO string).
+    @Schema(
+        description = "Unix timestamp (ms) when the todo was created",
+        example = "1700000000000",
+        type = "integer",
+        format = "int64",
+    )
+    val createdAt: Instant = Instant.now(),
+
+    // @Schema(hidden = true) — field is excluded entirely from the OpenAPI schema.
+    // Useful for internal bookkeeping that should never be exposed in the spec.
+    @Schema(hidden = true)
+    val internalVersion: Int = 0,
 )
 
 data class CreateTodoRequest(
     @Schema(description = "Short description of the task", example = "Buy groceries")
     val title: String,
+
+    @Schema(description = "Optional due date (YYYY-MM-DD)", example = "2024-12-31")
+    val dueDate: LocalDate? = null,
+
+    // BigDecimal — demonstrates number type support
+    @Schema(description = "Optional estimated hours to complete", example = "1.5")
+    val estimatedHours: BigDecimal? = null,
 )
 
 data class UpdateTodoRequest(
@@ -46,10 +86,18 @@ data class UpdateTodoRequest(
 
     @Schema(description = "New completion status; omit to keep the existing one", example = "true")
     val completed: Boolean?,
+
+    @Schema(description = "New due date; omit to keep the existing one", example = "2024-12-31")
+    val dueDate: LocalDate?,
+)
+
+data class BatchDeleteRequest(
+    @Schema(description = "List of todo IDs to delete")
+    val ids: List<Long>,
 )
 
 // ============================================================================
-// Handler functions
+// Public todo handlers
 // ============================================================================
 
 @Summary("List all todos")
@@ -80,7 +128,7 @@ fun createTodo(req: Json<CreateTodoRequest>, todoService: TodoService): Result<T
     expect {
         field("title", payload.title).minSize(1).maxSize(200)
     }
-    return Result.created(todoService.create(payload.title))
+    return Result.created(todoService.create(payload.title, payload.dueDate))
 }
 
 @Summary("Update an existing todo")
@@ -94,7 +142,7 @@ fun updateTodo(id: Path<Long>, req: Json<UpdateTodoRequest>, todoService: TodoSe
     expect {
         field("title", payload.title).minSize(1).maxSize(200)
     }
-    return todoService.update(id.value, payload.title, payload.completed)
+    return todoService.update(id.value, payload.title, payload.completed, payload.dueDate)
         ?: throw NotFound("Todo not found")
 }
 
@@ -107,12 +155,32 @@ fun deleteOneTodo(id: Path<Long>, todoService: TodoService) {
     if (!todoService.delete(id.value)) throw NotFound("Todo not found")
 }
 
+@Summary("Delete todos in batch")
+@Tags("todos")
+@ParamDesc(name = "req", description = "List of todo IDs to delete")
+@ResponseDesc(200, "Todos deleted successfully")
+fun deleteManyTodos(req: Json<BatchDeleteRequest>, todoService: TodoService) {
+    req.value.ids.forEach { todoService.delete(it) }
+}
+
 @Summary("Clear all todos")
 @Description("Permanently removes every todo from the store. This action cannot be undone.")
 @Tags("todos")
 @ResponseDesc(200, "All todos deleted")
 fun deleteAllTodos(todoService: TodoService) {
     todoService.clear()
+}
+
+// ============================================================================
+// Internal controller — excluded from the OpenAPI spec via @Hidden on the class.
+// All operations inside are invisible to the spec regardless of their own annotations.
+// ============================================================================
+
+@Hidden
+class InternalController {
+    fun healthCheck(): Map<String, String> = mapOf("status" to "ok")
+    fun metrics(todoService: TodoService): Map<String, Long> =
+        mapOf("total" to todoService.getAll().size.toLong())
 }
 
 // ============================================================================
@@ -128,11 +196,16 @@ fun main() {
     app.use(Cors())
     app.use(RequestLogger())
 
-    // Enable OpenAPI — spec served at GET /openapi.json, UI at GET /swagger-ui.
+    val internal = InternalController()
+
+    // Enable OpenAPI.
+    // The filter excludes /admin/* routes programmatically, complementing
+    // @Hidden which handles annotation-based exclusion on InternalController.
     app.enableOpenApi(
         title = "Todo API",
-        version = "1.0.0",
-        description = "A simple RESTful Todo API with OpenAPI documentation.",
+        version = "2.0.0",
+        description = "A simple RESTful Todo API showcasing OpenAPI doc generation.",
+        filter = { path, _ -> !path.startsWith("/admin") },
     )
 
     app.group("/api/todos") {
@@ -140,8 +213,22 @@ fun main() {
         get("/{id}", ::getOneTodo)
         post("/", ::createTodo)
         put("/{id}", ::updateTodo)
+        // Static segment /batch is registered before the dynamic /{id} segment
+        // so the router matches it first, avoiding ambiguity.
+        post("/batch-delete", ::deleteManyTodos)
         delete("/{id}", ::deleteOneTodo)
         delete("/", ::deleteAllTodos)
+    }
+
+    // Internal routes: @Hidden on InternalController suppresses them from the spec.
+    app.group("/internal") {
+        get("/health", internal::healthCheck)
+        get("/metrics", internal::metrics)
+    }
+
+    // Admin routes: excluded via the filter lambda passed to enableOpenApi().
+    app.group("/admin") {
+        get("/todos", ::getAllTodos)
     }
 
     app.listen(8000)
@@ -159,23 +246,25 @@ class TodoService {
     private val idGen = AtomicLong(1)
 
     init {
-        listOf("Write code", "Read book").forEach { create(it) }
+        create("Write code")
+        create("Read book", dueDate = LocalDate.now().plusDays(7))
     }
 
     fun getAll(): List<Todo> = todos.values.sortedByDescending { it.createdAt }
     fun getById(id: Long): Todo? = todos[id]
 
-    fun create(title: String): Todo {
-        val todo = Todo(id = idGen.getAndIncrement(), title = title)
+    fun create(title: String, dueDate: LocalDate? = null): Todo {
+        val todo = Todo(id = idGen.getAndIncrement(), title = title, dueDate = dueDate)
         todos[todo.id] = todo
         return todo
     }
 
-    fun update(id: Long, title: String?, completed: Boolean?): Todo? {
+    fun update(id: Long, title: String?, completed: Boolean?, dueDate: LocalDate?): Todo? {
         val existing = todos[id] ?: return null
         val updated = existing.copy(
             title = title ?: existing.title,
             completed = completed ?: existing.completed,
+            dueDate = dueDate ?: existing.dueDate,
         )
         todos[id] = updated
         return updated
