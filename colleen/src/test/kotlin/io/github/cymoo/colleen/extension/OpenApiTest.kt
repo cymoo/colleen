@@ -136,6 +136,7 @@ data class TemporalDto(
 // -- handler functions for new features ---------------------------------------
 
 @Hidden
+@Suppress("UNUSED_PARAMETER")
 fun hiddenHandler(id: Path<Int>): String = error("stub")
 
 fun createAliased(body: Json<AliasedDto>): String = error("stub")

@@ -260,11 +260,13 @@ private fun buildSpec(
     val paths = linkedMapOf<String, MutableMap<String, Any>>()
 
     for ((fullPath, node) in routes) {
-        val operation = buildOperation(node) ?: continue
         val methods = if (node.method == "*") HTTP_METHODS else listOf(node.method.lowercase())
-        for (method in methods) {
-            if (filter != null && !filter(fullPath, method)) continue
-            val pathItem = paths.getOrPut(fullPath) { linkedMapOf() }
+        val applicableMethods = if (filter != null) methods.filter { filter(fullPath, it) } else methods
+        if (applicableMethods.isEmpty()) continue
+
+        val operation = buildOperation(node) ?: continue
+        val pathItem = paths.getOrPut(fullPath) { linkedMapOf() }
+        for (method in applicableMethods) {
             pathItem[method] = operation
         }
     }
@@ -579,6 +581,14 @@ private const val MAX_DEPTH = 5
 private val STRING_SCHEMA = mapOf<String, Any>("type" to "string")
 private val BINARY_SCHEMA = mapOf<String, Any>("type" to "string", "format" to "binary")
 
+private val DATE_TIME_CLASSES: Set<Class<*>> = setOf(
+    LocalDateTime::class.java,
+    Instant::class.java,
+    OffsetDateTime::class.java,
+    ZonedDateTime::class.java,
+    java.util.Date::class.java,
+)
+
 /**
  * Converts a Java [Type] to an OpenAPI schema map.
  *
@@ -632,9 +642,7 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
         rawClass == LocalDate::class.java ->
             mapOf("type" to "string", "format" to "date")
 
-        rawClass == LocalDateTime::class.java || rawClass == Instant::class.java
-                || rawClass == OffsetDateTime::class.java || rawClass == ZonedDateTime::class.java
-                || rawClass == java.util.Date::class.java ->
+        rawClass in DATE_TIME_CLASSES ->
             mapOf("type" to "string", "format" to "date-time")
 
         rawClass == UUID::class.java ->
