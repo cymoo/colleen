@@ -586,7 +586,7 @@ private val DATE_TIME_CLASSES: Set<Class<*>> = setOf(
     Instant::class.java,
     OffsetDateTime::class.java,
     ZonedDateTime::class.java,
-    java.util.Date::class.java,
+    Date::class.java,
 )
 
 /**
@@ -630,7 +630,7 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
         rawClass == Boolean::class.java || rawClass == java.lang.Boolean::class.java ->
             mapOf("type" to "boolean")
 
-        rawClass == Char::class.java || rawClass == java.lang.Character::class.java ->
+        rawClass == Char::class.java || rawClass == Character::class.java ->
             mapOf("type" to "string")
 
         rawClass == BigDecimal::class.java ->
