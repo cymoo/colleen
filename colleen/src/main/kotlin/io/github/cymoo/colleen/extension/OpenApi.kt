@@ -6,6 +6,10 @@ import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
+import java.math.BigDecimal
+import java.math.BigInteger
+import java.time.*
+import java.util.*
 import kotlin.reflect.KParameter
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.jvm.javaMethod
@@ -101,6 +105,7 @@ annotation class ResponseDesc(val status: Int, val description: String)
  * Used to provide human-readable documentation for DTO properties
  * when they are reflected into OpenAPI schemas.
  *
+ * ### Basic usage
  * ```kotlin
  * data class CreateUserRequest(
  *     @Schema(description = "The user's login name", example = "john_doe")
@@ -110,10 +115,64 @@ annotation class ResponseDesc(val status: Int, val description: String)
  *     val age: Int,
  * )
  * ```
+ *
+ * ### Aliasing (overrides the field name in the schema)
+ * ```kotlin
+ * data class SearchRequest(
+ *     @Schema(name = "q")
+ *     val keyword: String,
+ * )
+ * ```
+ *
+ * ### Hiding a field from the schema
+ * ```kotlin
+ * data class InternalDto(
+ *     val publicField: String,
+ *     @Schema(hidden = true)
+ *     val internalField: String,
+ * )
+ * ```
+ *
+ * ### Overriding the inferred type (e.g. for custom deserialization)
+ * ```kotlin
+ * data class EventDto(
+ *     @Schema(type = "string", format = "date-time")
+ *     val startTime: LocalDateTime,
+ * )
+ * ```
  */
 @Target(AnnotationTarget.FIELD)
 @Retention(AnnotationRetention.RUNTIME)
-annotation class Schema(val description: String = "", val example: String = "")
+annotation class Schema(
+    val description: String = "",
+    val example: String = "",
+    val name: String = "",
+    val hidden: Boolean = false,
+    val type: String = "",
+    val format: String = "",
+)
+
+/**
+ * Marks a route handler or controller class as hidden from the OpenAPI specification.
+ *
+ * When applied to a **function**, only that operation is excluded.
+ * When applied to a **class** (controller), all operations within the class are excluded.
+ *
+ * ```kotlin
+ * @Hidden
+ * fun internalHealthCheck(): String = "ok"
+ *
+ * @Hidden
+ * @Controller("/internal")
+ * class InternalController {
+ *     @Get("/metrics")
+ *     fun metrics(): Map<String, Any> = ...
+ * }
+ * ```
+ */
+@Target(AnnotationTarget.FUNCTION, AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Hidden
 
 // ============================================================================
 // Public Entry Point
@@ -150,6 +209,7 @@ fun Colleen.enableOpenApi(
     title: String = "API",
     version: String = "1.0.0",
     description: String? = null,
+    filter: ((path: String, method: String) -> Boolean)? = null,
 ) {
     val specPath = UrlPath.normalize(path)
     val swaggerPath = uiPath?.let { UrlPath.normalize(it) }
@@ -157,7 +217,7 @@ fun Colleen.enableOpenApi(
 
     get(specPath) {
         val routes = collectRoutes(this@enableOpenApi, "", excludedPaths)
-        buildSpec(routes, title, version, description)
+        buildSpec(routes, title, version, description, filter)
     }
 
     if (swaggerPath != null) {
@@ -195,14 +255,20 @@ private fun buildSpec(
     title: String,
     version: String,
     description: String?,
+    filter: ((String, String) -> Boolean)?,
 ): Map<String, Any> {
     val paths = linkedMapOf<String, MutableMap<String, Any>>()
 
     for ((fullPath, node) in routes) {
-        val pathItem = paths.getOrPut(fullPath) { linkedMapOf() }
         val methods = if (node.method == "*") HTTP_METHODS else listOf(node.method.lowercase())
-        val operation = buildOperation(node)
-        methods.forEach { method -> pathItem[method] = operation }
+        val applicableMethods = if (filter != null) methods.filter { filter(fullPath, it) } else methods
+        if (applicableMethods.isEmpty()) continue
+
+        val operation = buildOperation(node) ?: continue
+        val pathItem = paths.getOrPut(fullPath) { linkedMapOf() }
+        for (method in applicableMethods) {
+            pathItem[method] = operation
+        }
     }
 
     return buildMap {
@@ -287,8 +353,8 @@ private fun buildParamEntries(
 // Operation Building
 // ============================================================================
 
-/** Dispatches to the appropriate builder based on handler type. */
-private fun buildOperation(node: RouteNode): Map<String, Any> = when (val h = node.handler) {
+/** Dispatches to the appropriate builder based on handler type. Returns null if hidden. */
+private fun buildOperation(node: RouteNode): Map<String, Any>? = when (val h = node.handler) {
     is RouteHandler.KFunction -> buildOperationFromKFunction(h.fn)
     is RouteHandler.JavaMethod -> buildOperationFromJavaMethod(h.method)
     is RouteHandler.Lambda -> mapOf("responses" to defaultResponses())
@@ -296,9 +362,14 @@ private fun buildOperation(node: RouteNode): Map<String, Any> = when (val h = no
 
 // ---- Kotlin KFunction -------------------------------------------------------
 
-private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<String, Any> {
+private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<String, Any>? {
     val javaMethod = fn.javaMethod ?: return mapOf("responses" to defaultResponses())
     val declaringClass = javaMethod.declaringClass
+
+    // Check @Hidden on function or declaring class
+    if (fn.findAnnotation<Hidden>() != null || declaringClass.getAnnotation(Hidden::class.java) != null) {
+        return null
+    }
 
     val valueParams = fn.parameters.filter { it.kind == KParameter.Kind.VALUE }
     val javaParams = javaMethod.parameters
@@ -340,8 +411,14 @@ private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<St
 
 // ---- Java Method ------------------------------------------------------------
 
-private fun buildOperationFromJavaMethod(method: Method): Map<String, Any> {
+private fun buildOperationFromJavaMethod(method: Method): Map<String, Any>? {
     val declaringClass = method.declaringClass
+
+    // Check @Hidden on method or declaring class
+    if (method.getAnnotation(Hidden::class.java) != null || declaringClass.getAnnotation(Hidden::class.java) != null) {
+        return null
+    }
+
     val paramDescs = method.paramDescMap()
 
     val descriptors = method.parameters.mapNotNull { jParam ->
@@ -504,11 +581,21 @@ private const val MAX_DEPTH = 5
 private val STRING_SCHEMA = mapOf<String, Any>("type" to "string")
 private val BINARY_SCHEMA = mapOf<String, Any>("type" to "string", "format" to "binary")
 
+private val DATE_TIME_CLASSES: Set<Class<*>> = setOf(
+    LocalDateTime::class.java,
+    Instant::class.java,
+    OffsetDateTime::class.java,
+    ZonedDateTime::class.java,
+    java.util.Date::class.java,
+)
+
 /**
  * Converts a Java [Type] to an OpenAPI schema map.
  *
- * Handles: primitives, String, enums, List/Set (array), Map (object with
- * additionalProperties), nullable types, and arbitrary DTOs.
+ * Handles: primitives (Int, Long, Short, Byte, Float, Double, Boolean, Char),
+ * String, enums, temporal types (LocalDate, LocalDateTime, Instant, OffsetDateTime,
+ * ZonedDateTime, Date), UUID, BigDecimal, BigInteger, List/Set (array),
+ * Map (object with additionalProperties), nullable types, and arbitrary DTOs.
  */
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
@@ -528,6 +615,12 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
         rawClass == Long::class.java || rawClass == java.lang.Long::class.java ->
             mapOf("type" to "integer", "format" to "int64")
 
+        rawClass == Short::class.java || rawClass == java.lang.Short::class.java ->
+            mapOf("type" to "integer", "format" to "int32")
+
+        rawClass == Byte::class.java || rawClass == java.lang.Byte::class.java ->
+            mapOf("type" to "integer", "format" to "int32")
+
         rawClass == Float::class.java || rawClass == java.lang.Float::class.java ->
             mapOf("type" to "number", "format" to "float")
 
@@ -536,6 +629,24 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
 
         rawClass == Boolean::class.java || rawClass == java.lang.Boolean::class.java ->
             mapOf("type" to "boolean")
+
+        rawClass == Char::class.java || rawClass == java.lang.Character::class.java ->
+            mapOf("type" to "string")
+
+        rawClass == BigDecimal::class.java ->
+            mapOf("type" to "number")
+
+        rawClass == BigInteger::class.java ->
+            mapOf("type" to "integer")
+
+        rawClass == LocalDate::class.java ->
+            mapOf("type" to "string", "format" to "date")
+
+        rawClass in DATE_TIME_CLASSES ->
+            mapOf("type" to "string", "format" to "date-time")
+
+        rawClass == UUID::class.java ->
+            mapOf("type" to "string", "format" to "uuid")
 
         rawClass.isEnum ->
             mapOf("type" to "string", "enum" to rawClass.enumConstants.map { it.toString() })
@@ -567,7 +678,11 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
 /**
  * Reflects over declared fields to produce an OpenAPI object schema.
  *
- * - Reads [@Schema][Schema] on each field to override `description` and `example`.
+ * - Reads [@Schema][Schema] on each field to override `description`, `example`,
+ *   `name` (alias), `hidden`, `type`, and `format`.
+ * - Fields marked `@Schema(hidden = true)` are excluded entirely.
+ * - Fields with `@Schema(name = "alias")` use the alias as the property key.
+ * - Fields with `@Schema(type = "...")` override the inferred type/format.
  * - Primitive fields are added to `required` (they cannot be null in Java/Kotlin).
  * - Non-primitive fields are marked `nullable: true`.
  */
@@ -578,21 +693,39 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
     for (field in clazz.declaredFields) {
         if (Modifier.isStatic(field.modifiers) || field.isSynthetic) continue
 
-        val fieldSchema = typeToSchema(field.genericType, depth + 1).toMutableMap()
         val schemaAnnotation = field.getAnnotation(Schema::class.java)
+
+        // Skip hidden fields
+        if (schemaAnnotation != null && schemaAnnotation.hidden) continue
+
+        // Use @Schema(type=...) override or infer from the field type
+        val fieldSchema: MutableMap<String, Any> = if (schemaAnnotation != null && schemaAnnotation.type.isNotBlank()) {
+            val m = linkedMapOf<String, Any>("type" to schemaAnnotation.type)
+            if (schemaAnnotation.format.isNotBlank()) m["format"] = schemaAnnotation.format
+            m
+        } else {
+            LinkedHashMap(typeToSchema(field.genericType, depth + 1))
+        }
 
         if (schemaAnnotation != null) {
             if (schemaAnnotation.description.isNotBlank()) fieldSchema["description"] = schemaAnnotation.description
             if (schemaAnnotation.example.isNotBlank()) fieldSchema["example"] = schemaAnnotation.example
         }
 
+        // Determine property name: @Schema(name=...) overrides the field name
+        val propertyName = if (schemaAnnotation != null && schemaAnnotation.name.isNotBlank()) {
+            schemaAnnotation.name
+        } else {
+            field.name
+        }
+
         if (field.type.isPrimitive) {
-            requiredFields.add(field.name)
+            requiredFields.add(propertyName)
         } else {
             fieldSchema["nullable"] = true
         }
 
-        properties[field.name] = fieldSchema
+        properties[propertyName] = fieldSchema
     }
 
     return buildMap {

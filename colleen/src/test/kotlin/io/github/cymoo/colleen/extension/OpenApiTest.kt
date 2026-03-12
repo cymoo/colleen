@@ -98,6 +98,61 @@ fun returnsString(ctx: Context): String = error("stub")
 
 fun returnsUnit(ctx: Context) {}
 
+// -- DTOs for testing @Schema features (name, hidden, type, format) -----------
+
+data class AliasedDto(
+    @Schema(name = "q")
+    val keyword: String?,
+    val page: Int,
+)
+
+data class HiddenFieldDto(
+    val visible: String?,
+    @Schema(hidden = true)
+    val secret: String?,
+)
+
+data class TypeOverrideDto(
+    @Schema(type = "string", format = "date-time")
+    val startTime: java.time.LocalDateTime?,
+    @Schema(type = "string")
+    val customField: Any?,
+)
+
+data class ShortDto(
+    val shortVal: Short,
+    val byteVal: Byte,
+)
+
+data class TemporalDto(
+    val date: java.time.LocalDate?,
+    val dateTime: java.time.LocalDateTime?,
+    val instant: java.time.Instant?,
+    val uuid: java.util.UUID?,
+    val bigDecimal: java.math.BigDecimal?,
+    val bigInteger: java.math.BigInteger?,
+)
+
+// -- handler functions for new features ---------------------------------------
+
+@Hidden
+@Suppress("UNUSED_PARAMETER")
+fun hiddenHandler(id: Path<Int>): String = error("stub")
+
+fun createAliased(body: Json<AliasedDto>): String = error("stub")
+
+fun createHiddenField(body: Json<HiddenFieldDto>): String = error("stub")
+
+fun createTypeOverride(body: Json<TypeOverrideDto>): String = error("stub")
+
+fun queryShort(v: Query<Short>): String = error("stub")
+
+fun queryByte(v: Query<Byte>): String = error("stub")
+
+fun queryTemporal(body: Json<TemporalDto>): TemporalDto = error("stub")
+
+fun queryShortDto(body: Json<ShortDto>): ShortDto = error("stub")
+
 // ============================================================================
 // Test helpers
 // ============================================================================
@@ -131,11 +186,12 @@ private fun spec(
     title: String = "Test API",
     version: String = "0.0.1",
     description: String? = null,
+    filter: ((path: String, method: String) -> Boolean)? = null,
     setup: Colleen.() -> Unit,
 ): Map<String, Any> {
     val app = Colleen()
     app.setup()
-    app.enableOpenApi(title = title, version = version, description = description)
+    app.enableOpenApi(title = title, version = version, description = description, filter = filter)
 
     // The spec route is always registered last at "/openapi.json".
     // We locate it and invoke its handler directly to get the map.
@@ -854,5 +910,278 @@ class ContextParameterTest {
         // returnsString takes Context; it must not surface as a parameter.
         val params = s.operation("/text", "get")["parameters"]
         assertTrue(params == null || (params as List<*>).isEmpty())
+    }
+}
+
+// ============================================================================
+// Test: filter parameter for enableOpenApi
+// ============================================================================
+
+class FilterTest {
+
+    @Test
+    fun `filter excludes routes by path`() {
+        val s = spec(filter = { path, _ -> path != "/internal" }) {
+            get("/public", ::listUsers)
+            get("/internal", ::getUser)
+        }
+        val paths = s["paths"] as Map<*, *>
+        assertTrue(paths.containsKey("/public"))
+        assertFalse(paths.containsKey("/internal"))
+    }
+
+    @Test
+    fun `filter excludes routes by method`() {
+        val s = spec(filter = { _, method -> method != "delete" }) {
+            get("/users", ::listUsers)
+            delete("/users/{id}", ::getUser)
+        }
+        val paths = s["paths"] as Map<*, *>
+        assertTrue(paths.containsKey("/users"))
+        assertFalse(paths.containsKey("/users/{id}"))
+    }
+
+    @Test
+    fun `filter can exclude individual methods from wildcard route`() {
+        val s = spec(filter = { _, method -> method != "delete" && method != "patch" }) {
+            all("/resource") { "ok" }
+        }
+        val item = s.path("paths", "/resource") as Map<*, *>
+        assertTrue(item.containsKey("get"))
+        assertTrue(item.containsKey("post"))
+        assertFalse(item.containsKey("delete"))
+        assertFalse(item.containsKey("patch"))
+    }
+
+    @Test
+    fun `no filter includes all routes`() {
+        val s = spec {
+            get("/a", ::listUsers)
+            get("/b", ::getUser)
+        }
+        val paths = s["paths"] as Map<*, *>
+        assertTrue(paths.containsKey("/a"))
+        assertTrue(paths.containsKey("/b"))
+    }
+}
+
+// ============================================================================
+// Test: @Hidden annotation
+// ============================================================================
+
+class HiddenAnnotationTest {
+
+    @Test
+    fun `@Hidden on function excludes route from spec`() {
+        val s = spec {
+            get("/visible", ::listUsers)
+            get("/hidden", ::hiddenHandler)
+        }
+        val paths = s["paths"] as Map<*, *>
+        assertTrue(paths.containsKey("/visible"))
+        assertFalse(paths.containsKey("/hidden"))
+    }
+
+    @Test
+    fun `@Hidden on controller class excludes all its routes`() {
+        @Hidden
+        @Controller("/internal")
+        class HiddenController {
+            @Get("/metrics")
+            fun metrics(): String = error("stub")
+
+            @Get("/health")
+            fun health(): String = error("stub")
+        }
+
+        val app = Colleen()
+        app.addController(HiddenController())
+        app.get("/public", ::listUsers)
+        app.enableOpenApi()
+        val specRoute = app.router.routes.last { it.path == "/openapi.json" }
+        @Suppress("UNCHECKED_CAST")
+        val s = specRoute.handler(createTestContext(app)) as Map<String, Any>
+
+        val paths = s["paths"] as Map<*, *>
+        assertTrue(paths.containsKey("/public"))
+        assertFalse(paths.containsKey("/internal/metrics"))
+        assertFalse(paths.containsKey("/internal/health"))
+    }
+
+    @Test
+    fun `@Hidden on method within controller hides only that method`() {
+        @Controller("/api")
+        class PartiallyHiddenController {
+            @Get("/visible")
+            fun visible(): String = error("stub")
+
+            @Hidden
+            @Get("/hidden")
+            fun hidden(): String = error("stub")
+        }
+
+        val app = Colleen()
+        app.addController(PartiallyHiddenController())
+        app.enableOpenApi()
+        val specRoute = app.router.routes.last { it.path == "/openapi.json" }
+        @Suppress("UNCHECKED_CAST")
+        val s = specRoute.handler(createTestContext(app)) as Map<String, Any>
+
+        val paths = s["paths"] as Map<*, *>
+        assertTrue(paths.containsKey("/api/visible"))
+        assertFalse(paths.containsKey("/api/hidden"))
+    }
+}
+
+// ============================================================================
+// Test: @Schema name (alias) support
+// ============================================================================
+
+class SchemaAliasTest {
+
+    @Test
+    fun `@Schema name overrides field name in schema properties`() {
+        val s = spec { post("/aliased", ::createAliased) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/aliased", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        assertTrue(props.containsKey("q"), "Aliased field 'q' should be present")
+        assertFalse(props.containsKey("keyword"), "Original field name 'keyword' should not be present")
+    }
+
+    @Test
+    fun `non-aliased fields still use original name`() {
+        val s = spec { post("/aliased", ::createAliased) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/aliased", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        assertTrue(props.containsKey("page"))
+    }
+}
+
+// ============================================================================
+// Test: @Schema hidden field support
+// ============================================================================
+
+class SchemaHiddenFieldTest {
+
+    @Test
+    fun `@Schema hidden field is excluded from schema`() {
+        val s = spec { post("/hidden-field", ::createHiddenField) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/hidden-field", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        assertTrue(props.containsKey("visible"))
+        assertFalse(props.containsKey("secret"), "Hidden field 'secret' should not be in schema")
+    }
+}
+
+// ============================================================================
+// Test: @Schema type/format override
+// ============================================================================
+
+class SchemaTypeOverrideTest {
+
+    @Test
+    fun `@Schema type overrides inferred type`() {
+        val s = spec { post("/type-override", ::createTypeOverride) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/type-override", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val startTimeSchema = props["startTime"] as Map<*, *>
+        assertEquals("string", startTimeSchema["type"])
+        assertEquals("date-time", startTimeSchema["format"])
+    }
+
+    @Test
+    fun `@Schema type without format produces only type`() {
+        val s = spec { post("/type-override", ::createTypeOverride) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/type-override", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val customSchema = props["customField"] as Map<*, *>
+        assertEquals("string", customSchema["type"])
+        assertFalse(customSchema.containsKey("format"))
+    }
+}
+
+// ============================================================================
+// Test: Additional type support in typeToSchema
+// ============================================================================
+
+class AdditionalTypeSchemaTest {
+
+    @Test
+    fun `Short produces integer int32 schema`() {
+        val s = spec { get("/short", ::queryShort) }
+        val schema = s.parameters("/short", "get")
+            .single { it["name"] == "v" }["schema"] as Map<*, *>
+        assertEquals("integer", schema["type"])
+        assertEquals("int32", schema["format"])
+    }
+
+    @Test
+    fun `Byte produces integer int32 schema`() {
+        val s = spec { get("/byte", ::queryByte) }
+        val schema = s.parameters("/byte", "get")
+            .single { it["name"] == "v" }["schema"] as Map<*, *>
+        assertEquals("integer", schema["type"])
+        assertEquals("int32", schema["format"])
+    }
+
+    @Test
+    fun `ShortDto fields produce correct schema in object`() {
+        val s = spec { post("/short-dto", ::queryShortDto) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/short-dto", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val shortSchema = props["shortVal"] as Map<*, *>
+        assertEquals("integer", shortSchema["type"])
+        val byteSchema = props["byteVal"] as Map<*, *>
+        assertEquals("integer", byteSchema["type"])
+    }
+
+    @Test
+    fun `TemporalDto fields produce correct schemas`() {
+        val s = spec { post("/temporal", ::queryTemporal) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/temporal", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+
+        val dateSchema = props["date"] as Map<*, *>
+        assertEquals("string", dateSchema["type"])
+        assertEquals("date", dateSchema["format"])
+
+        val dateTimeSchema = props["dateTime"] as Map<*, *>
+        assertEquals("string", dateTimeSchema["type"])
+        assertEquals("date-time", dateTimeSchema["format"])
+
+        val instantSchema = props["instant"] as Map<*, *>
+        assertEquals("string", instantSchema["type"])
+        assertEquals("date-time", instantSchema["format"])
+
+        val uuidSchema = props["uuid"] as Map<*, *>
+        assertEquals("string", uuidSchema["type"])
+        assertEquals("uuid", uuidSchema["format"])
+
+        val bigDecimalSchema = props["bigDecimal"] as Map<*, *>
+        assertEquals("number", bigDecimalSchema["type"])
+
+        val bigIntegerSchema = props["bigInteger"] as Map<*, *>
+        assertEquals("integer", bigIntegerSchema["type"])
+    }
+
+    @Test
+    fun `TemporalDto response schema also produces correct types`() {
+        val s = spec { post("/temporal", ::queryTemporal) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.path(
+            "paths", "/temporal", "post", "responses", "200",
+            "content", "application/json", "schema", "properties"
+        ) as Map<String, Any>
+
+        val dateSchema = props["date"] as Map<*, *>
+        assertEquals("string", dateSchema["type"])
+        assertEquals("date", dateSchema["format"])
     }
 }
