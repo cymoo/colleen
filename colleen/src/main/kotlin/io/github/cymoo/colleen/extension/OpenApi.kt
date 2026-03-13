@@ -219,7 +219,7 @@ annotation class Hidden
  * Automatically collects route metadata from the application and all mounted
  * sub-applications, then exposes:
  * - A JSON spec endpoint at [path]
- * - An optional documentation page at [uiPath] (ReDoc by default)
+ * - An optional documentation page at [uiPath] (Swagger UI by default)
  *
  * ### Example
  * ```kotlin
@@ -234,9 +234,9 @@ annotation class Hidden
  * app.listen(8000)
  * ```
  *
- * ### Switching to Swagger UI
+ * ### Switching to ReDoc
  * ```kotlin
- * app.enableOpenApi(uiHtml = ::swaggerUiHtml)
+ * app.enableOpenApi(uiHtml = ::redocHtml)
  * ```
  *
  * - Lambda handlers produce minimal metadata (path + method only).
@@ -265,7 +265,7 @@ fun Colleen.enableOpenApi(
         if (uiHtml != null) {
             get(docsPath) { ctx -> ctx.html(uiHtml(specPath)) }
         } else {
-            get(docsPath) { ctx -> ctx.html(redocHtml(specPath)) }
+            get(docsPath) { ctx -> ctx.html(swaggerUiHtml(specPath)) }
         }
     }
 }
@@ -459,7 +459,7 @@ private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<St
         tags = (classTags + methodTags).distinct(),
         parameters = parameters,
         requestBody = requestBody,
-        responses = buildResponses(fn.returnType.jvmErasure.java, javaMethod.responsesMap()),
+        responses = buildResponses(javaMethod.genericReturnType, javaMethod.responsesMap()),
     )
 }
 
@@ -502,7 +502,7 @@ private fun buildOperationFromJavaMethod(method: Method): Map<String, Any>? {
         tags = (classTags + methodTags).distinct(),
         parameters = parameters,
         requestBody = requestBody,
-        responses = buildResponses(method.returnType, method.responsesMap()),
+        responses = buildResponses(method.genericReturnType, method.responsesMap()),
     )
 }
 
@@ -564,21 +564,42 @@ private fun buildFileUploadBody(fieldName: String, description: String?): Map<St
 
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 private fun buildResponses(
-    returnType: Class<*>,
+    returnType: Type,
     annotations: Map<Int, String>,
 ): Map<String, Any> {
-    val isVoid = returnType == Unit::class.java
-            || returnType == Void.TYPE
-            || returnType == Void::class.java
+    // Unwrap Result<T> → use the inner body type T as the effective response schema.
+    val effectiveType: Type = run {
+        val rawType = when (returnType) {
+            is Class<*> -> returnType
+            is ParameterizedType -> returnType.rawType as? Class<*>
+            else -> null
+        }
+        if (rawType != null && Result::class.java.isAssignableFrom(rawType)) {
+            (returnType as? ParameterizedType)?.actualTypeArguments?.firstOrNull() ?: Unit::class.java
+        } else {
+            returnType
+        }
+    }
+
+    val rawClass: Class<*> = when (effectiveType) {
+        is Class<*> -> effectiveType
+        is ParameterizedType -> effectiveType.rawType as Class<*>
+        else -> Any::class.java
+    }
+
+    val isVoid = rawClass == Unit::class.java
+            || rawClass == Void.TYPE
+            || rawClass == Void::class.java
+            || Response::class.java.isAssignableFrom(rawClass)
 
     val successResponse: Map<String, Any> = buildMap {
         put("description", annotations[200] ?: "OK")
         if (!isVoid) {
             val content = when {
-                returnType == String::class.java ->
+                rawClass == String::class.java ->
                     mapOf("text/plain" to mapOf("schema" to STRING_SCHEMA))
                 else ->
-                    mapOf("application/json" to mapOf("schema" to typeToSchema(returnType)))
+                    mapOf("application/json" to mapOf("schema" to typeToSchema(effectiveType)))
             }
             put("content", content)
         }
@@ -823,7 +844,10 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
  * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
  * [jsUrl] may be overridden to point to a self-hosted or alternate CDN bundle.
  *
- * This is the **default** UI used by [enableOpenApi].
+ * To use ReDoc instead of the default Swagger UI, pass this function to [enableOpenApi]:
+ * ```kotlin
+ * app.enableOpenApi(uiHtml = ::redocHtml)
+ * ```
  */
 fun redocHtml(
     specPath: String,
@@ -850,10 +874,7 @@ fun redocHtml(
  * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
  * [jsUrl] and [cssUrl] may be overridden to point to self-hosted or alternate CDN bundles.
  *
- * To use Swagger UI instead of the default ReDoc, pass this function to [enableOpenApi]:
- * ```kotlin
- * app.enableOpenApi(uiHtml = ::swaggerUiHtml)
- * ```
+ * This is the **default** UI used by [enableOpenApi].
  */
 fun swaggerUiHtml(
     specPath: String,

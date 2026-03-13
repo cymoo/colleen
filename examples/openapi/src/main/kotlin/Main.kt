@@ -24,11 +24,11 @@ import java.util.concurrent.atomic.AtomicLong
  *   - enableOpenApi(filter = ...) for programmatic route exclusion
  *   - @Schema with name / hidden / type / format / required overrides on DTO fields
  *   - Extended type support: UUID, LocalDate, Instant, BigDecimal, etc.
- *   - Customizable documentation UI: ReDoc (default) or Swagger UI
+ *   - Customizable documentation UI: Swagger UI (default) or ReDoc
  *
  * Endpoints added by enableOpenApi():
  *   GET /openapi.json  — OpenAPI 3.0.3 JSON specification
- *   GET /docs          — Interactive API documentation page (ReDoc by default)
+ *   GET /docs          — Interactive API documentation page (Swagger UI by default)
  */
 
 // ============================================================================
@@ -203,8 +203,8 @@ fun main() {
     // Enable OpenAPI.
     // The filter excludes /admin/* routes programmatically, complementing
     // @Hidden which handles annotation-based exclusion on InternalController.
-    // The default documentation UI is ReDoc; to use Swagger UI instead, pass:
-    //   uiHtml = ::swaggerUiHtml
+    // The default documentation UI is Swagger UI; to use ReDoc instead, pass:
+    //   uiHtml = ::redocHtml
     app.enableOpenApi(
         title = "Todo API",
         version = "2.0.0",

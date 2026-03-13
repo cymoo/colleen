@@ -98,6 +98,10 @@ fun returnsString(ctx: Context): String = error("stub")
 
 fun returnsUnit(ctx: Context) {}
 
+fun returnsResult(body: Json<CreateUserRequest>): Result<UserDto> = error("stub")
+
+fun returnsResponse(ctx: Context): Response = error("stub")
+
 // -- DTOs for testing @Schema features (name, hidden, type, format) -----------
 
 data class AliasedDto(
@@ -642,6 +646,30 @@ class ResponseBuildingTest {
             s.path("paths", "/users/{id}", "get", "responses", "200", "content", "application/json")
         )
     }
+
+    @Test
+    fun `Result return type unwraps inner body type for response schema`() {
+        val s = spec { post("/users", ::returnsResult) }
+        @Suppress("UNCHECKED_CAST")
+        val schema = s.path(
+            "paths", "/users", "post", "responses", "200",
+            "content", "application/json", "schema"
+        ) as Map<String, Any>
+        // Result<UserDto> should produce the schema for UserDto, not Result itself
+        assertEquals("object", schema["type"])
+        val props = schema["properties"] as Map<*, *>
+        assertTrue(props.containsKey("id"))
+        assertTrue(props.containsKey("username"))
+        assertFalse(props.containsKey("status"), "Result's own 'status' field should not appear")
+        assertFalse(props.containsKey("headers"), "Result's own 'headers' field should not appear")
+    }
+
+    @Test
+    fun `Response return type produces response without content`() {
+        val s = spec { get("/resp", ::returnsResponse) }
+        val response = s.path("paths", "/resp", "get", "responses", "200") as Map<*, *>
+        assertFalse(response.containsKey("content"))
+    }
 }
 
 // ============================================================================
@@ -806,26 +834,31 @@ class CollectionSchemaTest {
     }
 
     @Test
-    fun `List of DTO generates array schema without items due to type erasure`() {
+    fun `List of DTO generates array schema with items from generic return type`() {
         val s = spec { get("/users", ::listUsers) }
         val schema = s.path(
             "paths", "/users", "get", "responses", "200",
             "content", "application/json", "schema"
         ) as Map<*, *>
-        // items is absent because the generic element type UserDto is erased at runtime
-        assertFalse(schema.containsKey("items"))
+        // The generic return type List<UserDto> is preserved, so items should be present
+        assertTrue(schema.containsKey("items"))
+        val items = schema["items"] as Map<*, *>
+        assertEquals("object", items["type"])
+        assertNotNull(items["properties"])
     }
 
     @Test
-    fun `Map return type generates object schema without additionalProperties due to type erasure`() {
+    fun `Map return type generates object schema with additionalProperties from generic return type`() {
         val s = spec { get("/meta", ::queryWithMap) }
         val schema = s.path(
             "paths", "/meta", "get", "responses", "200",
             "content", "application/json", "schema"
         ) as Map<*, *>
         assertEquals("object", schema["type"])
-        // additionalProperties is absent because Map's value type is erased at runtime
-        assertFalse(schema.containsKey("additionalProperties"))
+        // The generic return type Map<String, String> is preserved, so additionalProperties should be present
+        assertTrue(schema.containsKey("additionalProperties"))
+        val addlProps = schema["additionalProperties"] as Map<*, *>
+        assertEquals("string", addlProps["type"])
     }
 }
 
