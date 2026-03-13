@@ -19,14 +19,16 @@ import java.util.concurrent.atomic.AtomicLong
  * Demonstrates the full feature set of the OpenAPI extension:
  *   - @Summary / @Description / @Tags for operation metadata
  *   - @ParamDesc / @ResponseDesc for parameter and response docs
+ *   - @ParamDesc(required = OptionalBool.TRUE) to force a parameter as required
  *   - @Hidden to exclude operations or entire controllers from the spec
  *   - enableOpenApi(filter = ...) for programmatic route exclusion
- *   - @Schema with name / hidden / type / format overrides on DTO fields
+ *   - @Schema with name / hidden / type / format / required overrides on DTO fields
  *   - Extended type support: UUID, LocalDate, Instant, BigDecimal, etc.
+ *   - Customizable documentation UI: ReDoc (default) or Swagger UI
  *
  * Endpoints added by enableOpenApi():
  *   GET /openapi.json  — OpenAPI 3.0.3 JSON specification
- *   GET /swagger-ui    — Interactive Swagger UI page
+ *   GET /docs          — Interactive API documentation page (ReDoc by default)
  */
 
 // ============================================================================
@@ -81,13 +83,13 @@ data class CreateTodoRequest(
 )
 
 data class UpdateTodoRequest(
-    @Schema(description = "New title; omit to keep the existing one", example = "Buy organic groceries")
+    @Schema(description = "New title; omit to keep the existing one", example = "Buy organic groceries", required = OptionalBool.FALSE)
     val title: String?,
 
-    @Schema(description = "New completion status; omit to keep the existing one", example = "true")
+    @Schema(description = "New completion status; omit to keep the existing one", example = "true", required = OptionalBool.FALSE)
     val completed: Boolean?,
 
-    @Schema(description = "New due date; omit to keep the existing one", example = "2024-12-31")
+    @Schema(description = "New due date; omit to keep the existing one", example = "2024-12-31", required = OptionalBool.FALSE)
     val dueDate: LocalDate?,
 )
 
@@ -201,6 +203,8 @@ fun main() {
     // Enable OpenAPI.
     // The filter excludes /admin/* routes programmatically, complementing
     // @Hidden which handles annotation-based exclusion on InternalController.
+    // The default documentation UI is ReDoc; to use Swagger UI instead, pass:
+    //   uiHtml = ::swaggerUiHtml
     app.enableOpenApi(
         title = "Todo API",
         version = "2.0.0",
@@ -234,7 +238,7 @@ fun main() {
     app.listen(8000)
     println("✅ Todo API server running at http://localhost:8000")
     println("📄 OpenAPI spec  → http://localhost:8000/openapi.json")
-    println("🔍 Swagger UI    → http://localhost:8000/swagger-ui")
+    println("🔍 API docs      → http://localhost:8000/docs")
 }
 
 // ============================================================================
