@@ -23,7 +23,7 @@ import kotlin.reflect.jvm.jvmErasure
 // ============================================================================
 
 /**
- * Tri-state boolean used in annotations to optionally override inferred behaviour.
+ * Tri-state boolean used in annotations to optionally override inferred behavior.
  *
  * - [UNSET] — use the value inferred from the type system (default).
  * - [TRUE]  — explicitly mark as required / non-nullable.
