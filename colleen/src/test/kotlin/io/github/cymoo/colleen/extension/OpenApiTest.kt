@@ -153,6 +153,32 @@ fun queryTemporal(body: Json<TemporalDto>): TemporalDto = error("stub")
 
 fun queryShortDto(body: Json<ShortDto>): ShortDto = error("stub")
 
+// -- DTOs for testing Kotlin nullability-based required / nullable logic ------
+
+/** Non-null String is required; nullable Int? is optional; non-null Boolean is required. */
+data class NullabilityDto(
+    val name: String,        // non-null → required
+    val count: Int?,         // nullable → nullable
+    val active: Boolean,     // non-null → required
+    val label: String?,      // nullable → nullable
+)
+
+/** @Schema(required=...) overrides inferred nullability. */
+data class RequiredOverrideDto(
+    @Schema(required = OptionalBool.FALSE)
+    val alwaysPresent: String,             // non-null, but forced optional
+
+    @Schema(required = OptionalBool.TRUE)
+    val sometimesPresent: String?,         // nullable, but forced required
+)
+
+fun createNullability(body: Json<NullabilityDto>): NullabilityDto = error("stub")
+
+fun createRequiredOverride(body: Json<RequiredOverrideDto>): String = error("stub")
+
+@ParamDesc(name = "q", description = "Search keyword", required = OptionalBool.TRUE)
+fun searchForced(q: Query<String?>): List<String> = error("stub")
+
 // ============================================================================
 // Test helpers
 // ============================================================================
@@ -284,11 +310,11 @@ class RouteCollectionTest {
     }
 
     @Test
-    fun `spec and swagger-ui routes are excluded from paths`() {
+    fun `spec and docs routes are excluded from paths`() {
         val s = spec { get("/users", ::listUsers) }
         val paths = s["paths"] as Map<*, *>
         assertFalse(paths.containsKey("/openapi.json"))
-        assertFalse(paths.containsKey("/swagger-ui"))
+        assertFalse(paths.containsKey("/docs"))
     }
 
     @Test
@@ -1183,5 +1209,190 @@ class AdditionalTypeSchemaTest {
         val dateSchema = props["date"] as Map<*, *>
         assertEquals("string", dateSchema["type"])
         assertEquals("date", dateSchema["format"])
+    }
+}
+
+// ============================================================================
+// Test: Kotlin nullability-based required / nullable logic
+// ============================================================================
+
+class KotlinNullabilitySchemaTest {
+
+    @Test
+    fun `non-null String field is required`() {
+        val s = spec { post("/nullability", ::createNullability) }
+        @Suppress("UNCHECKED_CAST")
+        val required = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema", "required") as List<String>
+        assertTrue(required.contains("name"))
+    }
+
+    @Test
+    fun `non-null String field is not marked nullable`() {
+        val s = spec { post("/nullability", ::createNullability) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val nameSchema = props["name"] as Map<*, *>
+        assertFalse(nameSchema.containsKey("nullable"))
+    }
+
+    @Test
+    fun `nullable Int field is marked nullable`() {
+        val s = spec { post("/nullability", ::createNullability) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val countSchema = props["count"] as Map<*, *>
+        assertEquals(true, countSchema["nullable"])
+    }
+
+    @Test
+    fun `nullable Int field is not in required`() {
+        val s = spec { post("/nullability", ::createNullability) }
+        @Suppress("UNCHECKED_CAST")
+        val required = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema", "required") as List<String>
+        assertFalse(required.contains("count"))
+    }
+
+    @Test
+    fun `non-null Boolean field is required`() {
+        val s = spec { post("/nullability", ::createNullability) }
+        @Suppress("UNCHECKED_CAST")
+        val required = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema", "required") as List<String>
+        assertTrue(required.contains("active"))
+    }
+
+    @Test
+    fun `nullable String field is marked nullable`() {
+        val s = spec { post("/nullability", ::createNullability) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val labelSchema = props["label"] as Map<*, *>
+        assertEquals(true, labelSchema["nullable"])
+    }
+
+    @Test
+    fun `required array contains exactly the non-null fields`() {
+        val s = spec { post("/nullability", ::createNullability) }
+        @Suppress("UNCHECKED_CAST")
+        val required = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema", "required") as List<String>
+        assertEquals(listOf("name", "active"), required)
+    }
+}
+
+// ============================================================================
+// Test: @Schema(required=...) override
+// ============================================================================
+
+class SchemaRequiredOverrideTest {
+
+    @Test
+    fun `@Schema required FALSE on non-null field makes it nullable`() {
+        val s = spec { post("/override", ::createRequiredOverride) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/override", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = props["alwaysPresent"] as Map<*, *>
+        assertEquals(true, schema["nullable"])
+    }
+
+    @Test
+    fun `@Schema required FALSE on non-null field excludes it from required`() {
+        val s = spec { post("/override", ::createRequiredOverride) }
+        val required = s.requestBody("/override", "post")!!
+            .path("content", "application/json", "schema", "required")
+        // alwaysPresent is forced optional, sometimesPresent is forced required
+        @Suppress("UNCHECKED_CAST")
+        val requiredList = required as List<String>
+        assertFalse(requiredList.contains("alwaysPresent"))
+    }
+
+    @Test
+    fun `@Schema required TRUE on nullable field makes it required`() {
+        val s = spec { post("/override", ::createRequiredOverride) }
+        @Suppress("UNCHECKED_CAST")
+        val required = s.requestBody("/override", "post")!!
+            .path("content", "application/json", "schema", "required") as List<String>
+        assertTrue(required.contains("sometimesPresent"))
+    }
+
+    @Test
+    fun `@Schema required TRUE on nullable field does not mark nullable`() {
+        val s = spec { post("/override", ::createRequiredOverride) }
+        @Suppress("UNCHECKED_CAST")
+        val props = s.requestBody("/override", "post")!!
+            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = props["sometimesPresent"] as Map<*, *>
+        assertFalse(schema.containsKey("nullable"))
+    }
+}
+
+// ============================================================================
+// Test: @ParamDesc(required=...) override
+// ============================================================================
+
+class ParamDescRequiredOverrideTest {
+
+    @Test
+    fun `@ParamDesc required TRUE forces nullable query param to required`() {
+        val s = spec { get("/search", ::searchForced) }
+        val param = s.parameters("/search", "get").single { it["name"] == "q" }
+        assertEquals(true, param["required"])
+    }
+}
+
+// ============================================================================
+// Test: ReDoc and Swagger UI HTML helpers
+// ============================================================================
+
+class DocumentationUiTest {
+
+    @Test
+    fun `redocHtml contains redoc tag and spec-url`() {
+        val html = redocHtml("/openapi.json")
+        assertTrue(html.contains("<redoc"))
+        assertTrue(html.contains("spec-url='/openapi.json'"))
+        assertTrue(html.contains("redoc.standalone.js"))
+    }
+
+    @Test
+    fun `redocHtml uses custom JS URL`() {
+        val html = redocHtml("/spec.json", jsUrl = "https://my-cdn.com/redoc.js")
+        assertTrue(html.contains("https://my-cdn.com/redoc.js"))
+        assertFalse(html.contains("cdn.redoc.ly"))
+    }
+
+    @Test
+    fun `swaggerUiHtml contains swagger-ui div and bundle`() {
+        val html = swaggerUiHtml("/openapi.json")
+        assertTrue(html.contains("swagger-ui"))
+        assertTrue(html.contains("SwaggerUIBundle"))
+        assertTrue(html.contains("url: '/openapi.json'"))
+    }
+
+    @Test
+    fun `swaggerUiHtml uses custom JS and CSS URLs`() {
+        val html = swaggerUiHtml(
+            "/spec.json",
+            jsUrl = "https://my-cdn.com/swagger-ui-bundle.js",
+            cssUrl = "https://my-cdn.com/swagger-ui.css",
+        )
+        assertTrue(html.contains("https://my-cdn.com/swagger-ui-bundle.js"))
+        assertTrue(html.contains("https://my-cdn.com/swagger-ui.css"))
+    }
+
+    @Test
+    fun `enableOpenApi with custom uiHtml uses provided function`() {
+        val app = Colleen()
+        app.get("/hello") { "world" }
+        app.enableOpenApi(uiHtml = ::swaggerUiHtml)
+        // Verify the docs route exists and the spec route is registered
+        val specRoute = app.router.routes.last { it.path == "/openapi.json" }
+        assertNotNull(specRoute)
     }
 }

@@ -11,10 +11,25 @@ import java.math.BigInteger
 import java.time.*
 import java.util.*
 import kotlin.reflect.KParameter
+import kotlin.reflect.KProperty1
 import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.full.memberProperties
 import kotlin.reflect.jvm.javaMethod
 import kotlin.reflect.jvm.jvmErasure
 
+
+// ============================================================================
+// Tri-state Boolean for annotation overrides
+// ============================================================================
+
+/**
+ * Tri-state boolean used in annotations to optionally override inferred behaviour.
+ *
+ * - [UNSET] — use the value inferred from the type system (default).
+ * - [TRUE]  — explicitly mark as required / non-nullable.
+ * - [FALSE] — explicitly mark as optional / nullable.
+ */
+enum class OptionalBool { UNSET, TRUE, FALSE }
 
 // ============================================================================
 // OpenAPI Metadata Annotations
@@ -75,11 +90,19 @@ annotation class Tags(vararg val value: String)
  * @ParamDesc(name = "active", description = "Filter by active status")
  * fun listUsers(id: Path<Int>, active: Query<Boolean?>) { ... }
  * ```
+ *
+ * The optional [required] field can override the inferred required/optional
+ * semantics derived from the parameter type:
+ *
+ * ```kotlin
+ * @ParamDesc(name = "q", description = "Search keyword", required = OptionalBool.TRUE)
+ * fun search(q: Query<String?>) { ... }
+ * ```
  */
 @Repeatable
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.RUNTIME)
-annotation class ParamDesc(val name: String, val description: String)
+annotation class ParamDesc(val name: String, val description: String, val required: OptionalBool = OptionalBool.UNSET)
 
 /**
  * Describes an HTTP response for a route handler (maps to OpenAPI `responses`).
@@ -140,6 +163,17 @@ annotation class ResponseDesc(val status: Int, val description: String)
  *     val startTime: LocalDateTime,
  * )
  * ```
+ *
+ * ### Overriding required / nullable
+ * By default, the OpenAPI extension infers `required` from Kotlin nullability.
+ * Use [required] to override:
+ *
+ * ```kotlin
+ * data class PatchRequest(
+ *     @Schema(required = OptionalBool.FALSE)
+ *     val name: String,        // normally required, but treated as optional here
+ * )
+ * ```
  */
 @Target(AnnotationTarget.FIELD)
 @Retention(AnnotationRetention.RUNTIME)
@@ -150,6 +184,7 @@ annotation class Schema(
     val hidden: Boolean = false,
     val type: String = "",
     val format: String = "",
+    val required: OptionalBool = OptionalBool.UNSET,
 )
 
 /**
@@ -205,23 +240,28 @@ annotation class Hidden
 @JvmOverloads
 fun Colleen.enableOpenApi(
     path: String = "/openapi.json",
-    uiPath: String? = "/swagger-ui",
+    uiPath: String? = "/docs",
     title: String = "API",
     version: String = "1.0.0",
     description: String? = null,
     filter: ((path: String, method: String) -> Boolean)? = null,
+    uiHtml: ((specPath: String) -> String)? = null,
 ) {
     val specPath = UrlPath.normalize(path)
-    val swaggerPath = uiPath?.let { UrlPath.normalize(it) }
-    val excludedPaths = setOfNotNull(specPath, swaggerPath)
+    val docsPath = uiPath?.let { UrlPath.normalize(it) }
+    val excludedPaths = setOfNotNull(specPath, docsPath)
 
     get(specPath) {
         val routes = collectRoutes(this@enableOpenApi, "", excludedPaths)
         buildSpec(routes, title, version, description, filter)
     }
 
-    if (swaggerPath != null) {
-        get(swaggerPath) { ctx -> ctx.html(swaggerUiHtml(specPath)) }
+    if (docsPath != null) {
+        if (uiHtml != null) {
+            get(docsPath) { ctx -> ctx.html(uiHtml(specPath)) }
+        } else {
+            get(docsPath) { ctx -> ctx.html(redocHtml(specPath)) }
+        }
     }
 }
 
@@ -300,6 +340,7 @@ private data class ParamDescriptor(
     val innerType: Type,       // the generic type argument inside the wrapper, e.g. Int in Path<Int>
     val isRequired: Boolean,
     val description: String?,
+    val requiredOverride: OptionalBool,
 )
 
 /**
@@ -316,18 +357,24 @@ private fun buildParamEntries(
     var requestBody: Map<String, Any>? = null
 
     for (d in descriptors) {
+        val effectiveRequired = when (d.requiredOverride) {
+            OptionalBool.TRUE -> true
+            OptionalBool.FALSE -> false
+            OptionalBool.UNSET -> d.isRequired
+        }
+
         when {
             Path::class.java.isAssignableFrom(d.wrapperClass) ->
                 parameters.add(buildParam(d.name, "path", typeToSchema(d.innerType), required = true, d.description))
 
             Query::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "query", typeToSchema(d.innerType), d.isRequired, d.description))
+                parameters.add(buildParam(d.name, "query", typeToSchema(d.innerType), effectiveRequired, d.description))
 
             Header::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "header", STRING_SCHEMA, d.isRequired, d.description))
+                parameters.add(buildParam(d.name, "header", STRING_SCHEMA, effectiveRequired, d.description))
 
             Cookie::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "cookie", STRING_SCHEMA, d.isRequired, d.description))
+                parameters.add(buildParam(d.name, "cookie", STRING_SCHEMA, effectiveRequired, d.description))
 
             Json::class.java.isAssignableFrom(d.wrapperClass) ->
                 requestBody = buildRequestBody("application/json", typeToSchema(d.innerType), d.description)
@@ -373,7 +420,7 @@ private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<St
 
     val valueParams = fn.parameters.filter { it.kind == KParameter.Kind.VALUE }
     val javaParams = javaMethod.parameters
-    val paramDescs = javaMethod.paramDescMap()
+    val paramAnns = javaMethod.paramAnnotationMap()
 
     val descriptors = valueParams.mapIndexedNotNull { index, kParam ->
         if (index >= javaParams.size) return@mapIndexedNotNull null
@@ -381,13 +428,15 @@ private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<St
         val wrapperClass = jParam.type
         if (Context::class.java.isAssignableFrom(wrapperClass)) return@mapIndexedNotNull null
         val name = kParam.getParamName()
+        val ann = paramAnns[name]
         ParamDescriptor(
             name = name,
             wrapperClass = wrapperClass,
             // unwrapGeneric may throw for non-parameterized types (e.g. Context, plain services)
             innerType = runCatching { jParam.unwrapGeneric() }.getOrElse { jParam.type },
             isRequired = !kParam.isOptional && !kParam.isExtractorValueNullable(),
-            description = paramDescs[name],
+            description = ann?.description,
+            requiredOverride = ann?.required ?: OptionalBool.UNSET,
         )
     }
 
@@ -419,18 +468,20 @@ private fun buildOperationFromJavaMethod(method: Method): Map<String, Any>? {
         return null
     }
 
-    val paramDescs = method.paramDescMap()
+    val paramAnns = method.paramAnnotationMap()
 
     val descriptors = method.parameters.mapNotNull { jParam ->
         val wrapperClass = jParam.type
         if (Context::class.java.isAssignableFrom(wrapperClass)) return@mapNotNull null
         val name = jParam.getParamName()
+        val ann = paramAnns[name]
         ParamDescriptor(
             name = name,
             wrapperClass = wrapperClass,
             innerType = runCatching { jParam.unwrapGeneric() }.getOrElse { jParam.type },
             isRequired = false, // Java has no default parameter concept
-            description = paramDescs[name],
+            description = ann?.description,
+            requiredOverride = ann?.required ?: OptionalBool.UNSET,
         )
     }
 
@@ -543,9 +594,9 @@ private fun defaultResponses(): Map<String, Any> =
 // Annotation Helpers
 // ============================================================================
 
-/** Builds a name → description map from all @ParamDesc on a method. */
-private fun Method.paramDescMap(): Map<String, String> =
-    getAnnotationsByType(ParamDesc::class.java).associate { it.name to it.description }
+/** Builds a name → @ParamDesc map from all @ParamDesc on a method. */
+private fun Method.paramAnnotationMap(): Map<String, ParamDesc> =
+    getAnnotationsByType(ParamDesc::class.java).associateBy { it.name }
 
 /** Builds a status → description map from all @ResponseDesc on a method. */
 private fun Method.responsesMap(): Map<Int, String> =
@@ -679,16 +730,26 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
  * Reflects over declared fields to produce an OpenAPI object schema.
  *
  * - Reads [@Schema][Schema] on each field to override `description`, `example`,
- *   `name` (alias), `hidden`, `type`, and `format`.
+ *   `name` (alias), `hidden`, `type`, `format`, and `required`.
  * - Fields marked `@Schema(hidden = true)` are excluded entirely.
  * - Fields with `@Schema(name = "alias")` use the alias as the property key.
  * - Fields with `@Schema(type = "...")` override the inferred type/format.
- * - Primitive fields are added to `required` (they cannot be null in Java/Kotlin).
- * - Non-primitive fields are marked `nullable: true`.
+ * - Required / nullable is determined by (highest priority first):
+ *   1. `@Schema(required = TRUE / FALSE)` — explicit annotation override.
+ *   2. Kotlin nullability — `val foo: String` → required; `val bar: String?` → nullable.
+ *   3. JVM primitive check — fallback for pure Java classes without Kotlin metadata.
  */
 private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
     val properties = linkedMapOf<String, Any>()
     val requiredFields = mutableListOf<String>()
+
+    // Try to obtain Kotlin property metadata for accurate nullability information.
+    // Falls back to null for pure Java classes or when Kotlin metadata is unavailable.
+    val kotlinProperties: Map<String, KProperty1<*, *>>? = try {
+        clazz.kotlin.memberProperties.associateBy { it.name }
+    } catch (_: Exception) {
+        null
+    }
 
     for (field in clazz.declaredFields) {
         if (Modifier.isStatic(field.modifiers) || field.isSynthetic) continue
@@ -719,7 +780,19 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
             field.name
         }
 
-        if (field.type.isPrimitive) {
+        // Determine required / nullable.
+        // Priority: @Schema(required) > Kotlin nullability > JVM primitive check
+        val isRequired = when {
+            schemaAnnotation != null && schemaAnnotation.required == OptionalBool.TRUE -> true
+            schemaAnnotation != null && schemaAnnotation.required == OptionalBool.FALSE -> false
+            kotlinProperties != null -> {
+                val kProp = kotlinProperties[field.name]
+                kProp != null && !kProp.returnType.isMarkedNullable
+            }
+            else -> field.type.isPrimitive // Fallback for pure Java classes
+        }
+
+        if (isRequired) {
             requiredFields.add(propertyName)
         } else {
             fieldSchema["nullable"] = true
@@ -736,22 +809,64 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
 }
 
 // ============================================================================
-// Swagger UI HTML
+// Documentation UI HTML Generators
 // ============================================================================
 
-private fun swaggerUiHtml(specPath: String): String = """
+/**
+ * Generates a self-contained ReDoc HTML page that renders an OpenAPI spec.
+ *
+ * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
+ * [jsUrl] may be overridden to point to a self-hosted or alternate CDN bundle.
+ *
+ * This is the **default** UI used by [enableOpenApi].
+ */
+fun redocHtml(
+    specPath: String,
+    jsUrl: String = "https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js",
+): String = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>API Documentation</title>
+        <style>body { margin: 0; }</style>
+    </head>
+    <body>
+        <redoc spec-url='$specPath'></redoc>
+        <script src="$jsUrl"></script>
+    </body>
+    </html>
+""".trimIndent()
+
+/**
+ * Generates a self-contained Swagger UI HTML page that renders an OpenAPI spec.
+ *
+ * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
+ * [jsUrl] and [cssUrl] may be overridden to point to self-hosted or alternate CDN bundles.
+ *
+ * To use Swagger UI instead of the default ReDoc, pass this function to [enableOpenApi]:
+ * ```kotlin
+ * app.enableOpenApi(uiHtml = ::swaggerUiHtml)
+ * ```
+ */
+fun swaggerUiHtml(
+    specPath: String,
+    jsUrl: String = "https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js",
+    cssUrl: String = "https://unpkg.com/swagger-ui-dist@5/swagger-ui.css",
+): String = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Swagger UI</title>
-        <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+        <link rel="stylesheet" href="$cssUrl">
         <style>body { margin: 0; }</style>
     </head>
     <body>
         <div id="swagger-ui"></div>
-        <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+        <script src="$jsUrl"></script>
         <script>
             SwaggerUIBundle({ url: '$specPath', dom_id: '#swagger-ui' })
         </script>
