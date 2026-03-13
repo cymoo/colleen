@@ -214,12 +214,12 @@ annotation class Hidden
 // ============================================================================
 
 /**
- * Enables OpenAPI 3.0.3 specification generation and Swagger UI serving.
+ * Enables OpenAPI 3.0.3 specification generation and documentation UI serving.
  *
  * Automatically collects route metadata from the application and all mounted
  * sub-applications, then exposes:
  * - A JSON spec endpoint at [path]
- * - An optional Swagger UI page at [uiPath]
+ * - An optional documentation page at [uiPath] (ReDoc by default)
  *
  * ### Example
  * ```kotlin
@@ -232,6 +232,11 @@ annotation class Hidden
  *
  * app.get("/users/{id}", ::getUser)
  * app.listen(8000)
+ * ```
+ *
+ * ### Switching to Swagger UI
+ * ```kotlin
+ * app.enableOpenApi(uiHtml = ::swaggerUiHtml)
  * ```
  *
  * - Lambda handlers produce minimal metadata (path + method only).
