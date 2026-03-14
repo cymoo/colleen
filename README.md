@@ -19,7 +19,8 @@
 13. [Testing](#testing)
 14. [Java Support](#java-support)
 15. [Configuration](#configuration)
-16. [Production Notes](#production-notes)
+16. [OpenAPI Documentation](#openapi-documentation)
+17. [Production Notes](#production-notes)
 
 ---
 
@@ -2655,6 +2656,105 @@ app.config {
     propagateExceptions = true
 }
 ```
+
+---
+
+## OpenAPI Documentation
+
+Colleen can generate OpenAPI 3.0.3 specs directly from registered routes.
+The implementation is in `colleen/src/main/kotlin/io/github/cymoo/colleen/extension/OpenApi.kt`.
+
+### 1) `enableOpenApi` usage
+
+```kotlin
+import io.github.cymoo.colleen.*
+import io.github.cymoo.colleen.extension.*
+
+fun main() {
+    val app = Colleen()
+
+    app.enableOpenApi(
+        title = "Todo API",
+        version = "1.0.0",
+        description = "OpenAPI example"
+    )
+
+    app.listen(8000)
+    // Spec: http://localhost:8000/openapi.json
+    // Docs: http://localhost:8000/docs
+}
+```
+
+Common options:
+
+- `path`: OpenAPI JSON endpoint (default `/openapi.json`)
+- `uiPath`: docs UI endpoint (default `/docs`, set `null` to disable UI page)
+- `filter`: include/exclude operations by `(path, method) -> Boolean`
+- `uiHtml`: customize docs UI HTML
+    - default: Swagger UI
+    - ReDoc example: `app.enableOpenApi(uiHtml = ::redocHtml)`
+
+### 2) Automatic inference from function signatures
+
+For function and controller handlers, Colleen infers OpenAPI information directly from signatures:
+
+- Parameters:
+    - `Path<T>` → path parameter (always required)
+    - `Query<T>` → query parameter
+    - `Header<T>` / `Cookie<T>` → header/cookie parameter
+    - `Json<T>` / `Form<T>` / `Text` / `Stream` / `UploadedFile` → requestBody
+- Required/nullable:
+    - Kotlin nullability and default values are used to infer required fields
+    - `OptionalBool` in annotations can override inferred behavior
+- Responses:
+    - return type becomes the `200` schema automatically
+    - `Result<T>` is documented as `T`
+    - `Unit` / `Void` / `Response` are treated as no response body
+- Handler kind:
+    - function / method handlers produce rich metadata
+    - lambda handlers only contribute minimal operation metadata
+
+### 3) Common annotations and usage
+
+```kotlin
+@Tags("todos")
+class TodoController {
+
+    @Summary("Get one todo")
+    @Description("Returns a todo by id")
+    @ParamDesc(name = "id", description = "Todo ID")
+    @ResponseDesc(404, "Todo not found")
+    fun getOne(id: Path<Long>): Todo = TODO()
+}
+
+data class Todo(
+    @Schema(description = "Todo id", example = "1")
+    val id: Long,
+    @Schema(description = "Task title", example = "Buy milk")
+    val title: String,
+    @Schema(hidden = true)
+    val internalVersion: Int = 0,
+)
+
+@Hidden
+fun internalHealth(): String = "ok"
+```
+
+Most-used annotations:
+
+- `@Summary`, `@Description`: operation summary/description
+- `@Tags`: grouping in Swagger/ReDoc UI (supports class + method merge)
+- `@ParamDesc`: parameter description and optional required override
+- `@ResponseDesc`: response description by HTTP status code
+- `@Schema`: field-level schema metadata (`description`, `example`, `name`, `hidden`, `type`, `format`, `required`)
+- `@Hidden`: exclude a function or whole controller from OpenAPI
+
+### 4) Practical notes
+
+- OpenAPI includes routes from mounted sub-applications.
+- Use `@Hidden` for annotation-based exclusion, and `filter` for programmatic exclusion.
+- See complete runnable example: `examples/openapi/src/main/kotlin/Main.kt`.
+- If you need a custom docs page style, pass your own `uiHtml(specPath)` renderer.
 
 ---
 
