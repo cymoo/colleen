@@ -17,7 +17,7 @@ class HttpMethodOverrideTest {
     fun `POST request is overridden by header`() {
         // Arrange
         val app = Colleen()
-        app.enableHttpMethodOverride()
+        app.httpMethodOverride()
 
         app.put("/resource") {
             "PUT_OK"
@@ -38,7 +38,7 @@ class HttpMethodOverrideTest {
     fun `POST request is overridden by query parameter`() {
         // Arrange
         val app = Colleen()
-        app.enableHttpMethodOverride()
+        app.httpMethodOverride()
 
         app.delete("/resource") {
             "DELETE_OK"
@@ -59,7 +59,7 @@ class HttpMethodOverrideTest {
     fun `header takes precedence over query parameter`() {
         // Arrange
         val app = Colleen()
-        app.enableHttpMethodOverride()
+        app.httpMethodOverride()
 
         app.patch("/resource") {
             "PATCH_OK"
@@ -85,7 +85,7 @@ class HttpMethodOverrideTest {
     fun `method override is applied only to POST by default`() {
         // Arrange
         val app = Colleen()
-        app.enableHttpMethodOverride()
+        app.httpMethodOverride()
 
         app.delete("/resource") {
             "DELETE_OK"
@@ -106,7 +106,7 @@ class HttpMethodOverrideTest {
     fun `custom override policy allows non POST requests`() {
         // Arrange
         val app = Colleen()
-        app.enableHttpMethodOverride(
+        app.httpMethodOverride(
             allowOverride = { true }
         )
 
@@ -129,7 +129,7 @@ class HttpMethodOverrideTest {
     fun `invalid overridden method is ignored`() {
         // Arrange
         val app = Colleen()
-        app.enableHttpMethodOverride()
+        app.httpMethodOverride()
 
         app.get("/resource") {
             "GET_OK"
@@ -151,7 +151,7 @@ class HttpMethodOverrideTest {
     fun `overridden method is normalized to uppercase`() {
         // Arrange
         val app = Colleen()
-        app.enableHttpMethodOverride()
+        app.httpMethodOverride()
 
         app.put("/resource") {
             "PUT_OK"

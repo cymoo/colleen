@@ -6,7 +6,7 @@ import io.github.cymoo.colleen.Request
 import io.github.cymoo.colleen.logger
 
 /**
- * Enables HTTP method override support.
+ * HTTP method override support.
  *
  * This feature allows clients (typically HTML forms) to tunnel
  * non-POST HTTP methods (e.g. PUT, PATCH, DELETE) via:
@@ -19,7 +19,7 @@ import io.github.cymoo.colleen.logger
  * Method overriding is only applied to POST requests by default.
  */
 @JvmOverloads
-fun Colleen.enableHttpMethodOverride(
+fun Colleen.httpMethodOverride(
     headerKey: String = "x-http-method-override",
     queryKey: String = "_method",
     allowOverride: (Request) -> Boolean = DEFAULT_OVERRIDE_POLICY
