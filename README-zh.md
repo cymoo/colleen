@@ -2359,7 +2359,7 @@ mainApp.mount("/v2", subApp)  // ❌ 错误：应用已被挂载
 
 Colleen 可以基于已注册路由自动生成 OpenAPI 文档。
 
-### 1）`enableOpenApi` 用法
+### 1）`openApi` 用法
 
 ```kotlin
 import io.github.cymoo.colleen.*
@@ -2368,7 +2368,7 @@ import io.github.cymoo.colleen.extension.*
 fun main() {
     val app = Colleen()
 
-    app.enableOpenApi(
+    app.openApi(
         title = "Todo API",
         version = "1.0.0",
         description = "OpenAPI 示例"
@@ -2387,7 +2387,7 @@ fun main() {
 - `filter`：通过 `(path, method) -> Boolean` 过滤是否加入文档
 - `uiHtml`：自定义文档 UI HTML
   - 默认：Swagger UI
-  - ReDoc 示例：`app.enableOpenApi(uiHtml = ::redocHtml)`
+  - ReDoc 示例：`app.openApi(uiHtml = ::redocHtml)`
 
 ### 2）从函数签名自动提取信息
 

@@ -222,7 +222,7 @@ annotation class Hidden
  * ### Example
  * ```kotlin
  * val app = Colleen()
- * app.enableOpenApi(title = "My API", version = "1.0.0")
+ * app.openApi(title = "My API", version = "1.0.0")
  *
  * @Summary("Get user by ID")
  * @ResponseDesc(404, "User not found")
@@ -234,14 +234,14 @@ annotation class Hidden
  *
  * ### Switching to ReDoc
  * ```kotlin
- * app.enableOpenApi(uiHtml = ::redocHtml)
+ * app.openApi(uiHtml = ::redocHtml)
  * ```
  *
  * - Lambda handlers produce minimal metadata (path + method only).
  * - KFunction and Java Method handlers produce full parameter documentation.
  */
 @JvmOverloads
-fun Colleen.enableOpenApi(
+fun Colleen.openApi(
     path: String = "/openapi.json",
     uiPath: String? = "/docs",
     title: String = "API",
@@ -255,7 +255,7 @@ fun Colleen.enableOpenApi(
     val excludedPaths = setOfNotNull(specPath, docsPath)
 
     get(specPath) {
-        val routes = collectRoutes(this@enableOpenApi, "", excludedPaths)
+        val routes = collectRoutes(this@openApi, "", excludedPaths)
         buildSpec(routes, title, version, description, filter)
     }
 
@@ -842,9 +842,9 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
  * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
  * [jsUrl] may be overridden to point to a self-hosted or alternate CDN bundle.
  *
- * To use ReDoc instead of the default Swagger UI, pass this function to [enableOpenApi]:
+ * To use ReDoc instead of the default Swagger UI, pass this function to [openApi]:
  * ```kotlin
- * app.enableOpenApi(uiHtml = ::redocHtml)
+ * app.openApi(uiHtml = ::redocHtml)
  * ```
  */
 fun redocHtml(
@@ -872,7 +872,7 @@ fun redocHtml(
  * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
  * [jsUrl] and [cssUrl] may be overridden to point to self-hosted or alternate CDN bundles.
  *
- * This is the **default** UI used by [enableOpenApi].
+ * This is the **default** UI used by [openApi].
  */
 fun swaggerUiHtml(
     specPath: String,

@@ -2337,7 +2337,7 @@ mainApp.mount("/v2", subApp)  // ❌ Error: app already mounted
 
 Colleen can generate OpenAPI specs directly from registered routes.
 
-### 1) `enableOpenApi` usage
+### 1) `openApi` usage
 
 ```kotlin
 import io.github.cymoo.colleen.*
@@ -2346,7 +2346,7 @@ import io.github.cymoo.colleen.extension.*
 fun main() {
     val app = Colleen()
 
-    app.enableOpenApi(
+    app.openApi(
         title = "Todo API",
         version = "1.0.0",
         description = "OpenAPI example"
@@ -2365,7 +2365,7 @@ Common options:
 - `filter`: include/exclude operations by `(path, method) -> Boolean`
 - `uiHtml`: customize docs UI HTML
   - default: Swagger UI
-  - ReDoc example: `app.enableOpenApi(uiHtml = ::redocHtml)`
+  - ReDoc example: `app.openApi(uiHtml = ::redocHtml)`
 
 ### 2) Automatic inference from function signatures
 

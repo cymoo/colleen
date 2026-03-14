@@ -21,12 +21,12 @@ import java.util.concurrent.atomic.AtomicLong
  *   - @ParamDesc / @ResponseDesc for parameter and response docs
  *   - @ParamDesc(required = OptionalBool.TRUE) to force a parameter as required
  *   - @Hidden to exclude operations or entire controllers from the spec
- *   - enableOpenApi(filter = ...) for programmatic route exclusion
+ *   - openApi(filter = ...) for programmatic route exclusion
  *   - @Schema with name / hidden / type / format / required overrides on DTO fields
  *   - Extended type support: UUID, LocalDate, Instant, BigDecimal, etc.
  *   - Customizable documentation UI: Swagger UI (default) or ReDoc
  *
- * Endpoints added by enableOpenApi():
+ * Endpoints added by openApi():
  *   GET /openapi.json  — OpenAPI 3.0.3 JSON specification
  *   GET /docs          — Interactive API documentation page (Swagger UI by default)
  */
@@ -205,7 +205,7 @@ fun main() {
     // @Hidden which handles annotation-based exclusion on InternalController.
     // The default documentation UI is Swagger UI; to use ReDoc instead, pass:
     //   uiHtml = ::redocHtml
-    app.enableOpenApi(
+    app.openApi(
         title = "Todo API",
         version = "2.0.0",
         description = "A simple RESTful Todo API showcasing OpenAPI doc generation.",
@@ -230,7 +230,7 @@ fun main() {
         get("/metrics", internal::metrics)
     }
 
-    // Admin routes: excluded via the filter lambda passed to enableOpenApi().
+    // Admin routes: excluded via the filter lambda passed to openApi().
     app.group("/admin") {
         get("/todos", ::getAllTodos)
     }

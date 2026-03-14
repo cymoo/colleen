@@ -11,13 +11,13 @@ import org.junit.jupiter.api.Test
  * Strategy
  * --------
  * All tests drive the system through its public API: register routes on a [Colleen]
- * instance, call [enableOpenApi], then invoke the spec-generation handler directly
+ * instance, call [openApi], then invoke the spec-generation handler directly
  * to obtain the spec [Map].  This exercises the full pipeline (route collection →
  * operation building → schema generation) without starting an HTTP server.
  *
  * Helper
  * ------
- * [spec] is a small inline helper that wires [enableOpenApi] onto a fresh [Colleen]
+ * [spec] is a small inline helper that wires [openApi] onto a fresh [Colleen]
  * instance, then reaches into the registered spec-route handler to produce the map.
  * Tests never touch private internals directly — if a refactor breaks the contract
  * the tests will catch it.
@@ -206,7 +206,7 @@ private fun createTestContext(
 
 /**
  * Builds a [Colleen] app, applies [setup] to register routes, then installs
- * [enableOpenApi] and returns the generated spec map.
+ * [openApi] and returns the generated spec map.
  *
  * The spec handler is invoked synchronously via a minimal fake [Context] that
  * captures the returned value — no network I/O required.
@@ -221,7 +221,7 @@ private fun spec(
 ): Map<String, Any> {
     val app = Colleen()
     app.setup()
-    app.enableOpenApi(title = title, version = version, description = description, filter = filter)
+    app.openApi(title = title, version = version, description = description, filter = filter)
 
     // The spec route is always registered last at "/openapi.json".
     // We locate it and invoke its handler directly to get the map.
@@ -883,7 +883,7 @@ class TagsMergingTest {
     fun `class-level and method-level tags are merged and deduplicated`() {
         val app = Colleen()
         app.addController(OrderController())
-        app.enableOpenApi()
+        app.openApi()
         val specRoute = app.router.routes.last { it.path == "/openapi.json" }
         @Suppress("UNCHECKED_CAST")
         val s = specRoute.handler(createTestContext(app)) as Map<String, Any>
@@ -898,7 +898,7 @@ class TagsMergingTest {
     fun `class-level tags appear on method without own @Tags`() {
         val app = Colleen()
         app.addController(OrderController())
-        app.enableOpenApi()
+        app.openApi()
         val specRoute = app.router.routes.last { it.path == "/openapi.json" }
         @Suppress("UNCHECKED_CAST")
         val s = specRoute.handler(createTestContext(app)) as Map<String, Any>
@@ -937,7 +937,7 @@ class OperationIdTest {
     fun `operationIds for overloaded methods include parameter type suffix`() {
         val app = Colleen()
         app.addController(OverloadedController())
-        app.enableOpenApi()
+        app.openApi()
         val specRoute = app.router.routes.last { it.path == "/openapi.json" }
         @Suppress("UNCHECKED_CAST")
         val s = specRoute.handler(createTestContext(app)) as Map<String, Any>
@@ -973,7 +973,7 @@ class ContextParameterTest {
 }
 
 // ============================================================================
-// Test: filter parameter for enableOpenApi
+// Test: filter parameter for openApi
 // ============================================================================
 
 class FilterTest {
@@ -1056,7 +1056,7 @@ class HiddenAnnotationTest {
         val app = Colleen()
         app.addController(HiddenController())
         app.get("/public", ::listUsers)
-        app.enableOpenApi()
+        app.openApi()
         val specRoute = app.router.routes.last { it.path == "/openapi.json" }
         @Suppress("UNCHECKED_CAST")
         val s = specRoute.handler(createTestContext(app)) as Map<String, Any>
@@ -1081,7 +1081,7 @@ class HiddenAnnotationTest {
 
         val app = Colleen()
         app.addController(PartiallyHiddenController())
-        app.enableOpenApi()
+        app.openApi()
         val specRoute = app.router.routes.last { it.path == "/openapi.json" }
         @Suppress("UNCHECKED_CAST")
         val s = specRoute.handler(createTestContext(app)) as Map<String, Any>
@@ -1420,10 +1420,10 @@ class DocumentationUiTest {
     }
 
     @Test
-    fun `enableOpenApi with custom uiHtml uses provided function`() {
+    fun `openApi with custom uiHtml uses provided function`() {
         val app = Colleen()
         app.get("/hello") { "world" }
-        app.enableOpenApi(uiHtml = ::swaggerUiHtml)
+        app.openApi(uiHtml = ::swaggerUiHtml)
         // Verify the docs route exists and the spec route is registered
         val specRoute = app.router.routes.last { it.path == "/openapi.json" }
         assertNotNull(specRoute)
