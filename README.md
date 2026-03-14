@@ -15,11 +15,12 @@
 9. [Dependency Injection](#dependency-injection)
 10. [Error Handling](#error-handling)
 11. [Events System](#events-system)
-12. [Sub-Applications](#sub-applications)
-13. [Testing](#testing)
-14. [Java Support](#java-support)
-15. [Configuration](#configuration)
-16. [Production Notes](#production-notes)
+12. [OpenAPI](#openapi)
+13. [Sub-Applications](#sub-applications)
+14. [Testing](#testing)
+15. [Java Support](#java-support)
+16. [Configuration](#configuration)
+17. [Production Notes](#production-notes)
 
 ---
 
@@ -2095,6 +2096,52 @@ Use the event system when you need to:
 - extend the framework without affecting control flow
 
 For request control and business logic, prefer middleware and handlers.
+
+---
+
+## OpenAPI
+
+Colleen provides built-in OpenAPI generation via `enableOpenApi`.
+
+```kotlin
+import io.github.cymoo.colleen.extension.enableOpenApi
+
+val app = Colleen()
+
+app.enableOpenApi(
+    title = "Todo API",
+    version = "1.0.0",
+    description = "Example API documentation",
+)
+```
+
+By default this registers:
+
+- `GET /openapi.json` — OpenAPI 3.0.3 JSON spec
+- `GET /docs` — interactive Swagger UI
+
+### Common options
+
+```kotlin
+app.enableOpenApi(
+    path = "/spec/openapi.json",               // custom spec endpoint
+    uiPath = "/api-docs",                      // custom docs endpoint
+    filter = { path, _ -> !path.startsWith("/internal") }, // exclude routes
+    uiHtml = ::redocHtml,                      // switch docs UI to ReDoc
+)
+```
+
+### Metadata annotations
+
+OpenAPI metadata can be enriched with annotations from `io.github.cymoo.colleen.extension`:
+
+- `@Summary`, `@Description`, `@Tags`
+- `@ParamDesc`, `@ResponseDesc`
+- `@Schema` (field schema details)
+- `@Hidden` (exclude endpoints/controllers from spec)
+
+For a complete example, see
+[`examples/openapi/src/main/kotlin/Main.kt`](examples/openapi/src/main/kotlin/Main.kt).
 
 ---
 

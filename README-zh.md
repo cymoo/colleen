@@ -15,11 +15,12 @@
 9. [依赖注入](#依赖注入)
 10. [错误处理](#错误处理)
 11. [事件系统](#事件系统)
-12. [子应用](#子应用)
-13. [测试](#测试)
-14. [Java 支持](#java-支持)
-15. [应用配置](#应用配置)
-16. [生产建议](#生产建议)
+12. [OpenAPI](#openapi)
+13. [子应用](#子应用)
+14. [测试](#测试)
+15. [Java 支持](#java-支持)
+16. [应用配置](#应用配置)
+17. [生产建议](#生产建议)
 
 ---
 
@@ -2113,6 +2114,52 @@ app.enableHttpMethodOverride()
 * 在不改变控制流的前提下扩展能力
 
 如果需要改变请求处理逻辑或控制流程，应优先使用**中间件**。
+
+---
+
+## OpenAPI
+
+Colleen 内置了 OpenAPI 文档生成功能，可通过 `enableOpenApi` 启用。
+
+```kotlin
+import io.github.cymoo.colleen.extension.enableOpenApi
+
+val app = Colleen()
+
+app.enableOpenApi(
+    title = "Todo API",
+    version = "1.0.0",
+    description = "示例 API 文档",
+)
+```
+
+默认会注册以下端点：
+
+* `GET /openapi.json` — OpenAPI 3.0.3 JSON 规范
+* `GET /docs` — Swagger UI 交互文档页面
+
+### 常用配置
+
+```kotlin
+app.enableOpenApi(
+    path = "/spec/openapi.json",                // 自定义规范地址
+    uiPath = "/api-docs",                       // 自定义文档页面地址
+    filter = { path, _ -> !path.startsWith("/internal") }, // 排除部分路由
+    uiHtml = ::redocHtml,                       // 切换为 ReDoc
+)
+```
+
+### 元数据注解
+
+可以使用 `io.github.cymoo.colleen.extension` 中的注解增强文档信息：
+
+* `@Summary`、`@Description`、`@Tags`
+* `@ParamDesc`、`@ResponseDesc`
+* `@Schema`（字段级 schema 描述）
+* `@Hidden`（从文档中隐藏路由或 controller）
+
+完整示例可参考
+[`examples/openapi/src/main/kotlin/Main.kt`](examples/openapi/src/main/kotlin/Main.kt)。
 
 ---
 
