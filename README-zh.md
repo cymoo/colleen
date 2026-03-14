@@ -16,10 +16,10 @@
 10. [错误处理](#错误处理)
 11. [事件系统](#事件系统)
 12. [子应用](#子应用)
-13. [测试](#测试)
-14. [Java 支持](#java-支持)
-15. [应用配置](#应用配置)
-16. [OpenAPI 文档](#openapi-文档)
+13. [OpenAPI 文档](#openapi-文档)
+14. [测试](#测试)
+15. [Java 支持](#java-支持)
+16. [应用配置](#应用配置)
 17. [生产建议](#生产建议)
 
 ---
@@ -2355,6 +2355,106 @@ mainApp.mount("/v2", subApp)  // ❌ 错误：应用已被挂载
 
 ---
 
+## OpenAPI 文档
+
+Colleen 可以基于已注册路由自动生成 OpenAPI 文档。
+
+### 1）`enableOpenApi` 用法
+
+```kotlin
+import io.github.cymoo.colleen.*
+import io.github.cymoo.colleen.extension.*
+
+fun main() {
+    val app = Colleen()
+
+    app.enableOpenApi(
+        title = "Todo API",
+        version = "1.0.0",
+        description = "OpenAPI 示例"
+    )
+
+    app.listen(8000)
+    // Spec: http://localhost:8000/openapi.json
+    // 文档页: http://localhost:8000/docs
+}
+```
+
+常用参数：
+
+- `path`：OpenAPI JSON 地址（默认 `/openapi.json`）
+- `uiPath`：文档 UI 地址（默认 `/docs`，设为 `null` 可关闭文档页）
+- `filter`：通过 `(path, method) -> Boolean` 过滤是否加入文档
+- `uiHtml`：自定义文档 UI HTML
+  - 默认：Swagger UI
+  - ReDoc 示例：`app.enableOpenApi(uiHtml = ::redocHtml)`
+
+### 2）从函数签名自动提取信息
+
+对于函数式 Handler 和 Controller 方法，Colleen 会直接从签名推导 OpenAPI 信息：
+
+- 参数映射：
+  - `Path<T>` → path 参数
+  - `Query<T>` → query 参数
+  - `Header<T>` / `Cookie<T>` → header/cookie 参数
+  - `Json<T>` / `Form<T>` / `Text` / `Stream` / `UploadedFile` → requestBody
+- 必填与可空：
+  - 基于 Kotlin 可空类型和默认参数自动推导 required
+  - 可通过注解中的 `OptionalBool` 覆盖默认推导
+- 响应推导：
+  - 返回类型会自动生成 `200` 响应 schema
+  - `Result<T>` 会按 `T` 生成文档
+  - `Unit` / `Void` / `Response` 会视为无响应体
+- Handler 类型差异：
+  - 函数/方法 Handler 生成完整元数据
+  - Lambda Handler 仅生成最小元数据
+
+### 3）常用注解及用法
+
+注解均是可选的，它们主要为文档及字段添加额外的信息，例如 tag 和 description 等 
+
+```kotlin
+@Tags("todos")
+class TodoController {
+
+    @Summary("查询单个 Todo")
+    @Description("根据 ID 返回 Todo")
+    @ParamDesc(name = "id", description = "Todo ID")
+    @ResponseDesc(404, "Todo 不存在")
+    fun getOne(id: Path<Long>): Todo = TODO()
+}
+
+data class Todo(
+    @Schema(description = "Todo 主键", example = "1")
+    val id: Long,
+    @Schema(description = "任务标题", example = "Buy milk")
+    val title: String,
+    @Schema(hidden = true)
+    val internalVersion: Int = 0,
+)
+
+@Hidden
+fun internalHealth(): String = "ok"
+```
+
+常用注解说明：
+
+- `@Summary`、`@Description`：总结和详细描述
+- `@Tags`：在 Swagger/ReDoc 中分组（支持类级 + 方法级合并）
+- `@ParamDesc`：参数说明、是否为必填
+- `@ResponseDesc`：按状态码补充响应描述
+- `@Schema`：字段级 schema 元数据（`description`、`example`、`name`、`hidden`、`type`、`format`、`required`）
+- `@Hidden`：隐藏函数或整个 Controller
+
+### 4）补充建议
+
+- 文档会自动包含所有已挂载子应用中的路由。
+- 注解层面建议用 `@Hidden`，路径规则层面建议用 `filter` 做补充过滤。
+- 完整示例可参考：`examples/openapi/src/main/kotlin/Main.kt`。
+- 如需自定义文档页面风格，可传入自定义 `uiHtml(specPath)`。
+
+---
+
 ## 测试
 
 Colleen 内置了 `TestClient`，用于在同一进程内测试应用，无需真正启动 HTTP 服务器。
@@ -2697,105 +2797,6 @@ app.config {
     propagateExceptions = true
 }
 ```
-
----
-
-## OpenAPI 文档
-
-Colleen 可以基于已注册路由自动生成 OpenAPI 3.0.3 文档。
-相关实现位于 `colleen/src/main/kotlin/io/github/cymoo/colleen/extension/OpenApi.kt`。
-
-### 1）`enableOpenApi` 用法
-
-```kotlin
-import io.github.cymoo.colleen.*
-import io.github.cymoo.colleen.extension.*
-
-fun main() {
-    val app = Colleen()
-
-    app.enableOpenApi(
-        title = "Todo API",
-        version = "1.0.0",
-        description = "OpenAPI 示例"
-    )
-
-    app.listen(8000)
-    // Spec: http://localhost:8000/openapi.json
-    // 文档页: http://localhost:8000/docs
-}
-```
-
-常用参数：
-
-- `path`：OpenAPI JSON 地址（默认 `/openapi.json`）
-- `uiPath`：文档 UI 地址（默认 `/docs`，设为 `null` 可关闭文档页）
-- `filter`：通过 `(path, method) -> Boolean` 过滤是否加入文档
-- `uiHtml`：自定义文档 UI HTML
-    - 默认：Swagger UI
-    - ReDoc 示例：`app.enableOpenApi(uiHtml = ::redocHtml)`
-
-### 2）从函数签名自动提取信息
-
-对于函数式 Handler 和 Controller 方法，Colleen 会直接从签名推导 OpenAPI 信息：
-
-- 参数映射：
-    - `Path<T>` → path 参数（始终必填）
-    - `Query<T>` → query 参数
-    - `Header<T>` / `Cookie<T>` → header/cookie 参数
-    - `Json<T>` / `Form<T>` / `Text` / `Stream` / `UploadedFile` → requestBody
-- 必填与可空：
-    - 基于 Kotlin 可空类型和默认参数自动推导 required
-    - 可通过注解中的 `OptionalBool` 覆盖默认推导
-- 响应推导：
-    - 返回类型会自动生成 `200` 响应 schema
-    - `Result<T>` 会按 `T` 生成文档
-    - `Unit` / `Void` / `Response` 会视为无响应体
-- Handler 类型差异：
-    - 函数/方法 Handler 生成完整元数据
-    - Lambda Handler 仅生成最小元数据
-
-### 3）常用注解及用法
-
-```kotlin
-@Tags("todos")
-class TodoController {
-
-    @Summary("查询单个 Todo")
-    @Description("根据 ID 返回 Todo")
-    @ParamDesc(name = "id", description = "Todo ID")
-    @ResponseDesc(404, "Todo 不存在")
-    fun getOne(id: Path<Long>): Todo = TODO()
-}
-
-data class Todo(
-    @Schema(description = "Todo 主键", example = "1")
-    val id: Long,
-    @Schema(description = "任务标题", example = "Buy milk")
-    val title: String,
-    @Schema(hidden = true)
-    val internalVersion: Int = 0,
-)
-
-@Hidden
-fun internalHealth(): String = "ok"
-```
-
-常用注解说明：
-
-- `@Summary`、`@Description`：操作摘要和详细描述
-- `@Tags`：在 Swagger/ReDoc 中分组（支持类级 + 方法级合并）
-- `@ParamDesc`：参数说明，可覆盖是否必填
-- `@ResponseDesc`：按状态码补充响应描述
-- `@Schema`：字段级 schema 元数据（`description`、`example`、`name`、`hidden`、`type`、`format`、`required`）
-- `@Hidden`：隐藏函数或整个 Controller
-
-### 4）补充建议
-
-- 文档会自动包含所有已挂载子应用中的路由。
-- 注解层面建议用 `@Hidden`，路径规则层面建议用 `filter` 做补充过滤。
-- 完整示例可参考：`examples/openapi/src/main/kotlin/Main.kt`。
-- 如需自定义文档页面风格，可传入自定义 `uiHtml(specPath)`。
 
 ---
 
