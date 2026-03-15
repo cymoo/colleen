@@ -57,14 +57,14 @@ Colleen 是一个轻量级、类型安全的 Kotlin / Java Web 框架。
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.3.3</version>
+    <version>0.3.4</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.3.3")
+implementation("io.github.cymoo:colleen:0.3.4")
 ```
 
 ### Hello World
@@ -108,6 +108,9 @@ class ApiController {
 
 fun main() {
     val app = Colleen()
+
+    // OpenAPI 文档（Swagger UI）：http://localhost:8000/docs
+    app.openApi()
 
     // 注册服务
     app.provide(UserService())
