@@ -151,7 +151,7 @@ fun updateTodo(id: Path<Long>, req: Json<UpdateTodoRequest>, todoService: TodoSe
 @Summary("Delete a todo")
 @Tags("todos")
 @ParamDesc(name = "id", description = "ID of the todo to delete")
-@ResponseDesc(200, "Todo deleted successfully")
+@ResponseDesc(204, "Todo deleted successfully")
 @ResponseDesc(404, "No todo exists with the given ID")
 fun deleteOneTodo(id: Path<Long>, todoService: TodoService) {
     if (!todoService.delete(id.value)) throw NotFound("Todo not found")
@@ -160,7 +160,7 @@ fun deleteOneTodo(id: Path<Long>, todoService: TodoService) {
 @Summary("Delete todos in batch")
 @Tags("todos")
 @ParamDesc(name = "req", description = "List of todo IDs to delete")
-@ResponseDesc(200, "Todos deleted successfully")
+@ResponseDesc(204, "Todos deleted successfully")
 fun deleteManyTodos(req: Json<BatchDeleteRequest>, todoService: TodoService) {
     req.value.ids.forEach { todoService.delete(it) }
 }
@@ -168,7 +168,7 @@ fun deleteManyTodos(req: Json<BatchDeleteRequest>, todoService: TodoService) {
 @Summary("Clear all todos")
 @Description("Permanently removes every todo from the store. This action cannot be undone.")
 @Tags("todos")
-@ResponseDesc(200, "All todos deleted")
+@ResponseDesc(204, "All todos deleted")
 fun deleteAllTodos(todoService: TodoService) {
     todoService.clear()
 }

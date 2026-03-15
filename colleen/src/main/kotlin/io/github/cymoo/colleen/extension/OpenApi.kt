@@ -106,13 +106,20 @@ annotation class ParamDesc(val name: String, val description: String, val requir
  * Describes an HTTP response for a route handler (maps to OpenAPI `responses`).
  *
  * Multiple `@ResponseDesc` annotations can be used to document different status codes.
- * A 200 response is always generated automatically; use this annotation to **augment**
- * or **override** its description, and to document additional status codes.
+ * If no 2xx annotation is present, a default 200 response is generated automatically.
+ * When at least one 2xx annotation is provided, only the annotated 2xx statuses appear
+ * — the implicit 200 is **not** added.
  *
  * ```kotlin
  * @ResponseDesc(200, "User found")
  * @ResponseDesc(404, "User not found")
  * fun getUser(id: Path<Int>): User { ... }
+ *
+ * @ResponseDesc(201, "Resource created")
+ * fun create(body: Json<Dto>): Dto { ... }   // only 201, no default 200
+ *
+ * @ResponseDesc(204, "Deleted successfully")
+ * fun delete(id: Path<Int>) { ... }           // only 204 (no content body)
  * ```
  */
 @Repeatable
@@ -301,13 +308,14 @@ private fun buildSpec(
     filter: ((String, String) -> Boolean)?,
 ): Map<String, Any> {
     val paths = linkedMapOf<String, MutableMap<String, Any>>()
+    val schemas = linkedMapOf<String, Map<String, Any>>()
 
     for ((fullPath, node) in routes) {
         val methods = if (node.method == "*") HTTP_METHODS else listOf(node.method.lowercase())
         val applicableMethods = if (filter != null) methods.filter { filter(fullPath, it) } else methods
         if (applicableMethods.isEmpty()) continue
 
-        val operation = buildOperation(node) ?: continue
+        val operation = buildOperation(node, schemas) ?: continue
         val pathItem = paths.getOrPut(fullPath) { linkedMapOf() }
         for (method in applicableMethods) {
             pathItem[method] = operation
@@ -322,6 +330,9 @@ private fun buildSpec(
             if (description != null) put("description", description)
         })
         put("paths", paths)
+        if (schemas.isNotEmpty()) {
+            put("components", mapOf("schemas" to schemas))
+        }
     }
 }
 
@@ -355,6 +366,7 @@ private data class ParamDescriptor(
  */
 private fun buildParamEntries(
     descriptors: List<ParamDescriptor>,
+    schemas: MutableMap<String, Map<String, Any>>,
 ): Pair<List<Map<String, Any>>, Map<String, Any>?> {
     val parameters = mutableListOf<Map<String, Any>>()
     var requestBody: Map<String, Any>? = null
@@ -368,10 +380,10 @@ private fun buildParamEntries(
 
         when {
             Path::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "path", typeToSchema(d.innerType), required = true, d.description))
+                parameters.add(buildParam(d.name, "path", typeToSchema(d.innerType, schemas = schemas), required = true, d.description))
 
             Query::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "query", typeToSchema(d.innerType), effectiveRequired, d.description))
+                parameters.add(buildParam(d.name, "query", typeToSchema(d.innerType, schemas = schemas), effectiveRequired, d.description))
 
             Header::class.java.isAssignableFrom(d.wrapperClass) ->
                 parameters.add(buildParam(d.name, "header", STRING_SCHEMA, effectiveRequired, d.description))
@@ -380,10 +392,10 @@ private fun buildParamEntries(
                 parameters.add(buildParam(d.name, "cookie", STRING_SCHEMA, effectiveRequired, d.description))
 
             Json::class.java.isAssignableFrom(d.wrapperClass) ->
-                requestBody = buildRequestBody("application/json", typeToSchema(d.innerType), d.description)
+                requestBody = buildRequestBody("application/json", typeToSchema(d.innerType, schemas = schemas), d.description)
 
             Form::class.java.isAssignableFrom(d.wrapperClass) ->
-                requestBody = buildRequestBody("application/x-www-form-urlencoded", typeToSchema(d.innerType), d.description)
+                requestBody = buildRequestBody("application/x-www-form-urlencoded", typeToSchema(d.innerType, schemas = schemas), d.description)
 
             Text::class.java.isAssignableFrom(d.wrapperClass) ->
                 requestBody = buildRequestBody("text/plain", STRING_SCHEMA, d.description)
@@ -404,15 +416,15 @@ private fun buildParamEntries(
 // ============================================================================
 
 /** Dispatches to the appropriate builder based on handler type. Returns null if hidden. */
-private fun buildOperation(node: RouteNode): Map<String, Any>? = when (val h = node.handler) {
-    is RouteHandler.KFunction -> buildOperationFromKFunction(h.fn)
-    is RouteHandler.JavaMethod -> buildOperationFromJavaMethod(h.method)
+private fun buildOperation(node: RouteNode, schemas: MutableMap<String, Map<String, Any>>): Map<String, Any>? = when (val h = node.handler) {
+    is RouteHandler.KFunction -> buildOperationFromKFunction(h.fn, schemas)
+    is RouteHandler.JavaMethod -> buildOperationFromJavaMethod(h.method, schemas)
     is RouteHandler.Lambda -> mapOf("responses" to defaultResponses())
 }
 
 // ---- Kotlin KFunction -------------------------------------------------------
 
-private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<String, Any>? {
+private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>, schemas: MutableMap<String, Map<String, Any>>): Map<String, Any>? {
     val javaMethod = fn.javaMethod ?: return mapOf("responses" to defaultResponses())
     val declaringClass = javaMethod.declaringClass
 
@@ -443,7 +455,7 @@ private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<St
         )
     }
 
-    val (parameters, requestBody) = buildParamEntries(descriptors)
+    val (parameters, requestBody) = buildParamEntries(descriptors, schemas)
 
     // Use Kotlin reflection to read Kotlin annotations on functions — Java getAnnotation()
     // may miss them when the annotation targets AnnotationTarget.FUNCTION only.
@@ -457,13 +469,13 @@ private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>): Map<St
         tags = (classTags + methodTags).distinct(),
         parameters = parameters,
         requestBody = requestBody,
-        responses = buildResponses(javaMethod.genericReturnType, javaMethod.responsesMap()),
+        responses = buildResponses(javaMethod.genericReturnType, javaMethod.responsesMap(), schemas),
     )
 }
 
 // ---- Java Method ------------------------------------------------------------
 
-private fun buildOperationFromJavaMethod(method: Method): Map<String, Any>? {
+private fun buildOperationFromJavaMethod(method: Method, schemas: MutableMap<String, Map<String, Any>>): Map<String, Any>? {
     val declaringClass = method.declaringClass
 
     // Check @Hidden on method or declaring class
@@ -488,7 +500,7 @@ private fun buildOperationFromJavaMethod(method: Method): Map<String, Any>? {
         )
     }
 
-    val (parameters, requestBody) = buildParamEntries(descriptors)
+    val (parameters, requestBody) = buildParamEntries(descriptors, schemas)
 
     val classTags = declaringClass.getAnnotation(Tags::class.java)?.value?.toList() ?: emptyList()
     val methodTags = method.getAnnotation(Tags::class.java)?.value?.toList() ?: emptyList()
@@ -500,7 +512,7 @@ private fun buildOperationFromJavaMethod(method: Method): Map<String, Any>? {
         tags = (classTags + methodTags).distinct(),
         parameters = parameters,
         requestBody = requestBody,
-        responses = buildResponses(method.genericReturnType, method.responsesMap()),
+        responses = buildResponses(method.genericReturnType, method.responsesMap(), schemas),
     )
 }
 
@@ -564,6 +576,7 @@ private fun buildFileUploadBody(fieldName: String, description: String?): Map<St
 private fun buildResponses(
     returnType: Type,
     annotations: Map<Int, String>,
+    schemas: MutableMap<String, Map<String, Any>>,
 ): Map<String, Any> {
     // Unwrap Result<T> → use the inner body type T as the effective response schema.
     val effectiveType: Type = run {
@@ -590,23 +603,28 @@ private fun buildResponses(
             || rawClass == Void::class.java
             || Response::class.java.isAssignableFrom(rawClass)
 
+    // Determine the primary success status code.
+    // If annotations contain at least one 2xx status, use the smallest; otherwise default to 200.
+    val successStatus = annotations.keys.filter { it in 200..299 }.minOrNull() ?: 200
+    val successDescription = annotations[successStatus] ?: "OK"
+
     val successResponse: Map<String, Any> = buildMap {
-        put("description", annotations[200] ?: "OK")
-        if (!isVoid) {
+        put("description", successDescription)
+        if (!isVoid && successStatus != 204) {
             val content = when {
                 rawClass == String::class.java ->
                     mapOf("text/plain" to mapOf("schema" to STRING_SCHEMA))
                 else ->
-                    mapOf("application/json" to mapOf("schema" to typeToSchema(effectiveType)))
+                    mapOf("application/json" to mapOf("schema" to typeToSchema(effectiveType, schemas = schemas)))
             }
             put("content", content)
         }
     }
 
     return buildMap {
-        put("200", successResponse)
+        put(successStatus.toString(), successResponse)
         for ((status, desc) in annotations) {
-            if (status != 200) put(status.toString(), mapOf("description" to desc))
+            if (status != successStatus) put(status.toString(), mapOf("description" to desc))
         }
     }
 }
@@ -671,9 +689,16 @@ private val DATE_TIME_CLASSES: Set<Class<*>> = setOf(
  * String, enums, temporal types (LocalDate, LocalDateTime, Instant, OffsetDateTime,
  * ZonedDateTime, Date), UUID, BigDecimal, BigInteger, List/Set (array),
  * Map (object with additionalProperties), nullable types, and arbitrary DTOs.
+ *
+ * Custom DTO types are registered in [schemas] (if provided) and referenced
+ * via `$ref: "#/components/schemas/ClassName"` to avoid duplication.
  */
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
-private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
+private fun typeToSchema(
+    type: Type,
+    depth: Int = 0,
+    schemas: MutableMap<String, Map<String, Any>>? = null,
+): Map<String, Any> {
     val rawClass: Class<*> = when (type) {
         is Class<*> -> type
         is ParameterizedType -> type.rawType as Class<*>
@@ -730,7 +755,7 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
             val elementType = (type as? ParameterizedType)?.actualTypeArguments?.firstOrNull()
             buildMap {
                 put("type", "array")
-                if (elementType != null) put("items", typeToSchema(elementType, depth))
+                if (elementType != null) put("items", typeToSchema(elementType, depth, schemas))
             }
         }
 
@@ -739,14 +764,25 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
             val valueType = (type as? ParameterizedType)?.actualTypeArguments?.getOrNull(1)
             buildMap {
                 put("type", "object")
-                if (valueType != null) put("additionalProperties", typeToSchema(valueType, depth))
+                if (valueType != null) put("additionalProperties", typeToSchema(valueType, depth, schemas))
             }
         }
 
         depth >= MAX_DEPTH ->
             mapOf("type" to "object")
 
-        else -> buildObjectSchema(rawClass, depth)
+        // Custom DTO — register in component schemas and return a $ref
+        schemas != null -> {
+            val schemaName = rawClass.simpleName
+            if (schemaName !in schemas) {
+                // Insert a placeholder to handle circular references
+                schemas[schemaName] = emptyMap()
+                schemas[schemaName] = buildObjectSchema(rawClass, depth, schemas)
+            }
+            mapOf("\$ref" to "#/components/schemas/$schemaName")
+        }
+
+        else -> buildObjectSchema(rawClass, depth, schemas)
     }
 }
 
@@ -758,12 +794,20 @@ private fun typeToSchema(type: Type, depth: Int = 0): Map<String, Any> {
  * - Fields marked `@Schema(hidden = true)` are excluded entirely.
  * - Fields with `@Schema(name = "alias")` use the alias as the property key.
  * - Fields with `@Schema(type = "...")` override the inferred type/format.
- * - Required / nullable is determined by (highest priority first):
+ * - Required / optional is determined by (highest priority first):
  *   1. `@Schema(required = TRUE / FALSE)` — explicit annotation override.
- *   2. Kotlin nullability — `val foo: String` → required; `val bar: String?` → nullable.
+ *   2. Kotlin nullability — `val foo: String` → required; `val bar: String?` → optional.
  *   3. JVM primitive check — fallback for pure Java classes without Kotlin metadata.
+ *
+ * Required fields appear in the `required` array; optional fields are simply
+ * omitted from it.  This avoids mixing `required` with `nullable` and keeps
+ * the generated spec consistent regardless of whether a field uses `$ref`.
  */
-private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
+private fun buildObjectSchema(
+    clazz: Class<*>,
+    depth: Int,
+    schemas: MutableMap<String, Map<String, Any>>? = null,
+): Map<String, Any> {
     val properties = linkedMapOf<String, Any>()
     val requiredFields = mutableListOf<String>()
 
@@ -789,7 +833,7 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
             if (schemaAnnotation.format.isNotBlank()) m["format"] = schemaAnnotation.format
             m
         } else {
-            LinkedHashMap(typeToSchema(field.genericType, depth + 1))
+            LinkedHashMap(typeToSchema(field.genericType, depth + 1, schemas))
         }
 
         if (schemaAnnotation != null) {
@@ -804,7 +848,7 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
             field.name
         }
 
-        // Determine required / nullable.
+        // Determine required / optional.
         // Priority: @Schema(required) > Kotlin nullability > JVM primitive check
         val isRequired = when {
             schemaAnnotation != null && schemaAnnotation.required == OptionalBool.TRUE -> true
@@ -818,8 +862,6 @@ private fun buildObjectSchema(clazz: Class<*>, depth: Int): Map<String, Any> {
 
         if (isRequired) {
             requiredFields.add(propertyName)
-        } else {
-            fieldSchema["nullable"] = true
         }
 
         properties[propertyName] = fieldSchema

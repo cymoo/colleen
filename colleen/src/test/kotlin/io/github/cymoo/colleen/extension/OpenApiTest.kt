@@ -102,6 +102,18 @@ fun returnsResult(body: Json<CreateUserRequest>): Result<UserDto> = error("stub"
 
 fun returnsResponse(ctx: Context): Response = error("stub")
 
+// -- handlers for flexible success status testing ----------------------------
+
+@ResponseDesc(201, "Resource created")
+fun createsResource(body: Json<CreateUserRequest>): UserDto = error("stub")
+
+@ResponseDesc(204, "Deleted successfully")
+fun deletesResource(id: Path<Int>) {}
+
+@ResponseDesc(204, "No content")
+@ResponseDesc(404, "Not found")
+fun deletesWithNotFound(id: Path<Int>) {}
+
 // -- DTOs for testing @Schema features (name, hidden, type, format) -----------
 
 data class AliasedDto(
@@ -234,6 +246,21 @@ private fun spec(
 @Suppress("UNCHECKED_CAST")
 private fun Map<String, Any>.path(vararg keys: String): Any? =
     keys.fold(this as Any?) { acc, key -> (acc as? Map<String, Any>)?.get(key) }
+
+/**
+ * Resolves a schema that may be a `$ref` pointer.
+ * If [schema] contains `$ref`, the referenced definition is looked up in
+ * `components/schemas` of the top-level [spec] map and returned.
+ * Otherwise the schema is returned as-is.
+ */
+@Suppress("UNCHECKED_CAST")
+private fun Map<String, Any>.resolveSchema(schema: Map<String, Any>): Map<String, Any> {
+    val ref = schema["\$ref"] as? String ?: return schema
+    // ref format: "#/components/schemas/Name"
+    val name = ref.removePrefix("#/components/schemas/")
+    return (this.path("components", "schemas", name) as? Map<String, Any>)
+        ?: error("Cannot resolve \$ref: $ref")
+}
 
 @Suppress("UNCHECKED_CAST")
 private fun Map<String, Any>.operation(path: String, method: String): Map<String, Any> =
@@ -481,12 +508,15 @@ class QueryParameterTest {
     }
 
     @Test
-    fun `Query of DTO generates object schema (not expanded)`() {
+    fun `Query of DTO generates ref to component schema`() {
         val s = spec { get("/items", ::queryWithDto) }
+        @Suppress("UNCHECKED_CAST")
         val schema = s.parameters("/items", "get")
-            .single { it["name"] == "filter" }["schema"] as Map<*, *>
-        assertEquals("object", schema["type"])
-        assertNotNull(schema["properties"])
+            .single { it["name"] == "filter" }["schema"] as Map<String, Any>
+        assertTrue(schema.containsKey("\$ref"))
+        val resolved = s.resolveSchema(schema)
+        assertEquals("object", resolved["type"])
+        assertNotNull(resolved["properties"])
     }
 
     @Test
@@ -557,11 +587,15 @@ class RequestBodyTest {
     }
 
     @Test
-    fun `Json body schema reflects the DTO type`() {
+    fun `Json body schema reflects the DTO type via ref`() {
         val s = spec { post("/users", ::createUser) }
+        @Suppress("UNCHECKED_CAST")
         val schema = s.requestBody("/users", "post")!!
-            .path("content", "application/json", "schema") as Map<*, *>
-        assertEquals("object", schema["type"])
+            .path("content", "application/json", "schema") as Map<String, Any>
+        // Custom DTO is referenced via $ref
+        assertTrue(schema.containsKey("\$ref"))
+        val resolved = s.resolveSchema(schema)
+        assertEquals("object", resolved["type"])
     }
 
     @Test
@@ -645,6 +679,13 @@ class ResponseBuildingTest {
         assertNotNull(
             s.path("paths", "/users/{id}", "get", "responses", "200", "content", "application/json")
         )
+        // Schema should be a $ref to UserDto
+        @Suppress("UNCHECKED_CAST")
+        val schema = s.path(
+            "paths", "/users/{id}", "get", "responses", "200",
+            "content", "application/json", "schema"
+        ) as Map<String, Any>
+        assertTrue(schema.containsKey("\$ref"))
     }
 
     @Test
@@ -655,9 +696,10 @@ class ResponseBuildingTest {
             "paths", "/users", "post", "responses", "200",
             "content", "application/json", "schema"
         ) as Map<String, Any>
-        // Result<UserDto> should produce the schema for UserDto, not Result itself
-        assertEquals("object", schema["type"])
-        val props = schema["properties"] as Map<*, *>
+        // Result<UserDto> should produce a $ref to UserDto, not Result itself
+        val resolved = s.resolveSchema(schema)
+        assertEquals("object", resolved["type"])
+        val props = resolved["properties"] as Map<*, *>
         assertTrue(props.containsKey("id"))
         assertTrue(props.containsKey("username"))
         assertFalse(props.containsKey("status"), "Result's own 'status' field should not appear")
@@ -669,6 +711,105 @@ class ResponseBuildingTest {
         val s = spec { get("/resp", ::returnsResponse) }
         val response = s.path("paths", "/resp", "get", "responses", "200") as Map<*, *>
         assertFalse(response.containsKey("content"))
+    }
+
+    @Test
+    fun `@ResponseDesc 201 replaces default 200 as success status`() {
+        val s = spec { post("/items", ::createsResource) }
+        val responses = s.operation("/items", "post")["responses"] as Map<*, *>
+        assertTrue(responses.containsKey("201"))
+        assertFalse(responses.containsKey("200"), "Default 200 should not appear when 201 is annotated")
+        assertEquals("Resource created", (responses["201"] as Map<*, *>)["description"])
+        // 201 should carry the response body schema
+        assertNotNull(s.path("paths", "/items", "post", "responses", "201", "content", "application/json"))
+    }
+
+    @Test
+    fun `@ResponseDesc 204 produces response without content`() {
+        val s = spec { delete("/items/{id}", ::deletesResource) }
+        val responses = s.operation("/items/{id}", "delete")["responses"] as Map<*, *>
+        assertTrue(responses.containsKey("204"))
+        assertFalse(responses.containsKey("200"), "Default 200 should not appear when 204 is annotated")
+        val resp204 = responses["204"] as Map<*, *>
+        assertEquals("Deleted successfully", resp204["description"])
+        assertFalse(resp204.containsKey("content"), "204 should have no content body")
+    }
+
+    @Test
+    fun `@ResponseDesc 204 with 404 produces both without 200`() {
+        val s = spec { delete("/items/{id}", ::deletesWithNotFound) }
+        val responses = s.operation("/items/{id}", "delete")["responses"] as Map<*, *>
+        assertTrue(responses.containsKey("204"))
+        assertTrue(responses.containsKey("404"))
+        assertFalse(responses.containsKey("200"), "Default 200 should not appear when 204 is annotated")
+    }
+}
+
+// ============================================================================
+// Test: Schema reuse — components/schemas and $ref
+// ============================================================================
+
+class SchemaReuseTest {
+
+    @Test
+    fun `DTOs used in request bodies are registered in components schemas`() {
+        val s = spec { post("/users", ::createUser) }
+        assertNotNull(s.path("components", "schemas", "CreateUserRequest"))
+    }
+
+    @Test
+    fun `DTOs used in responses are registered in components schemas`() {
+        val s = spec { get("/users/{id}", ::getUser) }
+        assertNotNull(s.path("components", "schemas", "UserDto"))
+    }
+
+    @Test
+    fun `same DTO used in multiple endpoints is registered once`() {
+        val s = spec {
+            get("/users/{id}", ::getUser)
+            post("/users", ::createUser)
+            get("/users", ::listUsers)
+        }
+        // UserDto is used in all three — should appear exactly once in components/schemas
+        val schemas = s["components"] as Map<*, *>
+        @Suppress("UNCHECKED_CAST")
+        val schemaMap = schemas["schemas"] as Map<String, Any>
+        assertTrue(schemaMap.containsKey("UserDto"))
+        assertTrue(schemaMap.containsKey("CreateUserRequest"))
+    }
+
+    @Test
+    fun `nested DTOs are also registered in components schemas`() {
+        val s = spec { get("/users/{id}", ::getUser) }
+        // UserDto contains Address — both should be in components/schemas
+        assertNotNull(s.path("components", "schemas", "UserDto"))
+        assertNotNull(s.path("components", "schemas", "Address"))
+    }
+
+    @Test
+    fun `request body schema uses $ref`() {
+        val s = spec { post("/users", ::createUser) }
+        @Suppress("UNCHECKED_CAST")
+        val schema = s.requestBody("/users", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        assertEquals("#/components/schemas/CreateUserRequest", schema["\$ref"])
+    }
+
+    @Test
+    fun `response body schema uses $ref`() {
+        val s = spec { get("/users/{id}", ::getUser) }
+        @Suppress("UNCHECKED_CAST")
+        val schema = s.path(
+            "paths", "/users/{id}", "get", "responses", "200",
+            "content", "application/json", "schema"
+        ) as Map<String, Any>
+        assertEquals("#/components/schemas/UserDto", schema["\$ref"])
+    }
+
+    @Test
+    fun `lambda handlers do not produce components`() {
+        val s = spec { get("/ping") { "pong" } }
+        assertNull(s["components"])
     }
 }
 
@@ -730,10 +871,12 @@ class EnumSchemaTest {
     fun `enum field inside DTO schema is rendered correctly`() {
         val s = spec { get("/users/{id}", ::getUser) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.path(
+        val schema = s.path(
             "paths", "/users/{id}", "get", "responses", "200",
-            "content", "application/json", "schema", "properties"
+            "content", "application/json", "schema"
         ) as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         val roleSchema = props["role"] as Map<*, *>
         assertEquals("string", roleSchema["type"])
         @Suppress("UNCHECKED_CAST")
@@ -751,8 +894,10 @@ class ObjectSchemaTest {
     fun `DTO fields are reflected into properties`() {
         val s = spec { post("/users", ::createUser) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/users", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/users", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         assertTrue(props.containsKey("username"))
         assertTrue(props.containsKey("age"))
     }
@@ -761,27 +906,32 @@ class ObjectSchemaTest {
     fun `primitive field appears in required array`() {
         val s = spec { post("/users", ::createUser) }
         @Suppress("UNCHECKED_CAST")
-        val required = s.requestBody("/users", "post")!!
-            .path("content", "application/json", "schema", "required") as List<String>
+        val schema = s.requestBody("/users", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
         assertTrue(required.contains("age"))
     }
 
     @Test
-    fun `non-primitive field is marked nullable`() {
+    fun `nullable field is not in required array`() {
         val s = spec { post("/users", ::createUser) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/users", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
-        val usernameSchema = props["username"] as Map<*, *>
-        assertEquals(true, usernameSchema["nullable"])
+        val schema = s.requestBody("/users", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
+        assertFalse(required.contains("username"))
     }
 
     @Test
-    fun `primitive field is not marked nullable`() {
+    fun `required field does not carry nullable`() {
         val s = spec { post("/users", ::createUser) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/users", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/users", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         val ageSchema = props["age"] as Map<*, *>
         assertFalse(ageSchema.containsKey("nullable"))
     }
@@ -790,12 +940,16 @@ class ObjectSchemaTest {
     fun `nested DTO is recursively expanded up to MAX_DEPTH`() {
         val s = spec { get("/users/{id}", ::getUser) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.path(
+        val schema = s.path(
             "paths", "/users/{id}", "get", "responses", "200",
-            "content", "application/json", "schema", "properties"
+            "content", "application/json", "schema"
         ) as Map<String, Any>
-        val addressSchema = props["address"] as Map<*, *>
-        // Address is a non-primitive field; it should expand into an object schema.
+        val userSchema = s.resolveSchema(schema)
+        val props = userSchema["properties"] as Map<String, Any>
+        // Address is a nested DTO — it should be a $ref to a component schema.
+        val addressRef = props["address"] as Map<String, Any>
+        assertTrue(addressRef.containsKey("\$ref"))
+        val addressSchema = s.resolveSchema(addressRef)
         assertEquals("object", addressSchema["type"])
         val addrProps = addressSchema["properties"] as Map<*, *>
         assertTrue(addrProps.containsKey("street"))
@@ -805,11 +959,10 @@ class ObjectSchemaTest {
     @Test
     fun `@Schema description and example are applied to the field schema`() {
         val s = spec { get("/users/{id}", ::getUser) }
+        // UserDto's schema is in components/schemas
         @Suppress("UNCHECKED_CAST")
-        val props = s.path(
-            "paths", "/users/{id}", "get", "responses", "200",
-            "content", "application/json", "schema", "properties"
-        ) as Map<String, Any>
+        val userSchema = s.path("components", "schemas", "UserDto") as Map<String, Any>
+        val props = userSchema["properties"] as Map<String, Any>
         val idSchema = props["id"] as Map<*, *>
         assertEquals("Unique user ID", idSchema["description"])
         assertEquals("42", idSchema["example"])
@@ -834,7 +987,7 @@ class CollectionSchemaTest {
     }
 
     @Test
-    fun `List of DTO generates array schema with items from generic return type`() {
+    fun `List of DTO generates array schema with items referencing component schema`() {
         val s = spec { get("/users", ::listUsers) }
         val schema = s.path(
             "paths", "/users", "get", "responses", "200",
@@ -842,9 +995,13 @@ class CollectionSchemaTest {
         ) as Map<*, *>
         // The generic return type List<UserDto> is preserved, so items should be present
         assertTrue(schema.containsKey("items"))
-        val items = schema["items"] as Map<*, *>
-        assertEquals("object", items["type"])
-        assertNotNull(items["properties"])
+        @Suppress("UNCHECKED_CAST")
+        val items = schema["items"] as Map<String, Any>
+        // Items should be a $ref to UserDto
+        assertTrue(items.containsKey("\$ref"))
+        val resolved = s.resolveSchema(items)
+        assertEquals("object", resolved["type"])
+        assertNotNull(resolved["properties"])
     }
 
     @Test
@@ -1102,8 +1259,10 @@ class SchemaAliasTest {
     fun `@Schema name overrides field name in schema properties`() {
         val s = spec { post("/aliased", ::createAliased) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/aliased", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/aliased", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         assertTrue(props.containsKey("q"), "Aliased field 'q' should be present")
         assertFalse(props.containsKey("keyword"), "Original field name 'keyword' should not be present")
     }
@@ -1112,8 +1271,10 @@ class SchemaAliasTest {
     fun `non-aliased fields still use original name`() {
         val s = spec { post("/aliased", ::createAliased) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/aliased", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/aliased", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         assertTrue(props.containsKey("page"))
     }
 }
@@ -1128,8 +1289,10 @@ class SchemaHiddenFieldTest {
     fun `@Schema hidden field is excluded from schema`() {
         val s = spec { post("/hidden-field", ::createHiddenField) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/hidden-field", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/hidden-field", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         assertTrue(props.containsKey("visible"))
         assertFalse(props.containsKey("secret"), "Hidden field 'secret' should not be in schema")
     }
@@ -1145,8 +1308,10 @@ class SchemaTypeOverrideTest {
     fun `@Schema type overrides inferred type`() {
         val s = spec { post("/type-override", ::createTypeOverride) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/type-override", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/type-override", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         val startTimeSchema = props["startTime"] as Map<*, *>
         assertEquals("string", startTimeSchema["type"])
         assertEquals("date-time", startTimeSchema["format"])
@@ -1156,8 +1321,10 @@ class SchemaTypeOverrideTest {
     fun `@Schema type without format produces only type`() {
         val s = spec { post("/type-override", ::createTypeOverride) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/type-override", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/type-override", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         val customSchema = props["customField"] as Map<*, *>
         assertEquals("string", customSchema["type"])
         assertFalse(customSchema.containsKey("format"))
@@ -1192,8 +1359,10 @@ class AdditionalTypeSchemaTest {
     fun `ShortDto fields produce correct schema in object`() {
         val s = spec { post("/short-dto", ::queryShortDto) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/short-dto", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/short-dto", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         val shortSchema = props["shortVal"] as Map<*, *>
         assertEquals("integer", shortSchema["type"])
         val byteSchema = props["byteVal"] as Map<*, *>
@@ -1204,8 +1373,10 @@ class AdditionalTypeSchemaTest {
     fun `TemporalDto fields produce correct schemas`() {
         val s = spec { post("/temporal", ::queryTemporal) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/temporal", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/temporal", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
 
         val dateSchema = props["date"] as Map<*, *>
         assertEquals("string", dateSchema["type"])
@@ -1234,10 +1405,12 @@ class AdditionalTypeSchemaTest {
     fun `TemporalDto response schema also produces correct types`() {
         val s = spec { post("/temporal", ::queryTemporal) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.path(
+        val schema = s.path(
             "paths", "/temporal", "post", "responses", "200",
-            "content", "application/json", "schema", "properties"
+            "content", "application/json", "schema"
         ) as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
 
         val dateSchema = props["date"] as Map<*, *>
         assertEquals("string", dateSchema["type"])
@@ -1255,37 +1428,33 @@ class KotlinNullabilitySchemaTest {
     fun `non-null String field is required`() {
         val s = spec { post("/nullability", ::createNullability) }
         @Suppress("UNCHECKED_CAST")
-        val required = s.requestBody("/nullability", "post")!!
-            .path("content", "application/json", "schema", "required") as List<String>
+        val schema = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
         assertTrue(required.contains("name"))
     }
 
     @Test
-    fun `non-null String field is not marked nullable`() {
+    fun `non-null String field does not carry nullable`() {
         val s = spec { post("/nullability", ::createNullability) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/nullability", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
+        val schema = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
         val nameSchema = props["name"] as Map<*, *>
         assertFalse(nameSchema.containsKey("nullable"))
-    }
-
-    @Test
-    fun `nullable Int field is marked nullable`() {
-        val s = spec { post("/nullability", ::createNullability) }
-        @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/nullability", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
-        val countSchema = props["count"] as Map<*, *>
-        assertEquals(true, countSchema["nullable"])
     }
 
     @Test
     fun `nullable Int field is not in required`() {
         val s = spec { post("/nullability", ::createNullability) }
         @Suppress("UNCHECKED_CAST")
-        val required = s.requestBody("/nullability", "post")!!
-            .path("content", "application/json", "schema", "required") as List<String>
+        val schema = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
         assertFalse(required.contains("count"))
     }
 
@@ -1293,27 +1462,32 @@ class KotlinNullabilitySchemaTest {
     fun `non-null Boolean field is required`() {
         val s = spec { post("/nullability", ::createNullability) }
         @Suppress("UNCHECKED_CAST")
-        val required = s.requestBody("/nullability", "post")!!
-            .path("content", "application/json", "schema", "required") as List<String>
+        val schema = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
         assertTrue(required.contains("active"))
     }
 
     @Test
-    fun `nullable String field is marked nullable`() {
+    fun `nullable String field is not in required`() {
         val s = spec { post("/nullability", ::createNullability) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/nullability", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
-        val labelSchema = props["label"] as Map<*, *>
-        assertEquals(true, labelSchema["nullable"])
+        val schema = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
+        assertFalse(required.contains("label"))
     }
 
     @Test
     fun `required array contains exactly the non-null fields`() {
         val s = spec { post("/nullability", ::createNullability) }
         @Suppress("UNCHECKED_CAST")
-        val required = s.requestBody("/nullability", "post")!!
-            .path("content", "application/json", "schema", "required") as List<String>
+        val schema = s.requestBody("/nullability", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
         assertEquals(listOf("name", "active"), required)
     }
 }
@@ -1325,23 +1499,13 @@ class KotlinNullabilitySchemaTest {
 class SchemaRequiredOverrideTest {
 
     @Test
-    fun `@Schema required FALSE on non-null field makes it nullable`() {
-        val s = spec { post("/override", ::createRequiredOverride) }
-        @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/override", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
-        val schema = props["alwaysPresent"] as Map<*, *>
-        assertEquals(true, schema["nullable"])
-    }
-
-    @Test
     fun `@Schema required FALSE on non-null field excludes it from required`() {
         val s = spec { post("/override", ::createRequiredOverride) }
-        val required = s.requestBody("/override", "post")!!
-            .path("content", "application/json", "schema", "required")
-        // alwaysPresent is forced optional, sometimesPresent is forced required
         @Suppress("UNCHECKED_CAST")
-        val requiredList = required as List<String>
+        val schema = s.requestBody("/override", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val requiredList = resolved["required"] as List<String>
         assertFalse(requiredList.contains("alwaysPresent"))
     }
 
@@ -1349,19 +1513,23 @@ class SchemaRequiredOverrideTest {
     fun `@Schema required TRUE on nullable field makes it required`() {
         val s = spec { post("/override", ::createRequiredOverride) }
         @Suppress("UNCHECKED_CAST")
-        val required = s.requestBody("/override", "post")!!
-            .path("content", "application/json", "schema", "required") as List<String>
+        val schema = s.requestBody("/override", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val required = resolved["required"] as List<String>
         assertTrue(required.contains("sometimesPresent"))
     }
 
     @Test
-    fun `@Schema required TRUE on nullable field does not mark nullable`() {
+    fun `@Schema required TRUE on nullable field does not carry nullable`() {
         val s = spec { post("/override", ::createRequiredOverride) }
         @Suppress("UNCHECKED_CAST")
-        val props = s.requestBody("/override", "post")!!
-            .path("content", "application/json", "schema", "properties") as Map<String, Any>
-        val schema = props["sometimesPresent"] as Map<*, *>
-        assertFalse(schema.containsKey("nullable"))
+        val schema = s.requestBody("/override", "post")!!
+            .path("content", "application/json", "schema") as Map<String, Any>
+        val resolved = s.resolveSchema(schema)
+        val props = resolved["properties"] as Map<String, Any>
+        val fieldSchema = props["sometimesPresent"] as Map<*, *>
+        assertFalse(fieldSchema.containsKey("nullable"))
     }
 }
 
