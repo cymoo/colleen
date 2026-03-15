@@ -775,7 +775,9 @@ private fun typeToSchema(
         schemas != null -> {
             val schemaName = rawClass.simpleName
             if (schemaName !in schemas) {
-                // Insert a placeholder to handle circular references
+                // Insert an empty placeholder first so that recursive calls for
+                // self-referencing or circularly-dependent DTOs find the key
+                // already present and return a $ref instead of recursing infinitely.
                 schemas[schemaName] = emptyMap()
                 schemas[schemaName] = buildObjectSchema(rawClass, depth, schemas)
             }
