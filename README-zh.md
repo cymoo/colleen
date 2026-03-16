@@ -2956,6 +2956,66 @@ hey -n 2000 -c 200 -m POST -T "application/octet-stream" -D ./10mb.bin http://12
 实践中可先以“**P99 延迟达标且无错误突增**”作为门槛，再比较吞吐上限与资源成本。  
 若大响应场景中内存或 GC 压力明显上升，可优先评估流式输出与响应拆分策略。
 
+#### 一次可复现的本地 Benchmark（2026-03-16）
+
+下面给出一组已实际执行的基准数据，便于快速参考与复现。
+
+**测试环境**
+
+- OS：Linux（GitHub Actions runner）
+- CPU：4 vCPU（虚拟机）
+- JDK：Temurin 21（`/usr/lib/jvm/temurin-21-jdk-amd64`）
+- Colleen：`0.3.4`
+- 压测工具：ApacheBench（`ab`）
+
+**使用的库（服务侧）**
+
+- `io.github.cymoo:colleen`
+- `io.undertow:undertow-core`
+- `com.fasterxml.jackson.core:jackson-databind`
+
+**具体步骤**
+
+```bash
+# 1) 进入仓库并设置 JDK
+cd /home/runner/work/colleen/colleen
+export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
+export PATH=$JAVA_HOME/bin:$PATH
+
+# 2) 启动示例服务（hello-world，默认 8080）
+cd examples/hello-world
+mvn compile exec:java -Dexec.mainClass=MainKt -Dkotlin.compiler.jdkHome=$JAVA_HOME
+
+# 3) 在另一个终端执行压测（先预热，再正式采样）
+# /health：小响应，Keep-Alive 开启
+ab -n 10000 -c 200 -k http://127.0.0.1:8080/health
+ab -n 50000 -c 200 -k http://127.0.0.1:8080/health
+ab -n 100000 -c 500 -k http://127.0.0.1:8080/health
+
+# /：JSON 响应。建议使用 -l（允许响应长度波动）
+ab -n 10000 -c 200 -k http://127.0.0.1:8080/
+ab -n 50000 -c 200 -k -l http://127.0.0.1:8080/
+ab -n 100000 -c 500 -k -l http://127.0.0.1:8080/
+```
+
+> 说明：`ab` 默认会把“响应长度变化”计为失败请求。  
+> 若响应字段顺序或动态内容导致长度轻微变化，使用 `-l` 更适合 API 压测。
+
+**最终结果（正式采样）**
+
+| 场景 | 并发 | 请求数 | RPS | P50 | P95 | P99 | 失败 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `GET /health` | 200 | 50,000 | 10,400.95 | 17ms | 45ms | 68ms | 0 |
+| `GET /health` | 500 | 100,000 | 14,274.14 | 34ms | 79ms | 97ms | 0 |
+| `GET /` | 200 | 50,000 | 14,552.02 | 14ms | 30ms | 36ms | 0 |
+| `GET /` | 500 | 100,000 | 14,675.56 | 35ms | 74ms | 95ms | 0 |
+
+**结论**
+
+1. 在该测试环境下，Colleen 示例服务在 `c=200~500` 区间可稳定达到约 **10k~14.7k RPS**。  
+2. 并发从 200 升到 500 后，吞吐有提升，但 **P95/P99 延迟明显上升**（约 30~45ms -> 74~97ms）。  
+3. 对延迟敏感业务，建议先以 `P99` 门槛反推并发上限，再做容量规划；对吞吐优先业务，可在可接受尾延迟内提高并发。
+
 ### 结构化日志
 
 Colleen 会发出多种生命周期事件，可用于实现结构化日志或其他指标采集：
