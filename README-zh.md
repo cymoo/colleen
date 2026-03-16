@@ -3016,6 +3016,87 @@ ab -n 100000 -c 500 -k -l http://127.0.0.1:8080/
 2. 并发从 200 升到 500 后，吞吐有提升，但 **P95/P99 延迟明显上升**（约 30~45ms -> 74~97ms）。  
 3. 对延迟敏感业务，建议先以 `P99` 门槛反推并发上限，再做容量规划；对吞吐优先业务，可在可接受尾延迟内提高并发。
 
+#### API 场景基准（Colleen vs Spring Boot vs Flask）
+
+按常见接口场景，新增了一个最小化 benchmark 示例模块：`examples/benchmark-api`，包含以下端点：
+
+- `GET /text`：简单字符串
+- `GET /json`：普通 JSON
+- `GET /json-stream`：流式 JSON（Colleen 使用 `ctx.json(data, stream = true)`）
+- `POST /upload`：文件上传（multipart）
+- `POST /extract/auto`：Extractor 自动解析 query + JSON
+
+**Colleen 端点实现文件**
+
+- `/home/runner/work/colleen/colleen/examples/benchmark-api/src/main/kotlin/Main.kt`
+
+**对比服务使用的库**
+
+- Colleen：`io.github.cymoo:colleen`（底层 Undertow + Jackson）
+- Spring Boot：`org.springframework.boot:spring-boot-starter-web`（Tomcat + Jackson）
+- Flask：`flask==3.0.3`（运行时 `gunicorn==23.0.0`）
+
+**具体步骤（本次执行口径）**
+
+```bash
+# 0) 环境
+export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
+export PATH=$JAVA_HOME/bin:$PATH
+
+# 1) Colleen（7070）
+cd /home/runner/work/colleen/colleen/examples/benchmark-api
+mvn compile exec:java -Dkotlin.compiler.jdkHome=$JAVA_HOME
+
+# 2) Spring Boot（8081） - 本次对照代码放在 /tmp，避免污染仓库
+cd /tmp/bench-compare/spring
+mvn spring-boot:run
+
+# 3) Flask（8082） - 本次对照代码放在 /tmp
+python -m pip install --user flask==3.0.3 gunicorn==23.0.0
+cd /tmp/bench-compare/flask
+gunicorn -w 4 -k gthread --threads 8 -b 127.0.0.1:8082 app:app
+
+# 4) 先验证端点（示例）
+curl http://127.0.0.1:7070/text
+curl http://127.0.0.1:8081/text
+curl http://127.0.0.1:8082/text
+
+# 5) 压测（ab，先预热后正式）
+# text
+ab -n 8000 -c 200 -k http://127.0.0.1:<port>/text
+ab -n 30000 -c 200 -k http://127.0.0.1:<port>/text
+ab -n 60000 -c 500 -k http://127.0.0.1:<port>/text
+
+# json
+ab -n 8000 -c 200 -k http://127.0.0.1:<port>/json
+ab -n 30000 -c 200 -k http://127.0.0.1:<port>/json
+ab -n 60000 -c 500 -k http://127.0.0.1:<port>/json
+```
+
+**最终结果（正式采样）**
+
+| 框架 | 端点 | 并发 | 请求数 | RPS | P50 | P95 | P99 | 失败 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Colleen | `GET /text` | 200 | 30,000 | 15,146.48 | 11ms | 29ms | 50ms | 0 |
+| Colleen | `GET /text` | 500 | 60,000 | 23,588.68 | 17ms | 44ms | 79ms | 0 |
+| Colleen | `GET /json` | 200 | 30,000 | 29,266.78 | 5ms | 16ms | 28ms | 0 |
+| Colleen | `GET /json` | 500 | 60,000 | 39,836.54 | 11ms | 25ms | 46ms | 0 |
+| Spring Boot | `GET /text` | 200 | 30,000 | 17,116.47 | 11ms | 20ms | 25ms | 0 |
+| Spring Boot | `GET /text` | 500 | 60,000 | 17,180.48 | 25ms | 49ms | 60ms | 0 |
+| Spring Boot | `GET /json` | 200 | 30,000 | 7,070.45 | 28ms | 31ms | 33ms | 0 |
+| Spring Boot | `GET /json` | 500 | 60,000 | 6,810.84 | 73ms | 82ms | 86ms | 0 |
+| Flask (gunicorn) | `GET /text` | 200 | 30,000 | 9,289.22 | 17ms | 53ms | 65ms | 0 |
+| Flask (gunicorn) | `GET /text` | 500 | 60,000 | 9,578.87 | 41ms | 113ms | 129ms | 0 |
+| Flask (gunicorn) | `GET /json` | 200 | 30,000 | 8,342.97 | 11ms | 75ms | 82ms | 0 |
+| Flask (gunicorn) | `GET /json` | 500 | 60,000 | 9,304.82 | 57ms | 91ms | 104ms | 0 |
+
+**结论**
+
+1. 在本次测试机型与默认配置下，`GET /json` 场景中 Colleen 吞吐最高（约 29k~39k RPS）。  
+2. `GET /text` 场景下，Spring Boot 在 `c=200` 的吞吐与尾延迟表现较强，但在 `c=500` 吞吐增长有限。  
+3. Flask（gunicorn）整体吞吐低于前两者，且高并发时尾延迟上升更明显。  
+4. 结果会受服务器参数、GC、线程池/worker、JIT 预热影响；生产选型建议按业务负载模型复测并调优。
+
 ### 结构化日志
 
 Colleen 会发出多种生命周期事件，可用于实现结构化日志或其他指标采集：
