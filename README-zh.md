@@ -2956,7 +2956,7 @@ hey -n 2000 -c 200 -m POST -T "application/octet-stream" -D ./10mb.bin http://12
 实践中可先以“**P99 延迟达标且无错误突增**”作为门槛，再比较吞吐上限与资源成本。  
 若大响应场景中内存或 GC 压力明显上升，可优先评估流式输出与响应拆分策略。
 
-#### 一次可复现的本地 Benchmark（2026-03-16）
+#### 一次可复现的本地 Benchmark (2026-03-16)
 
 下面给出一组已实际执行的基准数据，便于快速参考与复现。
 
@@ -3028,7 +3028,7 @@ ab -n 100000 -c 500 -k -l http://127.0.0.1:8080/
 
 **Colleen 端点实现文件**
 
-- `/home/runner/work/colleen/colleen/examples/benchmark-api/src/main/kotlin/Main.kt`
+- `examples/benchmark-api/src/main/kotlin/Main.kt`
 
 **对比服务使用的库**
 
@@ -3036,7 +3036,7 @@ ab -n 100000 -c 500 -k -l http://127.0.0.1:8080/
 - Spring Boot：`org.springframework.boot:spring-boot-starter-web`（Tomcat + Jackson）
 - Flask：`flask==3.0.3`（运行时 `gunicorn==23.0.0`）
 
-**具体步骤（本次执行口径）**
+**具体步骤 (本次执行口径)**
 
 ```bash
 # 0) 环境
@@ -3044,7 +3044,7 @@ export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
 export PATH=$JAVA_HOME/bin:$PATH
 
 # 1) Colleen（7070）
-cd /home/runner/work/colleen/colleen/examples/benchmark-api
+cd <repository-root>/examples/benchmark-api
 mvn compile exec:java -Dkotlin.compiler.jdkHome=$JAVA_HOME
 
 # 2) Spring Boot（8081） - 本次对照代码放在 /tmp，避免污染仓库
