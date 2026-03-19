@@ -25,6 +25,7 @@ mvn compile exec:java -Dkotlin.compiler.jdkHome=$JAVA_HOME
 ```
 
 Service listens on `127.0.0.1:7070`.
+`-Dkotlin.compiler.jdkHome=$JAVA_HOME` is included to match this repository's Kotlin build configuration.
 
 ## Comparison setup used for this benchmark
 
@@ -34,11 +35,44 @@ To keep repository changes minimal, comparison services were created in `/tmp`:
 - Flask `3.0.3` + gunicorn `23.0.0` on `127.0.0.1:8082`
   - gunicorn command: `gunicorn -w 4 -k gthread --threads 8 -b 127.0.0.1:8082 app:app`
 
+For reproducibility, both temporary comparison services implemented the same baseline endpoint contracts:
+
+- `GET /text` -> plain text `"ok"`
+- `GET /json` -> JSON with fields `ok`, `framework`, `ts`
+- `POST /upload` -> JSON with fields `uploaded`, `name`, `size`, `contentType`
+
+Minimal Flask app used in `/tmp/bench-compare/flask/app.py`:
+
+```python
+from flask import Flask, request, jsonify
+import time
+
+app = Flask(__name__)
+
+@app.get('/text')
+def text():
+    return 'ok'
+
+@app.get('/json')
+def json_endpoint():
+    return jsonify({'ok': True, 'framework': 'flask', 'ts': int(time.time() * 1000)})
+
+@app.post('/upload')
+def upload():
+    f = request.files.get('file')
+    return jsonify({
+        'uploaded': f is not None,
+        'name': getattr(f, 'filename', None),
+        'size': len(f.read()) if f is not None else None,
+        'contentType': getattr(f, 'content_type', None),
+    })
+```
+
 ## Benchmark methodology
 
-Environment:
+Environment used for the measured results below:
 
-- OS: Linux (GitHub Actions runner)
+- OS: Linux (GitHub Actions runner in this sample run)
 - CPU: 4 vCPU
 - JDK: Temurin 21 (`/usr/lib/jvm/temurin-21-jdk-amd64`)
 - Tool: ApacheBench (`ab`)
@@ -69,6 +103,20 @@ Scenarios:
 ## Commands (example)
 
 ```bash
+# build benchmark request payload files once (Linux/macOS shell)
+head -c 1048576 /dev/urandom > /tmp/bench-compare/1mb.bin
+# If /dev/urandom is unavailable, use any other method to generate a 1MB file.
+cat > /tmp/bench-compare/body.json <<'JSON'
+{"userId":123,"name":"bench","tags":["a","b","c"]}
+JSON
+{
+  printf -- '------benchboundary\r\n'
+  printf -- 'Content-Disposition: form-data; name="file"; filename="1mb.bin"\r\n'
+  printf -- 'Content-Type: application/octet-stream\r\n\r\n'
+  cat /tmp/bench-compare/1mb.bin
+  printf -- '\r\n------benchboundary--\r\n'
+} > /tmp/bench-compare/upload-multipart.body
+
 # warm-up (cross-framework baseline, one service port)
 ab -k -n 2000 -c 100 http://127.0.0.1:<port>/text
 ab -k -n 2000 -c 100 http://127.0.0.1:<port>/json
@@ -117,5 +165,5 @@ ab -k -n 800 -c 40 http://127.0.0.1:7070/json-stream
 - These numbers are from one fixed environment and one config set; they are **not universal rankings**.
 - Spring Boot and Flask are compared only on baseline common endpoints (`/text`, `/json`, `/upload`).
 - `extractAuto` and `json-stream` are reported as Colleen-only feature scenarios.
-- Flask + gunicorn results are in a more plausible range after re-running with consistent scenario coverage and reporting methodology.
+- Flask + gunicorn results use the same scenario coverage and measurement process as the other frameworks.
 - Re-test on your own hardware and production-like tuning before making architecture decisions.
