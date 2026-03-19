@@ -30,6 +30,7 @@
         <module>jooq-sqlite</module>
         <module>custom-extractor</module>
         <module>extractor</module>
+        <module>benchmark-api</module>
         <module>redis</module>
         <module>jdbc</module>
         <module>openapi</module>

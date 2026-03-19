@@ -2721,7 +2721,7 @@ app.config {
         maxThreads = <cpuCount> * 8       // 仅在禁用虚拟线程时生效
 
         // 并发控制
-        maxConcurrentRequests = 0          // 0 = 无限制
+        maxConcurrentRequests = 0          // 0 = 无限制（生产环境建议设置明确上限）
 
         // 请求大小限制
         maxRequestSize = 30 * 1024 * 1024  // 30MB
@@ -2809,7 +2809,7 @@ app.config {
 
 ### 虚拟线程
 
-Colleen 默认启用 Java 21 的虚拟线程（Virtual Threads）。
+Colleen 默认启用虚拟线程（Java 21+），并且在生产/高并发场景下更推荐使用 JDK 25。
 
 虚拟线程在 IO 密集型场景下可以显著提升并发能力，以极低的线程开销支持大量并发任务。
 
@@ -2823,12 +2823,15 @@ Colleen 默认启用 Java 21 的虚拟线程（Virtual Threads）。
 
 发生 pinning 时，载体线程会在阻塞期间保持占用状态，在高并发负载下会大幅降低整体并行度。
 
-较新的 JDK 版本（包括 Java 25）对虚拟线程实现进行了重要改进。尤其是在常见的 `synchronized` 场景下，已不存在早期版本中的 pinning 限制。
+较新的 JDK 版本（尤其是 Java 25）对虚拟线程实现进行了重要改进。尤其是在常见的 `synchronized` 场景下，不再表现出早期版本中的 pinning 行为。
 
 如果应用包含大量 CPU 密集型任务，或依赖存在本地阻塞调用的第三方库，建议进行充分的基准测试。
 在部分负载模型下，平台线程可能提供更稳定、可预测的延迟表现。
 
-在高并发生产环境中，建议优先使用较新的 JDK 版本。
+在高并发生产环境中，建议优先使用 JDK 25。
+如果当前仍使用 JDK 21，请先根据自身流量模型完成压力测试后再上线。
+可复现的基准压测（含更高并发与请求数）可参考：
+`examples/benchmark-api/README.md`。
 
 ### JSON 流式传输
 

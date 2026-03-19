@@ -2703,7 +2703,7 @@ app.config {
         maxThreads = <cpuCount> * 8       // Used only when virtual threads are disabled
 
         // Concurrency
-        maxConcurrentRequests = 0          // 0 = unlimited
+        maxConcurrentRequests = 0          // 0 = unlimited (set an explicit cap in production)
 
         // Request limits
         maxRequestSize = 30 * 1024 * 1024  // 30MB
@@ -2769,7 +2769,7 @@ app.config {
 
 ### Virtual Threads
 
-Colleen enables Java 21 virtual threads by default.
+Colleen enables virtual threads by default (Java 21+), and JDK 25 is recommended for production/high-concurrency workloads.
 
 Virtual threads greatly improve scalability for IO-bound workloads
 by allowing a large number of concurrent tasks with minimal thread overhead.
@@ -2784,15 +2784,17 @@ and prevents it from being reused. Historically, this could occur when:
 When pinning happens, the carrier thread remains tied to the virtual thread
 during the blocking period,which can reduce effective parallelism under high load.
 
-Recent JDK releases (including Java 25) have significantly improved virtual thread implementation.
-In particular, common cases such as `synchronized` blocks
-no longer cause the same pinning limitations as earlier versions.
+Recent JDK releases (especially Java 25) have significantly improved virtual thread implementation.
+In particular, common cases such as `synchronized` blocks no longer show the same pinning behavior seen on older runtimes.
 
 If your application performs heavy CPU-bound work
 or relies on libraries with blocking native calls, benchmark carefully.
 In some workloads, platform threads may provide more predictable latency characteristics.
 
-For high-concurrency production environments, using a recent JDK version is strongly recommended.
+For high-concurrency production environments, use JDK 25 whenever possible.
+If you must stay on JDK 21, run stress tests for your own workload before production rollout.
+For reproducible benchmark profiles (including high-concurrency request plans), see:
+`examples/benchmark-api/README.md`.
 
 ### JSON Streaming
 

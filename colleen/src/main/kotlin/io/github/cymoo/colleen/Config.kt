@@ -18,7 +18,7 @@ data class ServerConfig(
     @JvmField
     var port: Int = 8000,
 
-    /** Whether to use virtual threads (Java 21+). */
+    /** Whether to use virtual threads (Java 21+, JDK 25 recommended for high concurrency). */
     @JvmField
     var useVirtualThreads: Boolean = true,
 
@@ -30,7 +30,7 @@ data class ServerConfig(
     @JvmField
     var maxThreads: Int = Runtime.getRuntime().availableProcessors() * 8,
 
-    /** Maximum concurrent requests (default: no limit). */
+    /** Maximum concurrent requests (default: no limit; set an explicit limit in production). */
     @JvmField
     var maxConcurrentRequests: Int = 0,
 
