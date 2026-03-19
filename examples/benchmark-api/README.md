@@ -17,7 +17,7 @@ Source file:
 ## Run Colleen benchmark service
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
+export JAVA_HOME=/usr/lib/jvm/temurin-25-jdk-amd64
 export PATH=$JAVA_HOME/bin:$PATH
 
 cd /home/runner/work/colleen/colleen/examples/benchmark-api
@@ -70,11 +70,11 @@ def upload():
 
 ## Benchmark methodology
 
-Environment used for the measured results below:
+Recommended environment for benchmark runs:
 
 - OS: Linux (GitHub Actions runner in this sample run)
 - CPU: 4 vCPU
-- JDK: Temurin 21 (`/usr/lib/jvm/temurin-21-jdk-amd64`)
+- JDK: Temurin 25 (`/usr/lib/jvm/temurin-25-jdk-amd64`)
 - Tool: ApacheBench (`ab`)
 
 Method:
@@ -86,6 +86,11 @@ Method:
 3. Warm up each framework before sampling.
 4. Sample the same request count and concurrency per scenario.
 5. Report throughput and latency percentiles (`P50`, `P95`, `P99`) plus failures.
+
+> Why JDK 25?
+>
+> For high-concurrency virtual-thread workloads, JDK 25 is recommended.
+> JDK 21 may show extra noise caused by older virtual-thread pinning behavior in some scenarios.
 
 Scenarios:
 
@@ -135,9 +140,23 @@ ab -p /tmp/bench-compare/upload-multipart.body \
 ab -p /tmp/bench-compare/body.json -T application/json -k -n 9000 -c 120 \
   "http://127.0.0.1:7070/extract/auto?q=abc&page=2"
 ab -k -n 800 -c 40 http://127.0.0.1:7070/json-stream
+
+# high-concurrency sample (recommended additional stress profile)
+# note: keep `maxConcurrentRequests = 0` (or set it above these levels) during this profile.
+ab -k -n 60000 -c 500 http://127.0.0.1:<port>/text
+ab -k -n 60000 -c 500 http://127.0.0.1:<port>/json
+ab -p /tmp/bench-compare/upload-multipart.body \
+  -T "multipart/form-data; boundary=----benchboundary" \
+  -k -n 1200 -c 60 http://127.0.0.1:<port>/upload
+ab -p /tmp/bench-compare/body.json -T application/json -k -n 30000 -c 300 \
+  "http://127.0.0.1:7070/extract/auto?q=abc&page=2"
+ab -k -n 3000 -c 120 http://127.0.0.1:7070/json-stream
 ```
 
 ## Measured results
+
+The tables below are historical sample numbers from the baseline profile.
+Use them only as a reference format, and re-run all scenarios on your own environment (preferably JDK 25) for decision-making.
 
 ### A) Cross-framework baseline
 
