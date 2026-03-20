@@ -23,6 +23,7 @@
         <module>signed-cookie</module>
         <module>upload-app</module>
         <module>sse</module>
+        <module>websocket</module>
         <module>event-system</module>
         <module>error-handling</module>
         <module>validator</module>

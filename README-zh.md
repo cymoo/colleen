@@ -277,6 +277,7 @@ Colleen 提供了一组完整示例，覆盖常见功能与集成方式：
 - **[redis](examples/redis/src/main/kotlin/Main.kt)** - Redis 集成示例，包含可配置 TTL 的响应缓存中间件
 - **[signed-cookie](examples/signed-cookie/src/main/kotlin/Main.kt)** - 加密签名 Cookie，支持密钥轮换
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events 实现实时推送，包含保活与连接生命周期管理
+- **[websocket](examples/websocket/src/main/kotlin/Main.kt)** - WebSocket 示例，包含 Echo、多房间广播聊天、二进制消息、中间件鉴权与 @Ws 控制器风格
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - 子应用架构示例，支持独立中间件、服务与错误处理
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient 使用示例
 - **[validator](examples/validator/src/main/kotlin/Main.kt)** - Validator 使用示例
@@ -1112,6 +1113,116 @@ app.get("/events") { ctx ->
 ```
 
 > SSE 连接会保持打开状态，直到 handler 执行完成或客户端主动断开连接。
+
+---
+
+## WebSocket
+
+Colleen 提供全双工 WebSocket 支持。WebSocket 路由通过 `app.ws()` 注册，并与 HTTP 路由**共享同一中间件链**，因此鉴权、CORS、日志等中间件在握手阶段会自动生效。
+
+### 函数式风格
+
+```kotlin
+app.ws("/chat/{room}") { conn ->
+    val room = conn.pathParam("room")  ?: "default"
+    val nick = conn.query("nickname")  ?: "anonymous"
+
+    conn.onOpen {
+        conn.send("欢迎加入 $room，$nick！")
+    }
+
+    conn.onMessage { msg ->
+        when (msg) {
+            is WebSocketMessage.Text   -> conn.send("Echo: ${msg.text()}")
+            is WebSocketMessage.Binary -> conn.send(msg.bytes())
+        }
+    }
+
+    conn.onClose { reason ->
+        println("连接关闭：code=${reason.code} reason='${reason.reason}'")
+    }
+
+    conn.onError { err ->
+        println("错误：${err.message}")
+    }
+}
+```
+
+### 控制器风格
+
+```kotlin
+@Controller("/realtime")
+class RealtimeController {
+
+    @Ws("/chat/{room}")
+    fun chat(conn: WebSocketConnection) {
+        val room = conn.pathParam("room") ?: "default"
+        conn.onMessage { msg ->
+            conn.send("Echo: ${(msg as WebSocketMessage.Text).text()}")
+        }
+    }
+}
+
+app.addController(RealtimeController())
+```
+
+### 路由分组
+
+```kotlin
+app.group("/api/v1") {
+    ws("/notifications") { conn ->
+        conn.onMessage { msg -> /* ... */ }
+    }
+}
+```
+
+### 中间件集成
+
+HTTP 中间件在 WebSocket 握手请求阶段执行（升级协议之前）。中间件通过 `ctx.setState()` 设置的状态，可在连接建立后通过 `conn.attribute()` 读取。
+
+```kotlin
+// 鉴权中间件设置 userId
+app.use("/admin") { ctx, next ->
+    val token = ctx.header("Authorization") ?: throw Unauthorized()
+    ctx.setState("userId", verifyToken(token))
+    next()
+}
+
+// WS handler 中读取已验证的 userId
+app.ws("/admin/live") { conn ->
+    val userId = conn.attribute<String>("userId")
+    conn.onMessage { msg -> /* ... */ }
+}
+```
+
+> 若请求不包含 `Upgrade: websocket` 请求头，Colleen 将返回 **426 Upgrade Required**，不会执行 WebSocket handler。
+
+### 连接属性
+
+| 属性 / 方法 | 说明 |
+|---|---|
+| `conn.pathParams` | 路由模式中的路径参数 |
+| `conn.queryString` | 握手 URL 中的原始查询字符串 |
+| `conn.headers` | 握手请求的 HTTP 头（小写，取首个值） |
+| `conn.attributes` | 握手时中间件设置的上下文状态快照 |
+| `conn.pathParam(name)` | 按名称获取单个路径参数 |
+| `conn.query(name)` | 按名称获取单个查询参数 |
+| `conn.attribute<T>(key)` | 按键获取类型化的中间件属性 |
+| `conn.send(text)` | 发送文本帧（线程安全） |
+| `conn.send(bytes)` | 发送二进制帧（线程安全） |
+| `conn.close(code, reason)` | 关闭连接，可指定 code 与 reason |
+| `conn.isClosed` | 连接是否已关闭 |
+
+### 配置项
+
+```kotlin
+app.config {
+    server {
+        wsIdleTimeout           = 300_000   // 空闲超时：5 分钟（毫秒）
+        maxWebSocketMessageSize = 64 * 1024 // 单条消息最大 64 KB
+    }
+}
+```
 
 ---
 

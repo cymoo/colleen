@@ -290,6 +290,8 @@ Colleen comes with comprehensive examples demonstrating various features and int
   support
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events for real-time server push with keep-alive and
   connection lifecycle handling
+- **[websocket](examples/websocket/src/main/kotlin/Main.kt)** - WebSocket support with echo, multi-room broadcast chat,
+  binary messages, middleware auth, and controller-style @Ws handlers
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - Modular application architecture with independent
   middleware, error handling, and service
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient usage for application testing
@@ -1144,6 +1146,120 @@ app.get("/events") { ctx ->
 ```
 
 > The SSE connection remains open until the handler completes or the client disconnects.
+
+---
+
+## WebSocket
+
+Colleen provides full-duplex WebSocket support. WebSocket routes are registered with
+`app.ws()` and pass through the **same middleware chain** as HTTP routes, so authentication,
+CORS, and logging work automatically during the handshake.
+
+### Functional style
+
+```kotlin
+app.ws("/chat/{room}") { conn ->
+    val room  = conn.pathParam("room")  ?: "default"
+    val nick  = conn.query("nickname")  ?: "anonymous"
+
+    conn.onOpen {
+        conn.send("Welcome to $room, $nick!")
+    }
+
+    conn.onMessage { msg ->
+        when (msg) {
+            is WebSocketMessage.Text   -> conn.send("Echo: ${msg.text()}")
+            is WebSocketMessage.Binary -> conn.send(msg.bytes())
+        }
+    }
+
+    conn.onClose { reason ->
+        println("Closed: code=${reason.code} reason='${reason.reason}'")
+    }
+
+    conn.onError { err ->
+        println("Error: ${err.message}")
+    }
+}
+```
+
+### Controller style
+
+```kotlin
+@Controller("/realtime")
+class RealtimeController {
+
+    @Ws("/chat/{room}")
+    fun chat(conn: WebSocketConnection) {
+        val room = conn.pathParam("room") ?: "default"
+        conn.onMessage { msg ->
+            conn.send("Echo: ${(msg as WebSocketMessage.Text).text()}")
+        }
+    }
+}
+
+app.addController(RealtimeController())
+```
+
+### Route grouping
+
+```kotlin
+app.group("/api/v1") {
+    ws("/notifications") { conn ->
+        conn.onMessage { msg -> /* ... */ }
+    }
+}
+```
+
+### Middleware integration
+
+HTTP middlewares run during the WebSocket handshake request, before the connection is
+upgraded. State set by middleware is accessible on the connection via `conn.attribute()`.
+
+```kotlin
+// Auth middleware sets the userId on the context
+app.use("/admin") { ctx, next ->
+    val token = ctx.header("Authorization") ?: throw Unauthorized()
+    ctx.setState("userId", verifyToken(token))
+    next()
+}
+
+// WS handler receives the verified userId
+app.ws("/admin/live") { conn ->
+    val userId = conn.attribute<String>("userId")
+    conn.onMessage { msg -> /* ... */ }
+}
+```
+
+> If the incoming request does not contain an `Upgrade: websocket` header, Colleen
+> returns **426 Upgrade Required** instead of executing the WebSocket handler.
+
+### Connection properties
+
+| Property / Method | Description |
+|---|---|
+| `conn.pathParams` | Path parameters from the route pattern |
+| `conn.queryString` | Raw query string from the handshake URL |
+| `conn.headers` | HTTP headers from the handshake request (lowercase, first value) |
+| `conn.attributes` | Middleware-set context state (snapshot at handshake time) |
+| `conn.pathParam(name)` | Single path parameter by name |
+| `conn.query(name)` | Single query parameter by name |
+| `conn.attribute<T>(key)` | Typed middleware attribute by key |
+| `conn.send(text)` | Send a text frame (thread-safe) |
+| `conn.send(bytes)` | Send a binary frame (thread-safe) |
+| `conn.close(code, reason)` | Close with optional code + reason |
+| `conn.isClosed` | Whether the connection is closed |
+
+### Configuration
+
+```kotlin
+app.config {
+    server {
+        wsIdleTimeout          = 300_000   // 5 minutes (milliseconds)
+        maxWebSocketMessageSize = 64 * 1024 // 64 KB
+    }
+}
+```
 
 ---
 

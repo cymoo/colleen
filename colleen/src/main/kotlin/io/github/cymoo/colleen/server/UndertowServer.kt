@@ -31,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Consumer
 import kotlin.io.bufferedWriter
 import kotlin.io.copyTo
@@ -116,6 +117,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
      * - Long-lived tasks
      * - Uses virtual threads when enabled, otherwise daemon platform threads
      */
+    private val wsThreadCounter = AtomicInteger(0)
     private val wsExecutor by lazy {
         if (config.useVirtualThreads) {
             Executors.newVirtualThreadPerTaskExecutor()
@@ -123,7 +125,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             Executors.newCachedThreadPool { runnable ->
                 Thread(runnable).apply {
                     isDaemon = true
-                    name = "ws-worker-${System.currentTimeMillis()}"
+                    name = "ws-worker-${wsThreadCounter.incrementAndGet()}"
                 }
             }
         }

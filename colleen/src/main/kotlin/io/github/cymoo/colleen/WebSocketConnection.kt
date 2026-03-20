@@ -14,7 +14,7 @@ sealed class WebSocketMessage {
     class Text(private val data: String) : WebSocketMessage() {
         fun text(): String = data
         fun bytes(): ByteArray = data.toByteArray(Charsets.UTF_8)
-        override fun toString() = "WebSocketMessage.Text(${data.take(64)})"
+        override fun toString() = "WebSocketMessage.Text(${data.take(64)}${if (data.length > 64) "..." else ""})"
     }
 
     /** A binary WebSocket frame. */
