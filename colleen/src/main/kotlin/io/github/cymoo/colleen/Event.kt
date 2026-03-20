@@ -72,6 +72,12 @@ sealed class Event(
     /** Emitted when a WebSocket route node is registered. */
     class WebSocketRouteRegistered(val node: RouteNode) : Event()
 
+    /** Emitted when a WebSocket connection is established (after the onOpen callback fires). */
+    class WebSocketConnected(val path: String, val conn: WebSocketConnection) : Event()
+
+    /** Emitted when a WebSocket connection is closed (after all onClose callbacks fire). */
+    class WebSocketDisconnected(val path: String, val conn: WebSocketConnection, val reason: WebSocketCloseReason) : Event()
+
     /** Emitted when a controller instance is registered. */
     class ControllerRegistered(val prefix: String, val obj: Any) : Event()
 

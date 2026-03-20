@@ -364,6 +364,8 @@ sealed class ResponseBody {
     class WebSocket(
         val handler: Consumer<WebSocketConnection>,
         val attributes: Map<String, Any?>,
+        val onConnected: ((WebSocketConnection) -> Unit)? = null,
+        val onDisconnected: ((WebSocketConnection, WebSocketCloseReason) -> Unit)? = null,
     ) : ResponseBody() {
         override fun materialize(ctx: Context) = RawResponseBody.WebSocket(
             handler = handler,
@@ -371,6 +373,8 @@ sealed class ResponseBody {
             pathParams = ctx.pathParams.toMap(),
             queryString = ctx.request.queryString,
             headers = buildHeaders(ctx.request.headers),
+            onConnected = onConnected,
+            onDisconnected = onDisconnected,
         )
 
         companion object {
@@ -409,6 +413,8 @@ sealed class RawResponseBody {
         val pathParams: Map<String, String>,
         val queryString: String,
         val headers: Map<String, String>,
+        val onConnected: ((WebSocketConnection) -> Unit)? = null,
+        val onDisconnected: ((WebSocketConnection, WebSocketCloseReason) -> Unit)? = null,
     ) : RawResponseBody()
 }
 

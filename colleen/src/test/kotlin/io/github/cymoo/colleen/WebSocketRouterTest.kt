@@ -236,4 +236,124 @@ class WebSocketRouterTest {
         // WS routes should not appear in allowed methods, so 404 not 405
         assertEquals(404, ctx.response.status)
     }
+
+    // -----------------------------------------------------------------------
+    // WebSocket lifecycle events
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `RawResponseBody WebSocket carries onConnected callback when set via ws()`() {
+        val app = makeApp()
+        app.ws("/events") { _ -> }
+
+        val ctx = Context(request = wsRequest("/events"), app = app)
+        app.handleRequest(ctx)
+
+        val wsBody = ctx.response.materializedBody as RawResponseBody.WebSocket
+        // Event callbacks are wired internally — the callback should be non-null
+        assertNotNull(wsBody.onConnected)
+        assertNotNull(wsBody.onDisconnected)
+    }
+
+    @Test
+    fun `WebSocketConnected event is emitted when onConnected callback is invoked`() {
+        val app = makeApp()
+        app.ws("/live") { _ -> }
+
+        var connectedEvent: Event.WebSocketConnected? = null
+        app.on<Event.WebSocketConnected> { connectedEvent = it }
+
+        val ctx = Context(request = wsRequest("/live"), app = app)
+        app.handleRequest(ctx)
+
+        val wsBody = ctx.response.materializedBody as RawResponseBody.WebSocket
+        // Simulate the server calling onConnected after the upgrade
+        val adapter = object : WebSocketChannelAdapter {
+            override fun sendText(text: String) {}
+            override fun sendBinary(bytes: ByteArray) {}
+            override fun close(code: Int, reason: String) {}
+            override val isClosed = false
+            override fun close() {}
+        }
+        val conn = WebSocketConnection(adapter, wsBody.pathParams, wsBody.queryString, wsBody.headers, wsBody.attributes)
+        wsBody.onConnected!!.invoke(conn)
+
+        assertNotNull(connectedEvent)
+        assertEquals("/live", connectedEvent!!.path)
+        assertEquals(conn, connectedEvent!!.conn)
+    }
+
+    @Test
+    fun `WebSocketDisconnected event is emitted when onDisconnected callback is invoked`() {
+        val app = makeApp()
+        app.ws("/live") { _ -> }
+
+        var disconnectedEvent: Event.WebSocketDisconnected? = null
+        app.on<Event.WebSocketDisconnected> { disconnectedEvent = it }
+
+        val ctx = Context(request = wsRequest("/live"), app = app)
+        app.handleRequest(ctx)
+
+        val wsBody = ctx.response.materializedBody as RawResponseBody.WebSocket
+        val adapter = object : WebSocketChannelAdapter {
+            override fun sendText(text: String) {}
+            override fun sendBinary(bytes: ByteArray) {}
+            override fun close(code: Int, reason: String) {}
+            override val isClosed = false
+            override fun close() {}
+        }
+        val conn = WebSocketConnection(adapter, wsBody.pathParams, wsBody.queryString, wsBody.headers, wsBody.attributes)
+        val reason = WebSocketCloseReason(1000, "normal")
+        wsBody.onDisconnected!!.invoke(conn, reason)
+
+        assertNotNull(disconnectedEvent)
+        assertEquals("/live", disconnectedEvent!!.path)
+        assertEquals(conn, disconnectedEvent!!.conn)
+        assertEquals(reason, disconnectedEvent!!.reason)
+    }
+
+    @Test
+    fun `WebSocket events carry normalized route path`() {
+        val app = makeApp()
+        app.ws("/chat/") { _ -> }  // trailing slash — should be normalized
+
+        var connectedPath: String? = null
+        app.on<Event.WebSocketConnected> { connectedPath = it.path }
+
+        val ctx = Context(request = wsRequest("/chat"), app = app)
+        app.handleRequest(ctx)
+
+        val wsBody = ctx.response.materializedBody as RawResponseBody.WebSocket
+        val adapter = object : WebSocketChannelAdapter {
+            override fun sendText(text: String) {}
+            override fun sendBinary(bytes: ByteArray) {}
+            override fun close(code: Int, reason: String) {}
+            override val isClosed = false
+            override fun close() {}
+        }
+        val conn = WebSocketConnection(adapter, wsBody.pathParams, wsBody.queryString, wsBody.headers, wsBody.attributes)
+        wsBody.onConnected!!.invoke(conn)
+
+        // Normalized path has no trailing slash
+        assertEquals("/chat", connectedPath)
+    }
+
+    @Test
+    fun `controller @Ws routes also carry WebSocket event callbacks`() {
+        @Controller("/rt")
+        class RtController {
+            @Ws("/events")
+            fun events(conn: WebSocketConnection) {}
+        }
+
+        val app = makeApp()
+        app.addController(RtController())
+
+        val ctx = Context(request = wsRequest("/rt/events"), app = app)
+        app.handleRequest(ctx)
+
+        val wsBody = ctx.response.materializedBody as RawResponseBody.WebSocket
+        assertNotNull(wsBody.onConnected)
+        assertNotNull(wsBody.onDisconnected)
+    }
 }

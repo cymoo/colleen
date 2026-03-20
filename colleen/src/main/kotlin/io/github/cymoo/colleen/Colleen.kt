@@ -456,9 +456,19 @@ class Colleen {
      * ```
      */
     fun ws(path: String, handler: java.util.function.Consumer<WebSocketConnection>) {
+        val routePath = UrlPath.normalize(path)
         addRoute(
             RouteNode.of("WS", path, RouteHandler.Lambda { ctx ->
-                ResponseBody.WebSocket(handler, ctx.stateMap())
+                ResponseBody.WebSocket(
+                    handler = handler,
+                    attributes = ctx.stateMap(),
+                    onConnected = { conn ->
+                        ctx.app.eventBus.emit(Event.WebSocketConnected(routePath, conn))
+                    },
+                    onDisconnected = { conn, reason ->
+                        ctx.app.eventBus.emit(Event.WebSocketDisconnected(routePath, conn, reason))
+                    },
+                )
             })
         )
     }

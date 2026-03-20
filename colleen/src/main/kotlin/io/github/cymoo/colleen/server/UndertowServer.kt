@@ -31,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Consumer
 import kotlin.io.bufferedWriter
@@ -138,7 +139,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         ConcurrentHashMap.newKeySet()
 
     /** Whether [wsExecutor] has been initialized (i.e., at least one WS connection was handled). */
-    private var wsExecutorInitialized = false
+    private val wsExecutorInitialized = AtomicBoolean(false)
 
     /**
      * Starts the HTTP server.
@@ -206,7 +207,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         }
 
         // 6. Shutdown WS executor
-        if (wsExecutorInitialized) {
+        if (wsExecutorInitialized.get()) {
             wsExecutor.shutdown()
             wsExecutor.awaitTermination(config.shutdownTimeout, TimeUnit.MILLISECONDS)
         }
@@ -477,7 +478,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
      * - Registers a receive listener and starts receiving frames.
      */
     private fun handleWebSocketResponse(body: RawResponseBody.WebSocket, exchange: HttpServerExchange) {
-        wsExecutorInitialized = true
+        wsExecutorInitialized.set(true)
 
         val handshakeHandler = WebSocketProtocolHandshakeHandler(
             object : WebSocketConnectionCallback {
@@ -499,27 +500,35 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
                     // Apply configured limits
                     wsChannel.setIdleTimeout(config.wsIdleTimeout)
 
-                    // Run user handler in wsExecutor to register callbacks.
-                    // Wait for completion so callbacks are registered before we start
-                    // accepting frames and fire dispatchOpen().
-                    val setup = wsExecutor.submit<Unit> {
+                    // Dispatch all post-handshake work to the wsExecutor so the
+                    // Undertow I/O thread is not blocked during user handler setup
+                    // or the onOpen callback.
+                    wsExecutor.submit {
+                        // Run user handler to register callbacks (onMessage, onClose, etc.)
                         try {
                             body.handler.accept(connection)
                         } catch (e: Exception) {
                             logger.error("WebSocket handler error", e)
                         }
-                    }
 
-                    try {
-                        setup.get()
-                    } catch (_: Exception) {
-                        // Handler setup failed; proceed anyway (connection will be closed soon)
-                    }
+                        // Register framework's onDisconnected AFTER the user handler so
+                        // it fires last among all onClose callbacks.
+                        body.onDisconnected?.let { dis ->
+                            connection.onClose(Consumer { reason ->
+                                runCatching { dis(connection, reason) }
+                            })
+                        }
 
-                    // Callbacks are now registered. Start receiving and fire onOpen.
-                    wsChannel.receiveSetter.set(UndertowWsReceiveListener(connection, config.maxWebSocketMessageSize))
-                    wsChannel.resumeReceives()
-                    connection.dispatchOpen()
+                        // Callbacks are now registered. Start receiving and fire onOpen.
+                        wsChannel.receiveSetter.set(UndertowWsReceiveListener(connection, config.maxWebSocketMessageSize))
+                        wsChannel.resumeReceives()
+                        connection.dispatchOpen()
+
+                        // Emit connected event after dispatchOpen (i.e., after user's onOpen fires).
+                        body.onConnected?.let { con ->
+                            runCatching { con(connection) }
+                        }
+                    }
                 }
             }
         )
@@ -571,12 +580,14 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         }
 
         override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-            val data = message.data.resource
-            val bytes = ByteBuffer.allocate(data.sumOf { it.remaining() }).also { buf ->
-                data.forEach { buf.put(it) }
-                buf.flip()
-            }.let { buf ->
-                ByteArray(buf.remaining()).also { buf.get(it) }
+            val buffers = message.data.resource
+            val total = buffers.sumOf { it.remaining() }
+            val bytes = ByteArray(total)
+            var offset = 0
+            buffers.forEach { buf ->
+                val len = buf.remaining()
+                buf.get(bytes, offset, len)
+                offset += len
             }
             connection.dispatchMessage(WebSocketMessage.Binary(bytes))
         }

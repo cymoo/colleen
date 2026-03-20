@@ -1,5 +1,6 @@
 import io.github.cymoo.colleen.Colleen
 import io.github.cymoo.colleen.Controller
+import io.github.cymoo.colleen.Event
 import io.github.cymoo.colleen.WebSocketConnection
 import io.github.cymoo.colleen.WebSocketMessage
 import io.github.cymoo.colleen.Ws
@@ -17,6 +18,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - Connection lifecycle (onOpen / onMessage / onClose / onError)
  * - Middleware integration (auth token check before upgrade)
  * - Controller-style WebSocket handler via @Ws annotation
+ * - WebSocketConnected / WebSocketDisconnected lifecycle events
  * - Browser-based chat client served at "/"
  */
 
@@ -186,6 +188,25 @@ fun main() {
             wsIdleTimeout = 300_000        // 5 minutes
             maxWebSocketMessageSize = 64 * 1024  // 64 KB
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Lifecycle event observers
+    // -------------------------------------------------------------------------
+
+    // Log every new WebSocket connection
+    app.on<Event.WebSocketConnected> { event ->
+        println("[event] WebSocketConnected  path=${event.path}")
+    }
+
+    // Log every WebSocket disconnection with close reason
+    app.on<Event.WebSocketDisconnected> { event ->
+        println("[event] WebSocketDisconnected path=${event.path} code=${event.reason.code} reason='${event.reason.reason}'")
+    }
+
+    // Log when a new WS route is registered
+    app.on<Event.WebSocketRouteRegistered> { event ->
+        println("[event] WebSocketRouteRegistered path=${event.node.path}")
     }
 
     app.listen(8000)

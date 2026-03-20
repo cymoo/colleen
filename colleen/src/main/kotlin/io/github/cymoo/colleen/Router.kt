@@ -832,14 +832,32 @@ internal class Router {
                         val wsConsumer = java.util.function.Consumer<WebSocketConnection> { conn ->
                             fn.call(obj, conn)
                         }
-                        ResponseBody.WebSocket(wsConsumer, ctx.stateMap())
+                        ResponseBody.WebSocket(
+                            handler = wsConsumer,
+                            attributes = ctx.stateMap(),
+                            onConnected = { conn ->
+                                ctx.app.eventBus.emit(Event.WebSocketConnected(path, conn))
+                            },
+                            onDisconnected = { conn, reason ->
+                                ctx.app.eventBus.emit(Event.WebSocketDisconnected(path, conn, reason))
+                            },
+                        )
                     }
                 } else {
                     { ctx ->
                         val wsConsumer = java.util.function.Consumer<WebSocketConnection> { conn ->
                             handler.invoke(obj, conn)
                         }
-                        ResponseBody.WebSocket(wsConsumer, ctx.stateMap())
+                        ResponseBody.WebSocket(
+                            handler = wsConsumer,
+                            attributes = ctx.stateMap(),
+                            onConnected = { conn ->
+                                ctx.app.eventBus.emit(Event.WebSocketConnected(path, conn))
+                            },
+                            onDisconnected = { conn, reason ->
+                                ctx.app.eventBus.emit(Event.WebSocketDisconnected(path, conn, reason))
+                            },
+                        )
                     }
                 }
                 addRoute(RouteNode.of("WS", path, RouteHandler.Lambda(Handler(wsHandler))))
