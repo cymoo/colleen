@@ -500,6 +500,21 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
                     // Apply configured limits
                     wsChannel.setIdleTimeout(config.wsIdleTimeout)
 
+                    // The global Undertow socket options (Options.READ_TIMEOUT /
+                    // Options.WRITE_TIMEOUT) are inherited by every channel, including
+                    // upgraded WebSocket channels.  At the default of 30 s they would
+                    // close idle WebSocket connections with code 1006 (abnormal closure)
+                    // because the underlying TCP connection is torn down without a proper
+                    // WebSocket close frame.  For WebSocket connections, inactivity is
+                    // managed by setIdleTimeout() above, so we reset the lower-level
+                    // socket timeouts to 0 (infinite) here.
+                    try {
+                        wsChannel.setOption(Options.READ_TIMEOUT, 0)
+                        wsChannel.setOption(Options.WRITE_TIMEOUT, 0)
+                    } catch (e: IOException) {
+                        logger.warn("Failed to reset socket timeouts on WebSocket channel", e)
+                    }
+
                     // Dispatch all post-handshake work to the wsExecutor so the
                     // Undertow I/O thread is not blocked during user handler setup
                     // or the onOpen callback.
