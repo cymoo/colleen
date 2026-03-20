@@ -844,6 +844,19 @@ class BearerToken(value: String?) : ParamExtractor<String?>(value) {
                 BearerToken(token)
             }
         }
+
+        // Describe how this extractor appears in the OpenAPI spec.
+        // Return null (the default) to exclude it from the spec.
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "Authorization",
+                    location = "header",
+                    schema = mapOf("type" to "string"),
+                    description = "Bearer token. Format: `Bearer <token>`",
+                )
+            )
+        )
     }
 
     /**
@@ -864,6 +877,8 @@ fun getProfile(token: BearerToken): Map<String, Any> {
     // ...
 }
 ```
+
+When using `app.openApi()`, the `Authorization` header will automatically appear in the generated spec.
 
 > Custom extractors are designed to move request-specific logic
 > out of handlers and into reusable, testable components.
@@ -2344,7 +2359,6 @@ Colleen can generate OpenAPI specs directly from registered routes.
 
 ```kotlin
 import io.github.cymoo.colleen.*
-import io.github.cymoo.colleen.extension.*
 
 fun main() {
     val app = Colleen()

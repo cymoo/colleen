@@ -1,9 +1,9 @@
-package io.github.cymoo.colleen.extension
+package io.github.cymoo.colleen
 
-import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.util.http.UrlPath
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
+import java.lang.reflect.Parameter
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
 import java.math.BigDecimal
@@ -28,6 +28,59 @@ import kotlin.reflect.jvm.javaMethod
  * - [FALSE] — explicitly mark as optional / nullable.
  */
 enum class OptionalBool { UNSET, TRUE, FALSE }
+
+// ============================================================================
+// Custom Extractor OpenAPI Spec Data Classes
+// ============================================================================
+
+/**
+ * Describes how a custom extractor maps to OpenAPI spec elements.
+ * Returned by [ExtractorFactory.describeOpenApi].
+ *
+ * Either [parameters] or [requestBody] (or both) may be provided.
+ * Return `null` from `describeOpenApi` to skip the extractor entirely.
+ */
+data class OpenApiParamSpec(
+    val parameters: List<OpenApiParameter> = emptyList(),
+    val requestBody: OpenApiRequestBody? = null,
+)
+
+/**
+ * Describes a single OpenAPI parameter (query, header, cookie, or path).
+ *
+ * @param name       Parameter name as it appears in the OpenAPI spec
+ * @param location   One of "query", "header", "cookie", or "path"
+ * @param schema     Static schema map (used when [schemaType] is null)
+ * @param required   Explicit required flag; null means defer to the framework's inferred value
+ * @param description Optional description for this parameter
+ * @param schemaType If set, [OpenApi.kt] will call `typeToSchema()` on this [Type] to
+ *                   produce the schema instead of using [schema]. Use this when the schema
+ *                   depends on the Kotlin/Java generic type at the call site.
+ */
+data class OpenApiParameter(
+    val name: String,
+    val location: String,
+    val schema: Map<String, Any> = mapOf("type" to "string"),
+    val required: Boolean? = null,
+    val description: String? = null,
+    val schemaType: Type? = null,
+)
+
+/**
+ * Describes a request body for an OpenAPI operation.
+ *
+ * @param contentType MIME type (e.g. "application/json", "multipart/form-data")
+ * @param schema      Static schema map (used when [schemaType] is null)
+ * @param description Optional description for the request body
+ * @param schemaType  If set, [OpenApi.kt] will call `typeToSchema()` on this [Type]
+ *                    to produce the schema instead of using [schema].
+ */
+data class OpenApiRequestBody(
+    val contentType: String,
+    val schema: Map<String, Any> = emptyMap(),
+    val description: String? = null,
+    val schemaType: Type? = null,
+)
 
 // ============================================================================
 // OpenAPI Metadata Annotations
@@ -215,74 +268,13 @@ annotation class Schema(
 annotation class Hidden
 
 // ============================================================================
-// Public Entry Point
-// ============================================================================
-
-/**
- * Enables OpenAPI 3.0.3 specification generation and documentation UI serving.
- *
- * Automatically collects route metadata from the application and all mounted
- * sub-applications, then exposes:
- * - A JSON spec endpoint at [path]
- * - An optional documentation page at [uiPath] (Swagger UI by default)
- *
- * ### Example
- * ```kotlin
- * val app = Colleen()
- * app.openApi(title = "My API", version = "1.0.0")
- *
- * @Summary("Get user by ID")
- * @ResponseDesc(404, "User not found")
- * fun getUser(id: Path<Int>): User { ... }
- *
- * app.get("/users/{id}", ::getUser)
- * app.listen(8000)
- * ```
- *
- * ### Switching to ReDoc
- * ```kotlin
- * app.openApi(uiHtml = ::redocHtml)
- * ```
- *
- * - Lambda handlers produce minimal metadata (path + method only).
- * - KFunction and Java Method handlers produce full parameter documentation.
- */
-@JvmOverloads
-fun Colleen.openApi(
-    path: String = "/openapi.json",
-    uiPath: String? = "/docs",
-    title: String = "API",
-    version: String = "1.0.0",
-    description: String? = null,
-    filter: ((path: String, method: String) -> Boolean)? = null,
-    uiHtml: ((specPath: String) -> String)? = null,
-) {
-    val specPath = UrlPath.normalize(path)
-    val docsPath = uiPath?.let { UrlPath.normalize(it) }
-    val excludedPaths = setOfNotNull(specPath, docsPath)
-
-    get(specPath) {
-        val routes = collectRoutes(this@openApi, "", excludedPaths)
-        buildSpec(routes, title, version, description, filter)
-    }
-
-    if (docsPath != null) {
-        if (uiHtml != null) {
-            get(docsPath) { ctx -> ctx.html(uiHtml(specPath)) }
-        } else {
-            get(docsPath) { ctx -> ctx.html(swaggerUiHtml(specPath)) }
-        }
-    }
-}
-
-// ============================================================================
 // Route Collection
 // ============================================================================
 
-private data class RouteEntry(val fullPath: String, val node: RouteNode)
+internal data class RouteEntry(val fullPath: String, val node: RouteNode)
 
 /** Recursively collects routes from an app and all its mounted sub-apps. */
-private fun collectRoutes(app: Colleen, prefix: String, excluded: Set<String>): List<RouteEntry> {
+internal fun collectRoutes(app: Colleen, prefix: String, excluded: Set<String>): List<RouteEntry> {
     val routes = app.router.routes
         .map { RouteEntry(UrlPath.join(prefix, it.path), it) }
         .filter { it.fullPath !in excluded }
@@ -300,7 +292,7 @@ private fun collectRoutes(app: Colleen, prefix: String, excluded: Set<String>): 
 
 private val HTTP_METHODS = listOf("get", "post", "put", "delete", "patch", "head", "options")
 
-private fun buildSpec(
+internal fun buildSpec(
     routes: List<RouteEntry>,
     title: String,
     version: String,
@@ -355,6 +347,7 @@ private data class ParamDescriptor(
     val isRequired: Boolean,
     val description: String?,
     val requiredOverride: OptionalBool,
+    val javaParam: Parameter,  // the Java reflection parameter, needed for describeOpenApi()
 )
 
 /**
@@ -378,33 +371,36 @@ private fun buildParamEntries(
             OptionalBool.UNSET -> d.isRequired
         }
 
-        when {
-            Path::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "path", typeToSchema(d.innerType, schemas = schemas), required = true, d.description))
+        // Skip non-extractor parameters (e.g. injected services)
+        if (!ParamExtractor::class.java.isAssignableFrom(d.wrapperClass)) continue
 
-            Query::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "query", typeToSchema(d.innerType, schemas = schemas), effectiveRequired, d.description))
+        val factory = runCatching { getExtractorFactory(d.wrapperClass) }.getOrNull() ?: continue
+        val spec = factory.describeOpenApi(d.name, d.javaParam) ?: continue
 
-            Header::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "header", STRING_SCHEMA, effectiveRequired, d.description))
+        for (oaParam in spec.parameters) {
+            val resolvedSchema = if (oaParam.schemaType != null) {
+                typeToSchema(oaParam.schemaType, schemas = schemas)
+            } else {
+                oaParam.schema
+            }
+            // Path params are always required per OpenAPI spec.
+            // Otherwise: use the extractor's explicit hint if set, else fall back to effectiveRequired.
+            val paramRequired = when {
+                oaParam.location == "path" -> true
+                oaParam.required != null -> oaParam.required
+                else -> effectiveRequired
+            }
+            parameters.add(buildParam(oaParam.name, oaParam.location, resolvedSchema, paramRequired, oaParam.description ?: d.description))
+        }
 
-            Cookie::class.java.isAssignableFrom(d.wrapperClass) ->
-                parameters.add(buildParam(d.name, "cookie", STRING_SCHEMA, effectiveRequired, d.description))
-
-            Json::class.java.isAssignableFrom(d.wrapperClass) ->
-                requestBody = buildRequestBody("application/json", typeToSchema(d.innerType, schemas = schemas), d.description)
-
-            Form::class.java.isAssignableFrom(d.wrapperClass) ->
-                requestBody = buildRequestBody("application/x-www-form-urlencoded", typeToSchema(d.innerType, schemas = schemas), d.description)
-
-            Text::class.java.isAssignableFrom(d.wrapperClass) ->
-                requestBody = buildRequestBody("text/plain", STRING_SCHEMA, d.description)
-
-            Stream::class.java.isAssignableFrom(d.wrapperClass) ->
-                requestBody = buildRequestBody("application/octet-stream", BINARY_SCHEMA, d.description)
-
-            UploadedFile::class.java.isAssignableFrom(d.wrapperClass) ->
-                requestBody = buildFileUploadBody(d.name.ifEmpty { "file" }, d.description)
+        if (spec.requestBody != null) {
+            val rb = spec.requestBody
+            val resolvedSchema = if (rb.schemaType != null) {
+                typeToSchema(rb.schemaType, schemas = schemas)
+            } else {
+                rb.schema
+            }
+            requestBody = buildRequestBody(rb.contentType, resolvedSchema, rb.description ?: d.description)
         }
     }
 
@@ -452,6 +448,7 @@ private fun buildOperationFromKFunction(fn: kotlin.reflect.KFunction<*>, schemas
             isRequired = !kParam.isOptional && !kParam.isExtractorValueNullable(),
             description = ann?.description,
             requiredOverride = ann?.required ?: OptionalBool.UNSET,
+            javaParam = jParam,
         )
     }
 
@@ -497,6 +494,7 @@ private fun buildOperationFromJavaMethod(method: Method, schemas: MutableMap<Str
             isRequired = false, // Java has no default parameter concept
             description = ann?.description,
             requiredOverride = ann?.required ?: OptionalBool.UNSET,
+            javaParam = jParam,
         )
     }
 
@@ -561,16 +559,6 @@ private fun buildRequestBody(
     if (!description.isNullOrBlank()) put("description", description)
     put("content", mapOf(contentType to mapOf("schema" to schema)))
 }
-
-private fun buildFileUploadBody(fieldName: String, description: String?): Map<String, Any> =
-    buildRequestBody(
-        "multipart/form-data",
-        mapOf(
-            "type" to "object",
-            "properties" to mapOf(fieldName to mapOf("type" to "string", "format" to "binary"))
-        ),
-        description,
-    )
 
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 private fun buildResponses(
@@ -672,7 +660,6 @@ private fun operationId(declaringClass: Class<*>, method: Method): String {
 private const val MAX_DEPTH = 5
 
 private val STRING_SCHEMA = mapOf<String, Any>("type" to "string")
-private val BINARY_SCHEMA = mapOf<String, Any>("type" to "string", "format" to "binary")
 
 private val DATE_TIME_CLASSES: Set<Class<*>> = setOf(
     LocalDateTime::class.java,
@@ -694,7 +681,7 @@ private val DATE_TIME_CLASSES: Set<Class<*>> = setOf(
  * via `$ref: "#/components/schemas/ClassName"` to avoid duplication.
  */
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
-private fun typeToSchema(
+internal fun typeToSchema(
     type: Type,
     depth: Int = 0,
     schemas: MutableMap<String, Map<String, Any>>? = null,

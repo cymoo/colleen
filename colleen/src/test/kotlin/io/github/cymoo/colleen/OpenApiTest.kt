@@ -1,9 +1,9 @@
-package io.github.cymoo.colleen.extension
+package io.github.cymoo.colleen
 
-import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.util.http.Headers
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import java.lang.reflect.Parameter
 
 /**
  * Tests for the OpenAPI 3.0.3 spec generation extension.
@@ -1595,5 +1595,141 @@ class DocumentationUiTest {
         // Verify the docs route exists and the spec route is registered
         val specRoute = app.router.routes.last { it.path == "/openapi.json" }
         assertNotNull(specRoute)
+    }
+}
+
+// ============================================================================
+// Test fixtures — custom extractors for testing describeOpenApi()
+// ============================================================================
+
+/** Custom extractor that reads a bearer token from the Authorization header. */
+class BearerTokenExtractor(value: String?) : ParamExtractor<String?>(value) {
+    companion object : ExtractorFactory<BearerTokenExtractor> {
+        override fun build(paramName: String, param: Parameter): (Context) -> BearerTokenExtractor =
+            { ctx -> BearerTokenExtractor(ctx.header("Authorization")?.removePrefix("Bearer ")) }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "Authorization",
+                    location = "header",
+                    schema = mapOf("type" to "string"),
+                    description = "Bearer token for authentication",
+                )
+            )
+        )
+    }
+}
+
+data class PaginationData(val page: Int, val size: Int)
+
+/** Custom extractor that reads pagination query params and expands them as two OpenAPI parameters. */
+class PaginationExtractor(value: PaginationData) : ParamExtractor<PaginationData>(value) {
+    companion object : ExtractorFactory<PaginationExtractor> {
+        override fun build(paramName: String, param: Parameter): (Context) -> PaginationExtractor = { ctx ->
+            PaginationExtractor(
+                PaginationData(
+                    ctx.query("page")?.toIntOrNull() ?: 1,
+                    ctx.query("size")?.toIntOrNull() ?: 20,
+                )
+            )
+        }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(name = "page", location = "query", schema = mapOf("type" to "integer", "default" to 1)),
+                OpenApiParameter(name = "size", location = "query", schema = mapOf("type" to "integer", "default" to 20)),
+            )
+        )
+    }
+}
+
+/** Custom extractor that returns null from describeOpenApi — should be silently skipped. */
+class InvisibleExtractor(value: String?) : ParamExtractor<String?>(value) {
+    companion object : ExtractorFactory<InvisibleExtractor> {
+        override fun build(paramName: String, param: Parameter): (Context) -> InvisibleExtractor =
+            { InvisibleExtractor(null) }
+        // describeOpenApi not overridden — returns null by default
+    }
+}
+
+fun getProfileCustom(token: BearerTokenExtractor): String = error("stub")
+fun listUsersCustom(pagination: PaginationExtractor): List<String> = error("stub")
+fun invisibleHandler(hidden: InvisibleExtractor): String = error("stub")
+
+// ============================================================================
+// Test: custom extractors with describeOpenApi()
+// ============================================================================
+
+class CustomExtractorOpenApiTest {
+
+    @Test
+    fun `custom extractor with single header param appears in spec`() {
+        val s = spec { get("/profile", ::getProfileCustom) }
+        val params = s.parameters("/profile", "get")
+        val authParam = params.find { it["name"] == "Authorization" }
+        assertNotNull(authParam)
+        assertEquals("header", authParam!!["in"])
+    }
+
+    @Test
+    fun `custom extractor header param has correct schema type`() {
+        val s = spec { get("/profile", ::getProfileCustom) }
+        val params = s.parameters("/profile", "get")
+        val authParam = params.find { it["name"] == "Authorization" }!!
+        @Suppress("UNCHECKED_CAST")
+        val schema = authParam["schema"] as Map<String, Any>
+        assertEquals("string", schema["type"])
+    }
+
+    @Test
+    fun `custom extractor header param description is preserved`() {
+        val s = spec { get("/profile", ::getProfileCustom) }
+        val params = s.parameters("/profile", "get")
+        val authParam = params.find { it["name"] == "Authorization" }!!
+        assertEquals("Bearer token for authentication", authParam["description"])
+    }
+
+    @Test
+    fun `custom extractor expanding to multiple params produces correct count`() {
+        val s = spec { get("/users", ::listUsersCustom) }
+        val params = s.parameters("/users", "get")
+        assertEquals(2, params.size)
+    }
+
+    @Test
+    fun `custom extractor expanding to multiple params includes page and size`() {
+        val s = spec { get("/users", ::listUsersCustom) }
+        val params = s.parameters("/users", "get")
+        val names = params.map { it["name"] }
+        assertTrue(names.contains("page"))
+        assertTrue(names.contains("size"))
+    }
+
+    @Test
+    fun `custom extractor param schemas are correct`() {
+        val s = spec { get("/users", ::listUsersCustom) }
+        val params = s.parameters("/users", "get")
+        val pageParam = params.find { it["name"] == "page" }!!
+        @Suppress("UNCHECKED_CAST")
+        val schema = pageParam["schema"] as Map<String, Any>
+        assertEquals("integer", schema["type"])
+        assertEquals(1, schema["default"])
+    }
+
+    @Test
+    fun `custom extractor returning null from describeOpenApi is silently skipped`() {
+        val s = spec { get("/invisible", ::invisibleHandler) }
+        val params = s.parameters("/invisible", "get")
+        assertTrue(params.isEmpty(), "Custom extractor returning null should produce no parameters")
+    }
+
+    @Test
+    fun `custom extractor required flag follows framework effectiveRequired`() {
+        val s = spec { get("/profile", ::getProfileCustom) }
+        val params = s.parameters("/profile", "get")
+        val authParam = params.find { it["name"] == "Authorization" }!!
+        // BearerTokenExtractor wraps String? (nullable inner type), so effectiveRequired = false
+        assertEquals(false, authParam["required"])
     }
 }

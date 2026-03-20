@@ -818,6 +818,19 @@ class BearerToken(value: String?) : ParamExtractor<String?>(value) {
                 BearerToken(token)
             }
         }
+
+        // 描述该提取器在 OpenAPI 文档中的表现形式。
+        // 默认返回 null，表示不出现在文档中。
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "Authorization",
+                    location = "header",
+                    schema = mapOf("type" to "string"),
+                    description = "Bearer token，格式：`Bearer <token>`",
+                )
+            )
+        )
     }
 
     /**
@@ -837,6 +850,8 @@ fun getProfile(token: BearerToken): Map<String, Any> {
     // ...
 }
 ```
+
+调用 `app.openApi()` 后，`Authorization` 请求头会自动出现在生成的 OpenAPI 文档中。
 
 自定义提取器的主要目标：
 > 将请求解析逻辑从 handler 中抽离，变为可复用、可测试的组件。
@@ -2366,7 +2381,6 @@ Colleen 可以基于已注册路由自动生成 OpenAPI 文档。
 
 ```kotlin
 import io.github.cymoo.colleen.*
-import io.github.cymoo.colleen.extension.*
 
 fun main() {
     val app = Colleen()
