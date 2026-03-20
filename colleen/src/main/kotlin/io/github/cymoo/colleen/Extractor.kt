@@ -1,5 +1,8 @@
 package io.github.cymoo.colleen
 
+import io.github.cymoo.colleen.extension.OpenApiParamSpec
+import io.github.cymoo.colleen.extension.OpenApiParameter
+import io.github.cymoo.colleen.extension.OpenApiRequestBody
 import io.github.cymoo.colleen.util.TypeRef
 import java.io.InputStream
 import java.lang.reflect.*
@@ -277,6 +280,20 @@ interface ExtractorFactory<T : ParamExtractor<*>> {
     fun missingMessage(paramName: String, param: Parameter): String {
         return "Missing required parameter: $paramName"
     }
+
+    /**
+     * Describes how this extractor should appear in the OpenAPI specification.
+     *
+     * Implementations should return an [OpenApiParamSpec] describing the parameters
+     * and/or request body this extractor represents.
+     *
+     * Return null (the default) to indicate this extractor should not appear in the OpenAPI spec.
+     *
+     * @param paramName The handler parameter name
+     * @param param The Java reflection parameter metadata
+     * @return OpenAPI spec description, or null to skip
+     */
+    fun describeOpenApi(paramName: String, param: Parameter): OpenApiParamSpec? = null
 }
 
 // ========================================================================
@@ -321,6 +338,17 @@ class Path<T : Any>(value: T) : ParamExtractor<T>(value) {
                 Path(value.convertTo(targetClass)!!)
             }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = paramName,
+                    location = "path",
+                    required = true,
+                    schemaType = param.unwrapGeneric(),
+                )
+            )
+        )
     }
 }
 
@@ -346,6 +374,16 @@ class Header(value: String?) : ParamExtractor<String?>(value) {
             requireParamName("Header", paramName)
             return { ctx -> Header(ctx.header(paramName)) }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = paramName,
+                    location = "header",
+                    schema = mapOf("type" to "string"),
+                )
+            )
+        )
     }
 }
 
@@ -369,6 +407,16 @@ class Cookie(value: String?) : ParamExtractor<String?>(value) {
             requireParamName("Cookie", paramName)
             return { ctx -> Cookie(ctx.request.cookie(paramName)) }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = paramName,
+                    location = "cookie",
+                    schema = mapOf("type" to "string"),
+                )
+            )
+        )
     }
 }
 
@@ -391,6 +439,13 @@ class Text(value: String?) : ParamExtractor<String?>(value) {
         override fun build(paramName: String, param: Parameter): (Context) -> Text {
             return { ctx -> Text(ctx.text()) }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            requestBody = OpenApiRequestBody(
+                contentType = "text/plain",
+                schema = mapOf("type" to "string"),
+            )
+        )
     }
 }
 
@@ -419,6 +474,13 @@ class Stream(value: InputStream?) : ParamExtractor<InputStream?>(value) {
         override fun build(paramName: String, param: Parameter): (Context) -> Stream {
             return { ctx -> Stream(ctx.request.stream) }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            requestBody = OpenApiRequestBody(
+                contentType = "application/octet-stream",
+                schema = mapOf("type" to "string", "format" to "binary"),
+            )
+        )
     }
 }
 
@@ -448,6 +510,19 @@ class UploadedFile(value: FileItem?) : ParamExtractor<FileItem?>(value) {
             val name = paramName.ifEmpty { DEFAULT_FILE_PARAM }
 
             return { ctx -> UploadedFile(ctx.file(name)) }
+        }
+
+        override fun describeOpenApi(paramName: String, param: Parameter): OpenApiParamSpec {
+            val fieldName = paramName.ifEmpty { DEFAULT_FILE_PARAM }
+            return OpenApiParamSpec(
+                requestBody = OpenApiRequestBody(
+                    contentType = "multipart/form-data",
+                    schema = mapOf(
+                        "type" to "object",
+                        "properties" to mapOf(fieldName to mapOf("type" to "string", "format" to "binary")),
+                    ),
+                )
+            )
         }
     }
 }
@@ -479,6 +554,13 @@ class Json<T>(value: T) : ParamExtractor<T>(value) {
 
         override fun missingMessage(paramName: String, param: Parameter) =
             "Missing required JSON body"
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            requestBody = OpenApiRequestBody(
+                contentType = "application/json",
+                schemaType = param.unwrapGeneric(),
+            )
+        )
     }
 }
 
@@ -533,6 +615,16 @@ class Query<T>(value: T) : ParamExtractor<T>(value) {
 
         override fun missingMessage(paramName: String, param: Parameter) =
             missingMessageByTargetType("query", paramName, param.unwrapGeneric().getRawClass())
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = paramName,
+                    location = "query",
+                    schemaType = param.unwrapGeneric(),
+                )
+            )
+        )
     }
 }
 
@@ -563,6 +655,13 @@ class Form<T>(value: T) : ParamExtractor<T>(value) {
 
         override fun missingMessage(paramName: String, param: Parameter) =
             missingMessageByTargetType("form", paramName, param.unwrapGeneric().getRawClass())
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            requestBody = OpenApiRequestBody(
+                contentType = "application/x-www-form-urlencoded",
+                schemaType = param.unwrapGeneric(),
+            )
+        )
     }
 }
 
@@ -679,7 +778,7 @@ private fun buildResolver(kParam: KParameter, jParam: Parameter, paramName: Stri
  *    - resolved via Java reflection on `Companion` field
  * 2. Java: public static FACTORY field implementing ExtractorFactory
  */
-private fun getExtractorFactory(wrapperClass: Class<*>): ExtractorFactory<*> {
+internal fun getExtractorFactory(wrapperClass: Class<*>): ExtractorFactory<*> {
     // 1. Kotlin: companion object
     runCatching {
         // After compilation, kotlin companion object generates a public static field: Companion.
