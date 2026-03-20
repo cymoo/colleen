@@ -1,6 +1,5 @@
-package io.github.cymoo.colleen.extension
+package io.github.cymoo.colleen
 
-import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.util.http.Headers
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test

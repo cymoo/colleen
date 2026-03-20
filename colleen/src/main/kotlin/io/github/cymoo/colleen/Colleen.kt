@@ -572,6 +572,67 @@ class Colleen {
     }
 
     // ========================================================================
+    // OpenAPI Documentation
+    // ========================================================================
+
+    /**
+     * Enables OpenAPI 3.0.3 specification generation and documentation UI serving.
+     *
+     * Automatically collects route metadata from this application and all mounted
+     * sub-applications, then exposes:
+     * - A JSON spec endpoint at [path]
+     * - An optional documentation page at [uiPath] (Swagger UI by default)
+     *
+     * ### Example
+     * ```kotlin
+     * val app = Colleen()
+     * app.openApi(title = "My API", version = "1.0.0")
+     *
+     * @Summary("Get user by ID")
+     * @ResponseDesc(404, "User not found")
+     * fun getUser(id: Path<Int>): User { ... }
+     *
+     * app.get("/users/{id}", ::getUser)
+     * app.listen(8000)
+     * ```
+     *
+     * ### Switching to ReDoc
+     * ```kotlin
+     * app.openApi(uiHtml = ::redocHtml)
+     * ```
+     *
+     * - Lambda handlers produce minimal metadata (path + method only).
+     * - KFunction and Java Method handlers produce full parameter documentation.
+     */
+    @JvmOverloads
+    fun openApi(
+        path: String = "/openapi.json",
+        uiPath: String? = "/docs",
+        title: String = "API",
+        version: String = "1.0.0",
+        description: String? = null,
+        filter: ((path: String, method: String) -> Boolean)? = null,
+        uiHtml: ((specPath: String) -> String)? = null,
+    ) {
+        val specPath = UrlPath.normalize(path)
+        val docsPath = uiPath?.let { UrlPath.normalize(it) }
+        val excludedPaths = setOfNotNull(specPath, docsPath)
+
+        get(specPath) {
+            val routes = collectRoutes(this@Colleen, "", excludedPaths)
+            buildSpec(routes, title, version, description, filter)
+        }
+
+        if (docsPath != null) {
+            if (uiHtml != null) {
+                get(docsPath) { ctx -> ctx.html(uiHtml(specPath)) }
+            } else {
+                get(docsPath) { ctx -> ctx.html(swaggerUiHtml(specPath)) }
+            }
+        }
+    }
+
+    // ========================================================================
     // Server Lifecycle
     // ========================================================================
 

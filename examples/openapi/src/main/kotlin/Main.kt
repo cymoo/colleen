@@ -1,5 +1,4 @@
 import io.github.cymoo.colleen.*
-import io.github.cymoo.colleen.extension.*
 import io.github.cymoo.colleen.middleware.Cors
 import io.github.cymoo.colleen.middleware.RequestLogger
 import java.math.BigDecimal

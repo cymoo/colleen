@@ -1,8 +1,5 @@
 package io.github.cymoo.colleen
 
-import io.github.cymoo.colleen.extension.OpenApiParamSpec
-import io.github.cymoo.colleen.extension.OpenApiParameter
-import io.github.cymoo.colleen.extension.OpenApiRequestBody
 import io.github.cymoo.colleen.util.TypeRef
 import java.io.InputStream
 import java.lang.reflect.*

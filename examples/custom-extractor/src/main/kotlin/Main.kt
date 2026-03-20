@@ -2,6 +2,9 @@ import io.github.cymoo.colleen.BadRequest
 import io.github.cymoo.colleen.Colleen
 import io.github.cymoo.colleen.Context
 import io.github.cymoo.colleen.ExtractorFactory
+import io.github.cymoo.colleen.OpenApiParamSpec
+import io.github.cymoo.colleen.OpenApiParameter
+import io.github.cymoo.colleen.OpenApiRequestBody
 import io.github.cymoo.colleen.ParamExtractor
 import io.github.cymoo.colleen.Unauthorized
 import io.github.cymoo.colleen.middleware.RequestLogger
@@ -46,6 +49,17 @@ class BearerToken(value: String?) : ParamExtractor<String?>(value) {
                 BearerToken(token)
             }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "Authorization",
+                    location = "header",
+                    schema = mapOf("type" to "string"),
+                    description = "Bearer token. Format: `Bearer <token>`",
+                )
+            )
+        )
     }
 
     /**
@@ -104,6 +118,23 @@ class Pagination(value: PaginationData) : ParamExtractor<PaginationData>(value) 
                 }
             }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "page",
+                    location = "query",
+                    schema = mapOf("type" to "integer", "default" to 1, "minimum" to 1),
+                    description = "Page number (1-based)",
+                ),
+                OpenApiParameter(
+                    name = "size",
+                    location = "query",
+                    schema = mapOf("type" to "integer", "default" to 20, "minimum" to 1, "maximum" to 100),
+                    description = "Number of items per page (max 100)",
+                ),
+            )
+        )
     }
 }
 
@@ -167,6 +198,23 @@ class DateRange(value: DateRangeData?) : ParamExtractor<DateRangeData?>(value) {
                 DateRange(range)
             }
         }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "start",
+                    location = "query",
+                    schema = mapOf("type" to "string", "format" to "date", "example" to "2024-01-01"),
+                    description = "Start date in ISO format (YYYY-MM-DD)",
+                ),
+                OpenApiParameter(
+                    name = "end",
+                    location = "query",
+                    schema = mapOf("type" to "string", "format" to "date", "example" to "2024-12-31"),
+                    description = "End date in ISO format (YYYY-MM-DD). Must be ≥ start date.",
+                ),
+            )
+        )
     }
 }
 
@@ -251,6 +299,14 @@ fun customExtractorsDemo() {
     val app = Colleen()
 
     app.use(RequestLogger())
+
+    // OpenAPI documentation (optional)
+    // Visit http://localhost:8000/docs to explore the API interactively
+    app.openApi(
+        title = "Custom Extractor Demo",
+        version = "1.0.0",
+        description = "Demonstrates domain-specific parameter extractors with OpenAPI documentation",
+    )
 
     // Example 1: Bearer Token for authentication
     app.get("/api/profile", ::getProfile)
