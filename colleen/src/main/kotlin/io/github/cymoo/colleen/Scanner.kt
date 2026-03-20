@@ -139,6 +139,12 @@ object ControllerScanner {
             routes.add(RouteInfo(annotation.value, "PATCH", method))
         }
 
+        // Extract all @Ws annotations
+        method.getAnnotationsByType(Ws::class.java).forEach { annotation ->
+            validateWsHandler(method)
+            routes.add(RouteInfo(annotation.value, "WS", method))
+        }
+
         // Validate that we don't have duplicate (path, method) combinations
         val duplicates = routes.groupBy { it.path to it.method }
             .filter { it.value.size > 1 }
@@ -167,5 +173,21 @@ object ControllerScanner {
 
         // Check if any implemented interface is named Next
         return type.interfaces.any { it.simpleName == "Next" }
+    }
+
+    /**
+     * Validates that a @Ws handler method has the correct signature:
+     * - Exactly 1 parameter of type WebSocketConnection
+     */
+    private fun validateWsHandler(method: Method) {
+        val params = method.parameterTypes
+
+        require(params.size == 1) {
+            "@Ws method '${method.name}' must have exactly 1 parameter, but got ${params.size}"
+        }
+
+        require(params[0] == WebSocketConnection::class.java) {
+            "@Ws method '${method.name}': Parameter must be WebSocketConnection, but got ${params[0].name}"
+        }
     }
 }

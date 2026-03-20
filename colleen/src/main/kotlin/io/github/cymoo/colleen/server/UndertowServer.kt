@@ -14,9 +14,20 @@ import io.undertow.server.handlers.form.FormParserFactory
 import io.undertow.server.handlers.form.MultiPartParserDefinition
 import io.undertow.util.HeaderValues
 import io.undertow.util.HttpString
+import io.undertow.websockets.WebSocketConnectionCallback
+import io.undertow.websockets.WebSocketProtocolHandshakeHandler
+import io.undertow.websockets.core.AbstractReceiveListener
+import io.undertow.websockets.core.BufferedBinaryMessage
+import io.undertow.websockets.core.BufferedTextMessage
+import io.undertow.websockets.core.CloseMessage
+import io.undertow.websockets.core.WebSocketChannel
+import io.undertow.websockets.core.WebSockets
+import io.undertow.websockets.spi.WebSocketHttpExchange
 import org.xnio.Options
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -98,6 +109,36 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
     }
 
     /**
+     * Executor dedicated to WebSocket connections.
+     *
+     * Characteristics:
+     * - Lazily initialized
+     * - Long-lived tasks
+     * - Uses virtual threads when enabled, otherwise daemon platform threads
+     */
+    private val wsExecutor by lazy {
+        if (config.useVirtualThreads) {
+            Executors.newVirtualThreadPerTaskExecutor()
+        } else {
+            Executors.newCachedThreadPool { runnable ->
+                Thread(runnable).apply {
+                    isDaemon = true
+                    name = "ws-worker-${System.currentTimeMillis()}"
+                }
+            }
+        }
+    }
+
+    /**
+     * Set of active WebSocket connections for graceful shutdown.
+     */
+    private val activeWsConnections: MutableSet<WebSocketConnection> =
+        ConcurrentHashMap.newKeySet()
+
+    /** Whether [wsExecutor] has been initialized (i.e., at least one WS connection was handled). */
+    private var wsExecutorInitialized = false
+
+    /**
      * Starts the HTTP server.
      *
      * This:
@@ -116,10 +157,12 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
      *
      * Shutdown order:
      * 1. Stop accepting new requests
-     * 2. Stop application-level async execution
-     * 3. Wait for in-flight HTTP requests
-     * 4. Wait for virtual threads (best-effort)
-     * 5. Stop Undertow itself
+     * 2. Close all active WebSocket connections
+     * 3. Stop application-level async execution
+     * 4. Wait for in-flight HTTP requests
+     * 5. Wait for virtual threads (best-effort)
+     * 6. Shutdown WS executor
+     * 7. Stop Undertow itself
      */
     override fun stop() {
         logger.info("Shutting down server...")
@@ -127,10 +170,19 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         // 1. Stop accepting new HTTP requests
         gracefulShutdownHandler.shutdown()
 
-        // 2. Stop application-level async work first
+        // 2. Close all active WebSocket connections
+        val wsConnections = activeWsConnections.toList()
+        activeWsConnections.clear()
+        wsConnections.forEach { conn ->
+            runCatching {
+                conn.close(WebSocketCloseReason.GOING_AWAY, "Server shutting down")
+            }
+        }
+
+        // 3. Stop application-level async work first
         virtualExecutor?.shutdown()
 
-        // 3. Wait for HTTP handlers to complete
+        // 4. Wait for HTTP handlers to complete
         val httpCompleted = gracefulShutdownHandler.awaitShutdown(
             config.shutdownTimeout
         )
@@ -139,7 +191,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             logger.warn("HTTP shutdown timeout exceeded")
         }
 
-        // 4. Wait for virtual threads to finish (best-effort)
+        // 5. Wait for virtual threads to finish (best-effort)
         virtualExecutor?.let {
             val terminated = it.awaitTermination(
                 config.shutdownTimeout,
@@ -151,7 +203,13 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             }
         }
 
-        // 5. Now it is safe to stop Undertow itself
+        // 6. Shutdown WS executor
+        if (wsExecutorInitialized) {
+            wsExecutor.shutdown()
+            wsExecutor.awaitTermination(config.shutdownTimeout, TimeUnit.MILLISECONDS)
+        }
+
+        // 7. Now it is safe to stop Undertow itself
         server.stop()
     }
 
@@ -360,6 +418,10 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             is RawResponseBody.Sse -> {
                 handleSseResponse(body.handler, exchange)
             }
+
+            is RawResponseBody.WebSocket -> {
+                handleWebSocketResponse(body, exchange)
+            }
         }
     }
 
@@ -400,6 +462,131 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         override fun write(text: String) = writer.write(text)
         override fun flush() = writer.flush()
         override fun close() = writer.close()
+    }
+
+    /**
+     * Handles WebSocket upgrade responses.
+     *
+     * Performs the HTTP → WebSocket protocol upgrade via Undertow's
+     * [WebSocketProtocolHandshakeHandler], then:
+     * - Creates the [WebSocketConnection] with handshake metadata.
+     * - Runs the user-supplied handler (to register callbacks) in [wsExecutor].
+     * - Fires [WebSocketConnection.dispatchOpen] after handler setup is complete.
+     * - Registers a receive listener and starts receiving frames.
+     */
+    private fun handleWebSocketResponse(body: RawResponseBody.WebSocket, exchange: HttpServerExchange) {
+        wsExecutorInitialized = true
+
+        val handshakeHandler = WebSocketProtocolHandshakeHandler(
+            object : WebSocketConnectionCallback {
+                override fun onConnect(wsExchange: WebSocketHttpExchange, wsChannel: WebSocketChannel) {
+                    val adapter = UndertowWebSocketChannelAdapter(wsChannel)
+                    val connection = WebSocketConnection(
+                        channel = adapter,
+                        pathParams = body.pathParams,
+                        queryString = body.queryString,
+                        headers = body.headers,
+                        attributes = body.attributes,
+                    )
+
+                    activeWsConnections.add(connection)
+                    connection.onClose(Consumer { _ ->
+                        activeWsConnections.remove(connection)
+                    })
+
+                    // Apply configured limits
+                    wsChannel.setIdleTimeout(config.wsIdleTimeout)
+
+                    // Run user handler in wsExecutor to register callbacks.
+                    // Wait for completion so callbacks are registered before we start
+                    // accepting frames and fire dispatchOpen().
+                    val setup = wsExecutor.submit<Unit> {
+                        try {
+                            body.handler.accept(connection)
+                        } catch (e: Exception) {
+                            logger.error("WebSocket handler error", e)
+                        }
+                    }
+
+                    try {
+                        setup.get()
+                    } catch (_: Exception) {
+                        // Handler setup failed; proceed anyway (connection will be closed soon)
+                    }
+
+                    // Callbacks are now registered. Start receiving and fire onOpen.
+                    wsChannel.receiveSetter.set(UndertowWsReceiveListener(connection, config.maxWebSocketMessageSize))
+                    wsChannel.resumeReceives()
+                    connection.dispatchOpen()
+                }
+            }
+        )
+
+        handshakeHandler.handleRequest(exchange)
+    }
+
+    /**
+     * Undertow-backed [WebSocketChannelAdapter] implementation.
+     */
+    private class UndertowWebSocketChannelAdapter(
+        private val channel: WebSocketChannel,
+    ) : WebSocketChannelAdapter {
+
+        override fun sendText(text: String) {
+            WebSockets.sendTextBlocking(text, channel)
+        }
+
+        override fun sendBinary(bytes: ByteArray) {
+            WebSockets.sendBinaryBlocking(ByteBuffer.wrap(bytes), channel)
+        }
+
+        override fun close(code: Int, reason: String) {
+            if (!channel.isCloseFrameSent) {
+                WebSockets.sendCloseBlocking(code, reason, channel)
+            }
+        }
+
+        override val isClosed: Boolean
+            get() = !channel.isOpen
+
+        override fun close() = close(WebSocketCloseReason.NORMAL, "")
+    }
+
+    /**
+     * Undertow receive listener that dispatches incoming WebSocket frames
+     * to the [WebSocketConnection] callbacks.
+     */
+    private class UndertowWsReceiveListener(
+        private val connection: WebSocketConnection,
+        private val maxMessageSize: Long,
+    ) : AbstractReceiveListener() {
+
+        override fun getMaxTextBufferSize(): Long = maxMessageSize
+        override fun getMaxBinaryBufferSize(): Long = maxMessageSize
+
+        override fun onFullTextMessage(channel: WebSocketChannel, message: BufferedTextMessage) {
+            connection.dispatchMessage(WebSocketMessage.Text(message.data))
+        }
+
+        override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
+            val data = message.data.resource
+            val bytes = ByteBuffer.allocate(data.sumOf { it.remaining() }).also { buf ->
+                data.forEach { buf.put(it) }
+                buf.flip()
+            }.let { buf ->
+                ByteArray(buf.remaining()).also { buf.get(it) }
+            }
+            connection.dispatchMessage(WebSocketMessage.Binary(bytes))
+        }
+
+        override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
+            connection.dispatchClose(cm.code, cm.reason ?: "")
+        }
+
+        override fun onError(channel: WebSocketChannel, error: Throwable) {
+            connection.dispatchError(error)
+            connection.dispatchClose(WebSocketCloseReason.GOING_AWAY, error.message ?: "")
+        }
     }
 
     private fun writeInternalError(exchange: HttpServerExchange) {

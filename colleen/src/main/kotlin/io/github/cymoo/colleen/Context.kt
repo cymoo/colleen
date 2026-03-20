@@ -545,6 +545,18 @@ data class Context(
     }
 
     /**
+     * Returns a snapshot of all context states, including parent context states.
+     *
+     * Child context states take precedence over parent states.
+     * Used internally to pass middleware-set state to WebSocket connections.
+     */
+    internal fun stateMap(): Map<String, Any?> {
+        val map = mutableMapOf<String, Any?>()
+        forEachState(true) { k, v -> map.putIfAbsent(k, v) }
+        return map
+    }
+
+    /**
      * Creates a sub-context for a mounted app.
      *
      * Used internally when routing requests to mounted sub-app.

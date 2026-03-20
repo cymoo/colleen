@@ -359,6 +359,28 @@ sealed class ResponseBody {
     class Sse(val handler: Consumer<SseConnection>) : ResponseBody() {
         override fun materialize(ctx: Context) = RawResponseBody.Sse(handler)
     }
+
+    /** WebSocket upgrade body */
+    class WebSocket(
+        val handler: Consumer<WebSocketConnection>,
+        val attributes: Map<String, Any?>,
+    ) : ResponseBody() {
+        override fun materialize(ctx: Context) = RawResponseBody.WebSocket(
+            handler = handler,
+            attributes = attributes,
+            pathParams = ctx.pathParams.toMap(),
+            queryString = ctx.request.queryString,
+            headers = buildHeaders(ctx.request.headers),
+        )
+
+        companion object {
+            private fun buildHeaders(headers: io.github.cymoo.colleen.util.http.Headers): Map<String, String> {
+                val map = mutableMapOf<String, String>()
+                headers.forEach { key, values -> values.firstOrNull()?.let { map[key] = it } }
+                return map
+            }
+        }
+    }
 }
 
 @JvmInline
@@ -380,6 +402,14 @@ sealed class RawResponseBody {
     class Stream(val input: InputStream) : RawResponseBody()
 
     class Sse(val handler: Consumer<SseConnection>) : RawResponseBody()
+
+    class WebSocket(
+        val handler: Consumer<WebSocketConnection>,
+        val attributes: Map<String, Any?>,
+        val pathParams: Map<String, String>,
+        val queryString: String,
+        val headers: Map<String, String>,
+    ) : RawResponseBody()
 }
 
 /**

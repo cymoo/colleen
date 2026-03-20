@@ -276,6 +276,7 @@ internal data class RouteEntry(val fullPath: String, val node: RouteNode)
 /** Recursively collects routes from an app and all its mounted sub-apps. */
 internal fun collectRoutes(app: Colleen, prefix: String, excluded: Set<String>): List<RouteEntry> {
     val routes = app.router.routes
+        .filter { it.method != "WS" }
         .map { RouteEntry(UrlPath.join(prefix, it.path), it) }
         .filter { it.fullPath !in excluded }
 

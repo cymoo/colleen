@@ -431,6 +431,43 @@ class Colleen {
     fun all(path: String, handler: Handler) = addRoute("*", path, handler)
     fun all(path: String, handler: KFunction<*>) = addRoute("*", path, handler)
 
+    /**
+     * Registers a WebSocket route handler.
+     *
+     * The [handler] receives a [WebSocketConnection] after the HTTP upgrade
+     * handshake has completed. It should register callbacks
+     * ([WebSocketConnection.onMessage], [WebSocketConnection.onClose], etc.)
+     * before returning.
+     *
+     * Existing HTTP middlewares (auth, CORS, logging, etc.) automatically apply
+     * to the handshake request.
+     *
+     * Example:
+     * ```kotlin
+     * app.ws("/chat/{room}") { conn ->
+     *     val room = conn.pathParam("room")
+     *     conn.onMessage { msg ->
+     *         conn.send("Echo: ${(msg as WebSocketMessage.Text).text()}")
+     *     }
+     *     conn.onClose { reason ->
+     *         println("Closed: ${reason.code}")
+     *     }
+     * }
+     * ```
+     */
+    fun ws(path: String, handler: java.util.function.Consumer<WebSocketConnection>) {
+        addRoute(
+            RouteNode.of("WS", path, RouteHandler.Lambda { ctx ->
+                ResponseBody.WebSocket(handler, ctx.stateMap())
+            })
+        )
+    }
+
+    /** Kotlin-friendly variant of [ws]. */
+    fun ws(path: String, handler: (WebSocketConnection) -> Unit) {
+        ws(path, java.util.function.Consumer(handler))
+    }
+
     // ========================================================================
     // Route Registration - Builder Pattern
     // ========================================================================
@@ -746,6 +783,9 @@ class Colleen {
 
     private fun addRoute(route: RouteNode) {
         eventBus.emit(Event.RouteRegistered(route))
+        if (route.method == "WS") {
+            eventBus.emit(Event.WebSocketRouteRegistered(route))
+        }
         router.addRoute(route)
     }
 

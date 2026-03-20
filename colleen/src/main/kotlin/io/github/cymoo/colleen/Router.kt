@@ -601,6 +601,7 @@ class RouteNode private constructor(
             val method = rawMethod.uppercase()
 
             if (method == "*") return method
+            if (method == "WS") return method
 
             require(method in VALID_HTTP_METHODS) {
                 "Unsupported HTTP method '$rawMethod'"
@@ -628,7 +629,10 @@ class RouteNode private constructor(
      */
     fun matchesPathAndMethod(ctx: Context): MatchResult {
         if (method != "*" && method != ctx.method) {
-            return MatchResult.NO_MATCH
+            // WS routes match GET requests (WebSocket upgrade is always a GET)
+            if (!(method == "WS" && ctx.method == "GET")) {
+                return MatchResult.NO_MATCH
+            }
         }
 
         val pathResult = matchesPath(ctx.path)
@@ -819,7 +823,27 @@ internal class Router {
         // Register all routes defined in the controller
         controllerMeta.routes.forEach {
             val path = UrlPath.join(basePath, it.path)
-            if (isKotlin) {
+            if (it.method == "WS") {
+                // WebSocket route: wrap the controller method into a WS handler lambda
+                val handler = it.handler
+                val wsHandler: (Context) -> Any? = if (isKotlin) {
+                    val fn = handler.kotlinFunction!!
+                    { ctx ->
+                        val wsConsumer = java.util.function.Consumer<WebSocketConnection> { conn ->
+                            fn.call(obj, conn)
+                        }
+                        ResponseBody.WebSocket(wsConsumer, ctx.stateMap())
+                    }
+                } else {
+                    { ctx ->
+                        val wsConsumer = java.util.function.Consumer<WebSocketConnection> { conn ->
+                            handler.invoke(obj, conn)
+                        }
+                        ResponseBody.WebSocket(wsConsumer, ctx.stateMap())
+                    }
+                }
+                addRoute(RouteNode.of("WS", path, RouteHandler.Lambda(Handler(wsHandler))))
+            } else if (isKotlin) {
                 addRoute(
                     RouteNode.of(
                         it.method,
@@ -969,7 +993,7 @@ internal class Router {
         return routes
             .filter { it.matchesPath(path).matched }
             .map { it.method }
-            .filter { it != "*" }
+            .filter { it != "*" && it != "WS" }
             .toSet()
     }
 
@@ -1061,6 +1085,14 @@ internal class Router {
             ctx.setPathParam(key, value)
         }
 
+        // WebSocket routes require an HTTP upgrade request
+        if (route.method == "WS") {
+            val upgradeHeader = ctx.request.header("upgrade")
+            if (upgradeHeader?.lowercase() != "websocket") {
+                throw HttpException(426, "Upgrade Required")
+            }
+        }
+
         // Execute handler
         ctx.app.eventBus.emit(Event.HandlerExecuting(ctx, route))
         try {
@@ -1134,6 +1166,8 @@ class RouteBuilder internal constructor(
     fun options(path: String, handler: KFunction<*>) = app.options(UrlPath.join(prefix, path), handler)
     fun all(path: String, handler: Handler) = app.all(UrlPath.join(prefix, path), handler)
     fun all(path: String, handler: KFunction<*>) = app.all(UrlPath.join(prefix, path), handler)
+    fun ws(path: String, handler: java.util.function.Consumer<WebSocketConnection>) =
+        app.ws(UrlPath.join(prefix, path), handler)
 
     /**
      * Route builder with per-route middleware support.

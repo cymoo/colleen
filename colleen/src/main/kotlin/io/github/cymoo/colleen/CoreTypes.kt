@@ -78,6 +78,12 @@ annotation class Delete(val value: String = "/")
 @Retention(AnnotationRetention.RUNTIME)
 annotation class Patch(val value: String = "/")
 
+/** Marks a method as a WebSocket route. */
+@Repeatable
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Ws(val value: String = "/")
+
 /**
  * Marks a class as a controller.
  *

@@ -61,6 +61,14 @@ data class ServerConfig(
     /** Connection write timeout in milliseconds (0 = infinite, default: 30s). */
     @JvmField
     var writeTimeout: Long = 30_000,
+
+    /** WebSocket idle timeout in milliseconds (default: 5 minutes). */
+    @JvmField
+    var wsIdleTimeout: Long = 300_000,
+
+    /** Maximum WebSocket message size in bytes (default: 64KB). */
+    @JvmField
+    var maxWebSocketMessageSize: Long = 64 * 1024,
 )
 
 /**

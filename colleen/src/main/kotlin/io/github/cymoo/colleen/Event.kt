@@ -69,6 +69,9 @@ sealed class Event(
     /** Emitted when a route node is registered. */
     class RouteRegistered(val node: RouteNode) : Event()
 
+    /** Emitted when a WebSocket route node is registered. */
+    class WebSocketRouteRegistered(val node: RouteNode) : Event()
+
     /** Emitted when a controller instance is registered. */
     class ControllerRegistered(val prefix: String, val obj: Any) : Event()
 
