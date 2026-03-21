@@ -252,10 +252,8 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             setServerOption(UndertowOptions.IDLE_TIMEOUT, config.idleTimeout.toInt())
             setServerOption(UndertowOptions.MAX_ENTITY_SIZE, config.maxRequestSize)
 
-            // Socket options
+            // TCP options
             setSocketOption(Options.TCP_NODELAY, true)
-            if (config.readTimeout > 0) setSocketOption(Options.READ_TIMEOUT, config.readTimeout.toInt())
-            if (config.writeTimeout > 0) setSocketOption(Options.WRITE_TIMEOUT, config.writeTimeout.toInt())
 
             // Buffers
             setBufferSize(8 * 1024)

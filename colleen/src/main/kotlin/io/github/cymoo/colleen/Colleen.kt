@@ -262,7 +262,10 @@ class Colleen {
     // ========================================================================
 
     /**
-     * Registers a global middleware that runs for all requests.
+     * Registers a global middleware that runs for all HTTP requests.
+     *
+     * This middleware does **not** run on WebSocket upgrade requests.
+     * Use [wsUse] to register middleware for WebSocket handshakes.
      */
     fun use(middleware: Middleware) {
         addMiddleware(MiddlewareNode.Global(middleware))
@@ -270,7 +273,10 @@ class Colleen {
 
     /**
      * Registers a middleware for the given path prefix.
-     * The middleware applies to this prefix and all sub-paths.
+     * The middleware applies to HTTP requests at this prefix and all sub-paths.
+     *
+     * This middleware does **not** run on WebSocket upgrade requests.
+     * Use [wsUse] to register middleware for WebSocket handshakes.
      */
     fun use(prefix: String, middleware: Middleware) {
         addMiddleware(MiddlewareNode.Prefix.of(prefix, middleware))
@@ -278,6 +284,9 @@ class Colleen {
 
     /**
      * Registers a conditional middleware that runs when the predicate returns true.
+     *
+     * This middleware does **not** run on WebSocket upgrade requests.
+     * Use [wsUse] to register middleware for WebSocket handshakes.
      */
     fun use(predicate: (Context) -> Boolean, middleware: Middleware) {
         addMiddleware(MiddlewareNode.Conditional(predicate, middleware))
@@ -288,6 +297,44 @@ class Colleen {
      */
     fun use(method: String, path: String, middleware: Middleware) {
         addMiddleware(MiddlewareNode.PerRoute.of(method, path, middleware))
+    }
+
+    // ========================================================================
+    // WebSocket Middleware API
+    // ========================================================================
+
+    /**
+     * Registers a global middleware that runs for all WebSocket upgrade requests.
+     *
+     * This middleware only runs on WebSocket handshakes and is **not** invoked for
+     * plain HTTP requests. Use [use] to register middleware for HTTP requests.
+     *
+     * Example:
+     * ```kotlin
+     * app.wsUse { ctx, next ->
+     *     val token = ctx.query("token") ?: throw HttpException(401, "Missing token")
+     *     ctx.setState("userId", validateToken(token))
+     *     next()
+     * }
+     * ```
+     */
+    fun wsUse(middleware: Middleware) {
+        addWsMiddleware(MiddlewareNode.Global(middleware))
+    }
+
+    /**
+     * Registers a WebSocket middleware for the given path prefix.
+     * The middleware applies to WebSocket upgrade requests at this prefix and all sub-paths.
+     */
+    fun wsUse(prefix: String, middleware: Middleware) {
+        addWsMiddleware(MiddlewareNode.Prefix.of(prefix, middleware))
+    }
+
+    /**
+     * Registers a conditional WebSocket middleware that runs when the predicate returns true.
+     */
+    fun wsUse(predicate: (Context) -> Boolean, middleware: Middleware) {
+        addWsMiddleware(MiddlewareNode.Conditional(predicate, middleware))
     }
 
     // ========================================================================
@@ -439,11 +486,18 @@ class Colleen {
      * ([WebSocketConnection.onMessage], [WebSocketConnection.onClose], etc.)
      * before returning.
      *
-     * Existing HTTP middlewares (auth, CORS, logging, etc.) automatically apply
-     * to the handshake request.
+     * WebSocket upgrade requests run through the dedicated WebSocket middleware chain
+     * registered via [wsUse], **not** the HTTP middleware chain ([use]).
+     * Register auth, rate-limiting, or other handshake-level logic using [wsUse].
      *
      * Example:
      * ```kotlin
+     * app.wsUse { ctx, next ->
+     *     val token = ctx.query("token") ?: throw HttpException(401, "Missing token")
+     *     ctx.setState("userId", validateToken(token))
+     *     next()
+     * }
+     *
      * app.ws("/chat/{room}") { conn ->
      *     val room = conn.pathParam("room")
      *     conn.onMessage { msg ->
@@ -601,6 +655,10 @@ class Colleen {
 
         with(app) {
             router.middlewares.forEach {
+                eventBus.emitToParent(Event.MiddlewareRegistered(it))
+            }
+
+            router.wsMiddlewares.forEach {
                 eventBus.emitToParent(Event.MiddlewareRegistered(it))
             }
 
@@ -789,6 +847,11 @@ class Colleen {
     private fun addMiddleware(middleware: MiddlewareNode) {
         eventBus.emit(Event.MiddlewareRegistered(middleware))
         router.addMiddleware(middleware)
+    }
+
+    private fun addWsMiddleware(middleware: MiddlewareNode) {
+        eventBus.emit(Event.MiddlewareRegistered(middleware))
+        router.addWsMiddleware(middleware)
     }
 
     private fun addRoute(route: RouteNode) {

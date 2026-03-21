@@ -1118,7 +1118,7 @@ app.get("/events") { ctx ->
 
 ## WebSocket
 
-Colleen 提供全双工 WebSocket 支持。WebSocket 路由通过 `app.ws()` 注册，并与 HTTP 路由**共享同一中间件链**，因此鉴权、CORS、日志等中间件在握手阶段会自动生效。
+Colleen 提供全双工 WebSocket 支持。WebSocket 路由通过 `app.ws()` 注册，升级请求会经过**专用的 WebSocket 中间件链**（通过 `app.wsUse()` 注册），与 HTTP 路由的中间件链（`app.use()`）完全隔离。这样可以避免 HTTP 专属逻辑（响应耗时统计、缓存头等）干扰 WebSocket 握手过程。
 
 ### 函数式风格
 
@@ -1178,11 +1178,13 @@ app.group("/api/v1") {
 
 ### 中间件集成
 
-HTTP 中间件在 WebSocket 握手请求阶段执行（升级协议之前）。中间件通过 `ctx.setState()` 设置的状态，可在连接建立后通过 `conn.attribute()` 读取。
+WebSocket 升级请求经过通过 `app.wsUse()` 注册的**专用 WebSocket 中间件链**执行（升级协议之前）。中间件通过 `ctx.setState()` 设置的状态，可在连接建立后通过 `conn.attribute()` 读取。
+
+`app.use()` 用于 HTTP 请求，`app.wsUse()` 用于 WebSocket 握手，两者互相隔离，HTTP 专属逻辑不会污染 WebSocket 握手。
 
 ```kotlin
-// 鉴权中间件设置 userId
-app.use("/admin") { ctx, next ->
+// WS 鉴权中间件——仅在 WebSocket 升级请求时执行
+app.wsUse("/admin") { ctx, next ->
     val token = ctx.header("Authorization") ?: throw Unauthorized()
     ctx.setState("userId", verifyToken(token))
     next()

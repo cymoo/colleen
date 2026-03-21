@@ -54,28 +54,6 @@ data class ServerConfig(
     @JvmField
     var idleTimeout: Long = 30_000,
 
-    /**
-     * Socket-level read timeout in milliseconds (0 = infinite, default: 0).
-     *
-     * When non-zero, Undertow installs a low-level read-timeout conduit on every
-     * connection — including WebSocket connections.  That conduit fires after the
-     * configured interval even when no read is pending, which terminates idle
-     * WebSocket connections with close code 1006 (abnormal closure).
-     *
-     * Leave this at 0 (the default) and rely on [idleTimeout] for HTTP and
-     * [wsIdleTimeout] for WebSocket idle-connection management.
-     */
-    @JvmField
-    var readTimeout: Long = 0,
-
-    /**
-     * Socket-level write timeout in milliseconds (0 = infinite, default: 0).
-     *
-     * See [readTimeout] for the rationale behind the 0 default.
-     */
-    @JvmField
-    var writeTimeout: Long = 0,
-
     /** WebSocket idle timeout in milliseconds (default: 5 minutes). */
     @JvmField
     var wsIdleTimeout: Long = 300_000,

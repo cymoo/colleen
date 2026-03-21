@@ -3,6 +3,7 @@ package io.github.cymoo.colleen
 import org.junit.jupiter.api.Test
 import java.util.function.Consumer
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -108,13 +109,13 @@ class WebSocketRouterTest {
     }
 
     // -----------------------------------------------------------------------
-    // Middleware applies to WS route tests
+    // WebSocket middleware (wsUse) applies to WS routes
     // -----------------------------------------------------------------------
 
     @Test
-    fun `middleware runs before WS handler and can set attributes`() {
+    fun `wsUse middleware runs before WS handler and can set attributes`() {
         val app = makeApp()
-        app.use("/chat") { ctx, next ->
+        app.wsUse("/chat") { ctx, next ->
             ctx.setState("userId", "alice")
             next()
         }
@@ -133,9 +134,9 @@ class WebSocketRouterTest {
     }
 
     @Test
-    fun `middleware can reject WS handshake request`() {
+    fun `wsUse middleware can reject WS handshake request`() {
         val app = makeApp()
-        app.use("/secure") { ctx, next ->
+        app.wsUse("/secure") { ctx, next ->
             // Simulate auth rejection
             throw HttpException(401, "Unauthorized")
         }
@@ -144,6 +145,60 @@ class WebSocketRouterTest {
         val ctx = Context(request = wsRequest("/secure/live"), app = app)
         app.handleRequest(ctx)
         assertEquals(401, ctx.response.status)
+    }
+
+    // -----------------------------------------------------------------------
+    // HTTP middleware does NOT apply to WS routes (Option B isolation)
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `HTTP use middleware does NOT run for WS upgrade requests`() {
+        val app = makeApp()
+        var middlewareCalled = false
+        app.use { ctx, next ->
+            middlewareCalled = true
+            next()
+        }
+        app.ws("/chat") { _ -> }
+
+        val ctx = Context(request = wsRequest("/chat"), app = app)
+        app.handleRequest(ctx)
+
+        assertFalse(middlewareCalled, "HTTP middleware should not run for WS upgrade requests")
+    }
+
+    @Test
+    fun `HTTP use middleware DOES run for plain GET to WS path (no upgrade header)`() {
+        val app = makeApp()
+        var middlewareCalled = false
+        app.use { ctx, next ->
+            middlewareCalled = true
+            next()
+        }
+        app.ws("/chat") { _ -> }
+
+        // Plain GET without upgrade header goes through HTTP middleware chain
+        val ctx = Context(request = plainGetRequest("/chat"), app = app)
+        app.handleRequest(ctx)
+
+        assertTrue(middlewareCalled, "HTTP middleware should run for plain GET (non-WS) requests")
+        assertEquals(426, ctx.response.status)
+    }
+
+    @Test
+    fun `wsUse middleware does NOT run for plain HTTP requests`() {
+        val app = makeApp()
+        var wsMwCalled = false
+        app.wsUse { ctx, next ->
+            wsMwCalled = true
+            next()
+        }
+        app.get("/api") { ctx -> ctx.text("ok") }
+
+        val ctx = Context(request = Request(method = "GET", path = "/api"), app = app)
+        app.handleRequest(ctx)
+
+        assertFalse(wsMwCalled, "WS middleware should not run for plain HTTP requests")
     }
 
     // -----------------------------------------------------------------------

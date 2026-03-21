@@ -1152,8 +1152,10 @@ app.get("/events") { ctx ->
 ## WebSocket
 
 Colleen provides full-duplex WebSocket support. WebSocket routes are registered with
-`app.ws()` and pass through the **same middleware chain** as HTTP routes, so authentication,
-CORS, and logging work automatically during the handshake.
+`app.ws()`. WebSocket upgrade requests run through a **dedicated WebSocket middleware chain**
+registered via `app.wsUse()`, which is separate from the HTTP middleware chain (`app.use()`).
+This avoids HTTP-specific concerns (response timing, cache headers, etc.) from polluting
+the WebSocket handshake path.
 
 ### Functional style
 
@@ -1213,12 +1215,15 @@ app.group("/api/v1") {
 
 ### Middleware integration
 
-HTTP middlewares run during the WebSocket handshake request, before the connection is
-upgraded. State set by middleware is accessible on the connection via `conn.attribute()`.
+WebSocket upgrade requests run through a **dedicated middleware chain** registered via
+`app.wsUse()`. State set by middleware is accessible on the connection via `conn.attribute()`.
+
+Use `app.use()` for plain HTTP requests and `app.wsUse()` for WebSocket handshakes.
+This keeps HTTP-specific concerns (logging, cache headers, etc.) out of the WS upgrade path.
 
 ```kotlin
-// Auth middleware sets the userId on the context
-app.use("/admin") { ctx, next ->
+// WS auth middleware — only runs on WebSocket upgrade requests
+app.wsUse("/admin") { ctx, next ->
     val token = ctx.header("Authorization") ?: throw Unauthorized()
     ctx.setState("userId", verifyToken(token))
     next()

@@ -767,6 +767,7 @@ class MountNode private constructor(
 internal class Router {
     internal val controllers = CopyOnWriteArrayList<Pair<String, Any>>()
     internal val middlewares = CopyOnWriteArrayList<MiddlewareNode>()
+    internal val wsMiddlewares = CopyOnWriteArrayList<MiddlewareNode>()
     internal val routes = CopyOnWriteArrayList<RouteNode>()
     internal val mounts = CopyOnWriteArrayList<MountNode>()
 
@@ -775,6 +776,8 @@ internal class Router {
     // ========================================================================
 
     fun addMiddleware(node: MiddlewareNode) = middlewares.add(node)
+
+    fun addWsMiddleware(node: MiddlewareNode) = wsMiddlewares.add(node)
 
     /**
      * Registers a route handler.
@@ -900,8 +903,10 @@ internal class Router {
      * @throws MethodNotAllowed if path matches but method doesn't
      */
     fun handleRequest(ctx: Context) {
-        // 1. Collect matching middlewares
-        val matchedMiddlewares = findMatchedMiddlewares(ctx)
+        // Route WS upgrade requests through the dedicated WS middleware chain;
+        // plain HTTP requests use the regular HTTP middleware chain.
+        val isWsUpgrade = ctx.request.header("upgrade")?.equals("websocket", ignoreCase = true) == true
+        val matchedMiddlewares = if (isWsUpgrade) findMatchedWsMiddlewares(ctx) else findMatchedMiddlewares(ctx)
 
         // 2. Try to match routes
         val matchedRoute = findBestMatchedRoute(ctx)
@@ -976,6 +981,16 @@ internal class Router {
      */
     private fun findMatchedMiddlewares(ctx: Context): List<Pair<MiddlewareNode, MatchResult>> {
         return middlewares.mapNotNull { mw ->
+            val result = mw.match(ctx)
+            if (result.matched) mw to result else null
+        }
+    }
+
+    /**
+     * Collects all matching WebSocket middlewares with their match results.
+     */
+    private fun findMatchedWsMiddlewares(ctx: Context): List<Pair<MiddlewareNode, MatchResult>> {
+        return wsMiddlewares.mapNotNull { mw ->
             val result = mw.match(ctx)
             if (result.matched) mw to result else null
         }
@@ -1164,6 +1179,12 @@ class RouteBuilder internal constructor(
         app.use(UrlPath.join(this@RouteBuilder.prefix, prefix), middleware)
 
     fun use(predicate: (Context) -> Boolean, middleware: Middleware) = app.use(predicate, middleware)
+
+    fun wsUse(middleware: Middleware) = app.wsUse(prefix, middleware)
+    fun wsUse(prefix: String, middleware: Middleware) =
+        app.wsUse(UrlPath.join(this@RouteBuilder.prefix, prefix), middleware)
+
+    fun wsUse(predicate: (Context) -> Boolean, middleware: Middleware) = app.wsUse(predicate, middleware)
 
     fun addController(obj: Any) = app.addController(prefix, obj)
     fun addController(prefix: String, obj: Any) = app.addController(UrlPath.join(this@RouteBuilder.prefix, prefix), obj)

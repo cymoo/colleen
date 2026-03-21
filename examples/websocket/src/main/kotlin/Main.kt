@@ -134,8 +134,8 @@ fun main() {
 
     app.use(RequestLogger())
 
-    // Middleware: validate optional ?token= query parameter on /ws/secure
-    app.use("/ws/secure") { ctx, next ->
+    // WebSocket middleware: validate optional ?token= query parameter on /ws/secure
+    app.wsUse("/ws/secure") { ctx, next ->
         val token = ctx.query("token")
         if (token.isNullOrBlank()) {
             throw io.github.cymoo.colleen.Unauthorized("Missing token")
