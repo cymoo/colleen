@@ -170,9 +170,9 @@ class StringValidator(value: String?) : Validator<String, StringValidator>(value
         validateIfPresent {
             try {
                 val uri = URI(it)
-                // Validate scheme is http or https for web contexts
-                if (uri.scheme !in listOf("http", "https")) {
-                    addError("must be a valid URL (http or https only)")
+                // Validate scheme exists and is http or https for web contexts
+                if (uri.scheme == null || uri.scheme !in listOf("http", "https")) {
+                    addError("must be a valid URL")
                     return@validateIfPresent
                 }
                 uri.toURL()
