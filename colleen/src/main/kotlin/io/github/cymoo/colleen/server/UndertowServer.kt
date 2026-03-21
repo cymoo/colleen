@@ -84,17 +84,26 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
      * - Long-lived tasks
      * - Uses virtual threads when enabled, otherwise daemon platform threads
      */
-    private val sseExecutor by lazy {
-        if (config.useVirtualThreads) {
-            Executors.newVirtualThreadPerTaskExecutor()
-        } else {
-            Executors.newCachedThreadPool { runnable ->
-                Thread(runnable).apply {
-                    isDaemon = true
-                    name = "sse-worker-${System.currentTimeMillis()}"
+    private var sseExecutor: ExecutorService? = null
+    
+    private fun getSseExecutor(): ExecutorService {
+        if (sseExecutor == null) {
+            synchronized(this) {
+                if (sseExecutor == null) {
+                    sseExecutor = if (config.useVirtualThreads) {
+                        Executors.newVirtualThreadPerTaskExecutor()
+                    } else {
+                        Executors.newCachedThreadPool { runnable ->
+                            Thread(runnable).apply {
+                                isDaemon = true
+                                name = "sse-worker-${System.currentTimeMillis()}"
+                            }
+                        }
+                    }
                 }
             }
         }
+        return sseExecutor!!
     }
 
     /**
@@ -129,6 +138,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
 
         // 2. Stop application-level async work first
         virtualExecutor?.shutdown()
+        sseExecutor?.shutdown()
 
         // 3. Wait for HTTP handlers to complete
         val httpCompleted = gracefulShutdownHandler.awaitShutdown(
@@ -151,7 +161,16 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             }
         }
 
-        // 5. Now it is safe to stop Undertow itself
+        // 5. Wait for SSE executor to finish
+        sseExecutor?.let {
+            val terminated = it.awaitTermination(5, TimeUnit.SECONDS)
+            if (!terminated) {
+                logger.warn("SSE executor did not terminate, forcing shutdown")
+                it.shutdownNow()
+            }
+        }
+
+        // 6. Now it is safe to stop Undertow itself
         server.stop()
     }
 
@@ -375,7 +394,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         val writer = UndertowSseWriter(exchange)
         val connection = SseConnection(writer)
 
-        sseExecutor.execute {
+        getSseExecutor().execute {
             connection.use {
                 try {
                     handler.accept(it)

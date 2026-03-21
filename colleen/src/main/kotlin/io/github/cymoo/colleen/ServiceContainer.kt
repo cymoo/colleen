@@ -291,14 +291,29 @@ class ServiceContainer {
      * @param kClass the service class.
      */
     @Suppress("UNCHECKED_CAST")
+    @Synchronized
     fun <T : Any> getAll(kClass: KClass<T>): List<T> {
-        val cachedKeys = instances.keys.filterTo(mutableSetOf()) { it.type == kClass }
-        val cached = cachedKeys.mapNotNull { instances[it] as? T }
-        val fromFactories = factories
-            .filterKeys { it.type == kClass && it !in cachedKeys }
-            .values
-            .map { it() as T }  // let exceptions propagate naturally
-        return cached + fromFactories
+        // Synchronized to prevent race condition where factory completion
+        // moves key from factories to instances between iterations
+        val result = mutableListOf<T>()
+        val processedKeys = mutableSetOf<ServiceKey>()
+        
+        // Collect cached instances first
+        for ((key, instance) in instances) {
+            if (key.type == kClass) {
+                result.add(instance as T)
+                processedKeys.add(key)
+            }
+        }
+        
+        // Invoke unprocessed factories
+        for ((key, factory) in factories) {
+            if (key.type == kClass && key !in processedKeys) {
+                result.add(factory() as T)
+            }
+        }
+        
+        return result
     }
 
     // ========================================================================

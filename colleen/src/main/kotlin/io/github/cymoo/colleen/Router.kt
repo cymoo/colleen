@@ -1047,7 +1047,6 @@ internal class Router {
         }
 
         dispatch(0)?.let {
-            ctx.error = null
             if (!it.handled) throw it.cause
         }
     }

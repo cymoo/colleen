@@ -396,7 +396,7 @@ data class Context(
      * @param lang language tag (e.g. `"en"`, `"en-US"`, `"zh-CN"`)
      * @return true if an acceptable match is found, false otherwise
      */
-    fun acceptsLang(lang: String) = request.accepts(lang)
+    fun acceptsLang(lang: String) = request.acceptsLang(lang)
 
     /**
      * Retrieves a request header value by name.
