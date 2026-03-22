@@ -187,98 +187,6 @@ class ColleenTest {
         assertEquals(3, counter.get())
     }
 
-    @Test
-    fun `event listener should receive event data`() {
-        // Arrange
-        val app = Colleen()
-        var receivedRoute: RouteNode? = null
-
-        // Act
-        app.on<Event.RouteRegistered> { event ->
-            receivedRoute = event.node
-        }
-
-        val route = RouteNode.of("GET", "/test", RouteHandler.Lambda { "test" })
-        app.eventBus.emit(Event.RouteRegistered(route))
-
-        // Assert
-        assertNotNull(receivedRoute)
-        assertEquals(route, receivedRoute)
-    }
-
-    @Test
-    fun `events should be emitted for route registration`() {
-        // Arrange
-        val app = Colleen()
-        val routesRegistered = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routesRegistered.add(event.node)
-        }
-
-        // Act
-        app.get("/route1") { "r1" }
-        app.post("/route2") { "r2" }
-        app.put("/route3") { "r3" }
-
-        // Assert
-        assertEquals(3, routesRegistered.size)
-    }
-
-    @Test
-    fun `events should be emitted for middleware registration`() {
-        // Arrange
-        val app = Colleen()
-        val middlewaresRegistered = mutableListOf<MiddlewareNode>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            middlewaresRegistered.add(event.node)
-        }
-
-        // Act
-        app.use { ctx, next -> next() }
-        app.use("/api") { ctx, next -> next() }
-
-        // Assert
-        assertEquals(2, middlewaresRegistered.size)
-    }
-
-    @Test
-    fun `events should be emitted for controller registration`() {
-        // Arrange
-        val app = Colleen()
-        var controllerRegistered = false
-
-        app.on<Event.ControllerRegistered> {
-            controllerRegistered = true
-        }
-
-        // Act
-        class TestController
-        app.addController(TestController())
-
-        // Assert
-        assertTrue(controllerRegistered)
-    }
-
-    @Test
-    fun `events should be emitted for sub-app mounting`() {
-        // Arrange
-        val parent = Colleen()
-        var mountEventReceived = false
-
-        parent.on<Event.SubAppMounted> {
-            mountEventReceived = true
-        }
-
-        // Act
-        val child = Colleen()
-        parent.mount("/child", child)
-
-        // Assert
-        assertTrue(mountEventReceived)
-    }
-
     // ========================================================================
     // Service Container Tests - Kotlin API
     // ========================================================================
@@ -521,16 +429,11 @@ class ColleenTest {
     fun `use should register global middleware`() {
         // Arrange
         val app = Colleen()
-        val middlewares = mutableListOf<MiddlewareNode>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            middlewares.add(event.node)
-        }
-
         // Act
         app.use { ctx, next -> next() }
 
         // Assert
+        val middlewares = app.router.middlewares
         assertEquals(1, middlewares.size)
         assertTrue(middlewares[0] is MiddlewareNode.Global)
     }
@@ -539,16 +442,12 @@ class ColleenTest {
     fun `use with path should register path middleware`() {
         // Arrange
         val app = Colleen()
-        val middlewares = mutableListOf<MiddlewareNode>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            middlewares.add(event.node)
-        }
 
         // Act
         app.use("/api") { ctx, next -> next() }
 
         // Assert
+        val middlewares = app.router.middlewares
         assertEquals(1, middlewares.size)
         assertTrue(middlewares[0] is MiddlewareNode.Prefix)
     }
@@ -557,16 +456,12 @@ class ColleenTest {
     fun `use with predicate should register conditional middleware`() {
         // Arrange
         val app = Colleen()
-        val middlewares = mutableListOf<MiddlewareNode>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            middlewares.add(event.node)
-        }
 
         // Act
         app.use({ ctx -> ctx.request.method == "GET" }) { ctx, next -> next() }
 
         // Assert
+        val middlewares = app.router.middlewares
         assertEquals(1, middlewares.size)
         assertTrue(middlewares[0] is MiddlewareNode.Conditional)
     }
@@ -575,16 +470,12 @@ class ColleenTest {
     fun `use with method and path should register per-route middleware`() {
         // Arrange
         val app = Colleen()
-        val middlewares = mutableListOf<MiddlewareNode>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            middlewares.add(event.node)
-        }
 
         // Act
         app.use("GET", "/users") { ctx, next -> next() }
 
         // Assert
+        val middlewares = app.router.middlewares
         assertEquals(1, middlewares.size)
         assertTrue(middlewares[0] is MiddlewareNode.PerRoute)
     }
@@ -593,16 +484,6 @@ class ColleenTest {
     fun `middlewares should be registered in order`() {
         // Arrange
         val app = Colleen()
-        val order = mutableListOf<String>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            when (event.node) {
-                is MiddlewareNode.Global -> order.add("global")
-                is MiddlewareNode.Prefix -> order.add("prefix")
-                is MiddlewareNode.Conditional -> order.add("conditional")
-                is MiddlewareNode.PerRoute -> order.add("perRoute")
-            }
-        }
 
         // Act
         app.use { ctx, next -> next() } // global
@@ -611,6 +492,15 @@ class ColleenTest {
         app.use("GET", "/test") { ctx, next -> next() } // perRoute
 
         // Assert
+        val middlewares = app.router.middlewares
+        val order = middlewares.map {
+            when (it) {
+                is MiddlewareNode.Global -> "global"
+                is MiddlewareNode.Prefix -> "prefix"
+                is MiddlewareNode.Conditional -> "conditional"
+                is MiddlewareNode.PerRoute -> "perRoute"
+            }
+        }
         assertEquals(listOf("global", "prefix", "conditional", "perRoute"), order)
     }
 
@@ -622,16 +512,12 @@ class ColleenTest {
     fun `addRoute should register lambda handler`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.addRoute("GET", "/test") { "test" }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(1, routes.size)
         assertTrue(routes[0].handler is RouteHandler.Lambda)
     }
@@ -642,16 +528,12 @@ class ColleenTest {
     fun `addRoute should register KFunction handler`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.addRoute("GET", "/test", ::testHandler)
 
         // Assert
+        val routes = app.router.routes
         assertEquals(1, routes.size)
         assertTrue(routes[0].handler is RouteHandler.KFunction)
     }
@@ -660,11 +542,6 @@ class ColleenTest {
     fun `HTTP method helpers should register routes correctly`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.get("/get") { "get" }
@@ -677,6 +554,7 @@ class ColleenTest {
         app.all("/all") { "all" }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(8, routes.size)
         assertEquals("GET", routes[0].method)
         assertEquals("POST", routes[1].method)
@@ -694,17 +572,13 @@ class ColleenTest {
     fun `HTTP method helpers should support KFunction handlers`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.get("/test", ::handler)
         app.post("/test", ::handler)
 
         // Assert
+        val routes = app.router.routes
         assertEquals(2, routes.size)
         assertTrue(routes[0].handler is RouteHandler.KFunction)
         assertTrue(routes[1].handler is RouteHandler.KFunction)
@@ -714,11 +588,6 @@ class ColleenTest {
     fun `controller registration should emit event`() {
         // Arrange
         val app = Colleen()
-        var controllerObj: Any? = null
-
-        app.on<Event.ControllerRegistered> { event ->
-            controllerObj = event.obj
-        }
 
         // Act
         class TestController
@@ -727,6 +596,7 @@ class ColleenTest {
         app.addController(controller)
 
         // Assert
+        val controllerObj = app.router.controllers[0].second
         assertSame(controller, controllerObj)
     }
 
@@ -738,16 +608,12 @@ class ColleenTest {
     fun `route builder should create route with method`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.get("/test").handle { "test" }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(1, routes.size)
         assertEquals("GET", routes[0].method)
     }
@@ -756,11 +622,6 @@ class ColleenTest {
     fun `route builder should support all HTTP methods`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.get("/get").handle { "get" }
@@ -773,6 +634,7 @@ class ColleenTest {
         app.all("/all").handle { "all" }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(8, routes.size)
     }
 
@@ -780,11 +642,6 @@ class ColleenTest {
     fun `group should register routes with prefix`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.group("/api") {
@@ -793,6 +650,7 @@ class ColleenTest {
         }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(2, routes.size)
         assertEquals("/api/users", routes[0].path)
         assertEquals("/api/users", routes[1].path)
@@ -802,18 +660,13 @@ class ColleenTest {
     fun `group should register middlewares with prefix`() {
         // Arrange
         val app = Colleen()
-        val middlewares = mutableListOf<MiddlewareNode>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            middlewares.add(event.node)
-        }
-
         // Act
         app.group("/api") {
             use { ctx, next -> next() }
         }
 
         // Assert
+        val middlewares = app.router.middlewares
         assertEquals(1, middlewares.size)
     }
 
@@ -821,11 +674,6 @@ class ColleenTest {
     fun `nested groups should concatenate prefixes`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.group("/api") {
@@ -835,6 +683,7 @@ class ColleenTest {
         }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(1, routes.size)
         assertEquals("/api/v1/users", routes[0].path)
     }
@@ -1055,27 +904,6 @@ class ColleenTest {
         }
     }
 
-    @Test
-    fun `mount should propagate events to parent`() {
-        // Arrange
-        val parent = Colleen()
-        val child = Colleen()
-        val parentRoutes = mutableListOf<RouteNode>()
-
-        parent.on<Event.RouteRegistered> { event ->
-            parentRoutes.add(event.node)
-        }
-
-        child.get("/test") { "test" }
-
-        // Act
-        parent.mount("/api", child)
-
-        // Assert
-        // Child's existing routes should be propagated to parent
-        assertTrue(parentRoutes.isNotEmpty())
-    }
-
     // ========================================================================
     // Java Compatibility Tests
     // ========================================================================
@@ -1097,26 +925,6 @@ class ColleenTest {
         assertTrue(triggered.get())
     }
 
-    @Test
-    fun `Java GroupBlock API should work`() {
-        // Arrange
-        val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
-
-        // Act
-        app.group("/api", GroupBlock { builder ->
-            builder.get("/test").handle { "test" }
-        })
-
-        // Assert
-        assertEquals(1, routes.size)
-        assertEquals("/api/test", routes[0].path)
-    }
-
     // ========================================================================
     // Edge Cases and Boundary Tests
     // ========================================================================
@@ -1125,16 +933,12 @@ class ColleenTest {
     fun `empty path should be handled correctly`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.get("") { "empty" }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(1, routes.size)
         assertEquals("/", routes[0].path)
     }
@@ -1143,16 +947,11 @@ class ColleenTest {
     fun `root path should be handled correctly`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
-
         // Act
         app.get("/") { "root" }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(1, routes.size)
         assertEquals("/", routes[0].path)
     }
@@ -1194,11 +993,6 @@ class ColleenTest {
     fun `app should handle many route registrations`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act - register many routes
         repeat(1000) { i ->
@@ -1206,6 +1000,7 @@ class ColleenTest {
         }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(1000, routes.size)
     }
 
@@ -1213,11 +1008,6 @@ class ColleenTest {
     fun `app should handle many middleware registrations`() {
         // Arrange
         val app = Colleen()
-        val middlewares = mutableListOf<MiddlewareNode>()
-
-        app.on<Event.MiddlewareRegistered> { event ->
-            middlewares.add(event.node)
-        }
 
         // Act - register many middlewares
         repeat(100) { i ->
@@ -1225,6 +1015,7 @@ class ColleenTest {
         }
 
         // Assert
+        val middlewares = app.router.middlewares
         assertEquals(100, middlewares.size)
     }
 
@@ -1261,11 +1052,6 @@ class ColleenTest {
     fun `path with special characters should be registered`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
-
-        app.on<Event.RouteRegistered> { event ->
-            routes.add(event.node)
-        }
 
         // Act
         app.get("/path-with-dashes") { "test" }
@@ -1274,6 +1060,7 @@ class ColleenTest {
         app.get("/path~with~tildes") { "test" }
 
         // Assert
+        val routes = app.router.routes
         assertEquals(4, routes.size)
     }
 
@@ -1346,25 +1133,19 @@ class ColleenTest {
     fun `concurrent route registrations should be safe`() {
         // Arrange
         val app = Colleen()
-        val routes = mutableListOf<RouteNode>()
         val latch = CountDownLatch(50)
-
-        app.on<Event.RouteRegistered> { event ->
-            synchronized(routes) {
-                routes.add(event.node)
-            }
-            latch.countDown()
-        }
 
         // Act - register routes from multiple threads
         repeat(50) { i ->
             Thread {
                 app.get("/route$i") { "route$i" }
+                latch.countDown()
             }.start()
         }
 
         // Assert
         assertTrue(latch.await(5, TimeUnit.SECONDS))
+        val routes = app.router.routes
         assertEquals(50, routes.size)
     }
 }

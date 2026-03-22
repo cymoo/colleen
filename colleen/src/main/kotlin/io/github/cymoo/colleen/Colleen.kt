@@ -100,17 +100,16 @@ class Colleen {
      * Result:
      *   `subSubApp.fullMountPath` -> /api/v1
      */
-    val fullMountPath: String
-        get() = run {
-            val segments = generateSequence(this) { it.parent }
-                .map { it.mountPath }
-                .filter { it.isNotBlank() }
-                .toList()
-                .asReversed()
+    val fullMountPath: String by lazy {
+        val segments = generateSequence(this) { it.parent }
+            .map { it.mountPath }
+            .filter { it.isNotBlank() }
+            .toList()
+            .asReversed()
 
-            return if (segments.isEmpty()) ""
-            else UrlPath.join("/", *segments.toTypedArray())
-        }
+        if (segments.isEmpty()) ""
+        else UrlPath.join("/", *segments.toTypedArray())
+    }
 
     /**
      * Indicates whether the application is currently running.
@@ -265,7 +264,7 @@ class Colleen {
      * Registers a global middleware that runs for all requests.
      */
     fun use(middleware: Middleware) {
-        addMiddleware(MiddlewareNode.Global(middleware))
+        router.addMiddleware(MiddlewareNode.Global(middleware))
     }
 
     /**
@@ -273,21 +272,21 @@ class Colleen {
      * The middleware applies to this prefix and all sub-paths.
      */
     fun use(prefix: String, middleware: Middleware) {
-        addMiddleware(MiddlewareNode.Prefix.of(prefix, middleware))
+        router.addMiddleware(MiddlewareNode.Prefix.of(prefix, middleware))
     }
 
     /**
      * Registers a conditional middleware that runs when the predicate returns true.
      */
     fun use(predicate: (Context) -> Boolean, middleware: Middleware) {
-        addMiddleware(MiddlewareNode.Conditional(predicate, middleware))
+        router.addMiddleware(MiddlewareNode.Conditional(predicate, middleware))
     }
 
     /**
      * Registers a per-route middleware (exact path + method matching).
      */
     fun use(method: String, path: String, middleware: Middleware) {
-        addMiddleware(MiddlewareNode.PerRoute.of(method, path, middleware))
+        router.addMiddleware(MiddlewareNode.PerRoute.of(method, path, middleware))
     }
 
     // ========================================================================
@@ -308,7 +307,7 @@ class Colleen {
      * ```
      */
     fun addRoute(method: String, path: String, lambda: Handler) {
-        addRoute(RouteNode.of(method, path, RouteHandler.Lambda(lambda)))
+        router.addRoute(RouteNode.of(method, path, RouteHandler.Lambda(lambda)))
     }
 
     /**
@@ -340,7 +339,7 @@ class Colleen {
      * ✅ `id: Query<Int?>`
      */
     fun addRoute(method: String, path: String, fn: KFunction<*>) {
-        addRoute(RouteNode.of(method, path, RouteHandler.KFunction(fn, null)))
+        router.addRoute(RouteNode.of(method, path, RouteHandler.KFunction(fn, null)))
     }
 
     /**
@@ -379,7 +378,6 @@ class Colleen {
      */
 
     fun addController(prefix: String, obj: Any) {
-        eventBus.emit(Event.ControllerRegistered(prefix, obj))
         router.addController(prefix, obj)
     }
 
@@ -549,26 +547,7 @@ class Colleen {
         app.parent = this
         val node = MountNode.of(prefix, app)
 
-        eventBus.emit(Event.SubAppMounted(node))
         router.addMount(node)
-
-        with(app) {
-            router.middlewares.forEach {
-                eventBus.emitToParent(Event.MiddlewareRegistered(it))
-            }
-
-            router.routes.forEach {
-                eventBus.emitToParent(Event.RouteRegistered(it))
-            }
-
-            router.mounts.forEach {
-                eventBus.emit(Event.SubAppMounted(it))
-            }
-
-            router.controllers.forEach {
-                eventBus.emit(Event.ControllerRegistered(it.first, it.second))
-            }
-        }
     }
 
     // ========================================================================
@@ -738,16 +717,6 @@ class Colleen {
     // ========================================================================
     // Private Methods
     // ========================================================================
-
-    private fun addMiddleware(middleware: MiddlewareNode) {
-        eventBus.emit(Event.MiddlewareRegistered(middleware))
-        router.addMiddleware(middleware)
-    }
-
-    private fun addRoute(route: RouteNode) {
-        eventBus.emit(Event.RouteRegistered(route))
-        router.addRoute(route)
-    }
 
     /**
      * Creates a request http handler function for the web server.

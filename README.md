@@ -1944,8 +1944,8 @@ Design Principles
 ### Subscribing to Events
 
 ```kotlin
-app.on<Event.RouteRegistered> { event ->
-    logger.info("Route registered: ${event.node.method} ${event.node.path}")
+app.on<Event.RequestReceived> { 
+    logger.info("→ ${it.request.method} ${it.request.path}")
 }
 ```
 
@@ -1962,43 +1962,6 @@ Typical use cases:
 - Initializing global resources (e.g., database connections, caches, thread pools)
 - Registering background tasks
 - Releasing resources gracefully during shutdown
-
-#### Structural Events
-
-Structural events describe **how an application is assembled**, rather than how a request flows.
-
-They are emitted when framework components are registered or mounted, and are
-observable by parent applications.
-
-The following structural events are exposed:
-
-- `Event.MiddlewareRegistered` — a middleware node is registered
-- `Event.RouteRegistered` — a route is registered
-- `Event.ControllerRegistered` — a controller instance is registered
-- `Event.SubAppMounted` — a sub-application is mounted
-
-These events are primarily intended for **tooling and framework extensions**, such as:
-
-- OpenAPI / Swagger generation
-- route and middleware introspection
-- application structure visualization
-- startup-time validation and diagnostics
-
-**Example: collecting routes for OpenAPI**
-
-```kotlin
-val routes = mutableListOf<RouteNode>()
-
-app.on<Event.RouteRegistered> { event ->
-    routes += event.node
-}
-```
-
-Structural events bubble by default, allowing parent applications to observe
-the complete structure of mounted sub-applications.
-
-> Structural events are emitted at configuration time, not during request
-> handling. They are guaranteed to be stable and suitable for tooling.
 
 #### Request Lifecycle Events
 
@@ -2109,7 +2072,6 @@ This pattern keeps extensions:
 Use the event system when you need to:
 
 - observe or record framework behavior
-- build tooling or plugins (e.g. OpenAPI)
 - attach cross-cutting concerns
 - extend the framework without affecting control flow
 

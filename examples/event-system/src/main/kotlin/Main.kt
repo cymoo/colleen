@@ -1,6 +1,8 @@
-import io.github.cymoo.colleen.*
+import io.github.cymoo.colleen.Colleen
+import io.github.cymoo.colleen.Event
+import io.github.cymoo.colleen.Path
+import io.github.cymoo.colleen.Query
 import io.github.cymoo.colleen.middleware.Cors
-import io.github.cymoo.colleen.util.http.UrlPath
 import org.slf4j.LoggerFactory
 import kotlin.time.DurationUnit
 
@@ -49,24 +51,6 @@ fun setupEventListeners(app: Colleen) {
     app.on<Event.ServerStarted> { logger.info("Server started successfully") }
     app.on<Event.ServerStopping> { logger.info("Server stopping...") }
     app.on<Event.ServerStopped> { logger.info("Server stopped") }
-
-    // Configuration
-    app.on<Event.MiddlewareRegistered> { event ->
-        logger.info("Middleware registered: ${event.node.middleware.javaClass.simpleName}")
-    }
-
-    app.on<Event.RouteRegistered> { event ->
-        val handler = when (val h = event.node.handler) {
-            is RouteHandler.KFunction -> h.fn.name
-            else -> "λ"
-        }
-        val fullPath = UrlPath.join(event.source.fullMountPath, event.node.path)
-        logger.info("Route registered: ${event.node.method.padEnd(6)} $fullPath → $handler")
-    }
-
-    app.on<Event.SubAppMounted> {
-        logger.info("Sub-app mounted: ${it.node.app.fullMountPath}")
-    }
 
     // Request/Response
     app.on<Event.RequestReceived> {

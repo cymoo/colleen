@@ -60,22 +60,6 @@ sealed class Event(
     class ServerStopped : Event(false)
 
     // =========================================================================
-    // Structure / Configuration Events
-    // =========================================================================
-
-    /** Emitted when a middleware node is registered. */
-    class MiddlewareRegistered(val node: MiddlewareNode) : Event()
-
-    /** Emitted when a route node is registered. */
-    class RouteRegistered(val node: RouteNode) : Event()
-
-    /** Emitted when a controller instance is registered. */
-    class ControllerRegistered(val prefix: String, val obj: Any) : Event()
-
-    /** Emitted when a sub-application is mounted. */
-    class SubAppMounted(val node: MountNode) : Event()
-
-    // =========================================================================
     // Request Handling Events
     // =========================================================================
 
@@ -284,34 +268,6 @@ class EventBus(val owner: Colleen) {
         dispatch(event, listeners[event::class.java])
         dispatch(event, listeners[Event::class.java])
 
-        if (event.bubbles && !event.isPropagationStopped) {
-            parentBus?.emit(event)
-        }
-    }
-
-    /**
-     * Emits an event directly to the parent EventBus, skipping the current one.
-     *
-     * This method does NOT dispatch the event to listeners registered on the
-     * current EventBus. The event is forwarded upward only.
-     *
-     * Bubbling behavior:
-     * - If [Event.bubbles] is true and propagation has not been stopped,
-     *   the event will be emitted on the parent EventBus.
-     * - Further bubbling (to grandparents) is controlled by the parent's emit logic.
-     *
-     * Notes:
-     * - This is useful when a child application wants to report or escalate
-     *   an event to its parent without handling it locally.
-     * - The event source is set to the owner of this EventBus on first emission,
-     *   even though local listeners are skipped.
-     *
-     * Typical usage:
-     * - Cross-application reporting
-     * - Explicit event escalation from sub-apps
-     */
-    fun <T : Event> emitToParent(event: T) {
-        event.setSource(owner)
         if (event.bubbles && !event.isPropagationStopped) {
             parentBus?.emit(event)
         }

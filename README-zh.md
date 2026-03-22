@@ -1418,12 +1418,12 @@ middleware1 → 后置
 
 ```kotlin
 app.use { ctx, next ->
-  if (ctx.path == "/ping") {
-    ctx.text("pong")
-    return@use
-  }
+    if (ctx.path == "/ping") {
+        ctx.text("pong")
+        return@use
+    }
 
-  next()
+    next()
 }
 ```
 
@@ -1970,8 +1970,8 @@ Colleen 提供了一个轻量**同步的事件系统**，用于观察和扩展�
 ### 订阅事件
 
 ```kotlin
-app.on<Event.RouteRegistered> { event ->
-    logger.info("Route registered: ${event.node.method} ${event.node.path}")
+app.on<Event.RequestReceived> {
+    logger.info("→ ${it.request.method} ${it.request.path}")
 }
 ```
 
@@ -1985,41 +1985,6 @@ app.on<Event.RouteRegistered> { event ->
 * `Event.ServerStopping` / `Event.ServerStopped`
 
 适用于：初始化或清理全局资源
-
-#### 结构化事件
-
-结构化事件描述的是**应用如何被构建**，而不是请求如何流动。
-
-它们在组件注册或应用挂载时触发，可被父应用观察。
-
-结构化事件包括：
-
-* `Event.MiddlewareRegistered` — 注册中间件节点时触发
-* `Event.RouteRegistered` — 注册路由时触发
-* `Event.ControllerRegistered` — 注册 controller 实例时触发
-* `Event.SubAppMounted` — 挂载子应用时触发
-
-典型用途：
-
-* 生成 OpenAPI / Swagger 文档
-* 路由与中间件内省
-* 可视化应用结构
-* 启动阶段验证与诊断
-
-**示例：收集路由信息用于 OpenAPI**
-
-```kotlin
-val routes = mutableListOf<RouteNode>()
-
-app.on<Event.RouteRegistered> { event ->
-    routes += event.node
-}
-```
-
-默认情况下，结构化事件会向父应用冒泡，因此父应用可以完整观察所有已挂载子应用的结构。
-
-> 结构化事件在“配置阶段”触发，而不是在请求期间。
-> 它们语义稳定，适合构建工具与插件。
 
 #### 请求生命周期事件
 
@@ -2127,7 +2092,6 @@ app.enableHttpMethodOverride()
 适合使用事件系统的场景包括：
 
 * 观察或记录框架行为
-* 构建插件或工具（如 OpenAPI 生成器）
 * 添加横切关注点（日志、追踪、指标）
 * 在不改变控制流的前提下扩展能力
 
@@ -2428,7 +2392,7 @@ fun main() {
 
 ### 3）常用注解及用法
 
-注解均是可选的，它们主要为文档及字段添加额外的信息，例如 tag 和 description 等 
+注解均是可选的，它们主要为文档及字段添加额外的信息，例如 tag 和 description 等
 
 ```kotlin
 @Tags("todos")
