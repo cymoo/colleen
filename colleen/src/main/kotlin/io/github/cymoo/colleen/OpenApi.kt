@@ -53,7 +53,7 @@ data class OpenApiParamSpec(
  * @param schema     Static schema map (used when [schemaType] is null)
  * @param required   Explicit required flag; null means defer to the framework's inferred value
  * @param description Optional description for this parameter
- * @param schemaType If set, [OpenApi.kt] will call `typeToSchema()` on this [Type] to
+ * @param schemaType If set, [typeToSchema] will be called on this [Type] to
  *                   produce the schema instead of using [schema]. Use this when the schema
  *                   depends on the Kotlin/Java generic type at the call site.
  */
@@ -72,7 +72,7 @@ data class OpenApiParameter(
  * @param contentType MIME type (e.g. "application/json", "multipart/form-data")
  * @param schema      Static schema map (used when [schemaType] is null)
  * @param description Optional description for the request body
- * @param schemaType  If set, [OpenApi.kt] will call `typeToSchema()` on this [Type]
+ * @param schemaType  If set, [typeToSchema] will be called on this [Type]
  *                    to produce the schema instead of using [schema].
  */
 data class OpenApiRequestBody(
@@ -768,7 +768,7 @@ internal fun typeToSchema(
                 schemas[schemaName] = emptyMap()
                 schemas[schemaName] = buildObjectSchema(rawClass, depth, schemas)
             }
-            mapOf("\$ref" to "#/components/schemas/$schemaName")
+            mapOf($$"$ref" to "#/components/schemas/$schemaName")
         }
 
         else -> buildObjectSchema(rawClass, depth, schemas)
@@ -873,7 +873,7 @@ private fun buildObjectSchema(
  * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
  * [jsUrl] may be overridden to point to a self-hosted or alternate CDN bundle.
  *
- * To use ReDoc instead of the default Swagger UI, pass this function to [openApi]:
+ * To use ReDoc instead of the default Swagger UI, pass this function to [Colleen.openApi]:
  * ```kotlin
  * app.openApi(uiHtml = ::redocHtml)
  * ```
@@ -903,7 +903,7 @@ fun redocHtml(
  * [specPath] is the URL path to the OpenAPI JSON endpoint (e.g. `/openapi.json`).
  * [jsUrl] and [cssUrl] may be overridden to point to self-hosted or alternate CDN bundles.
  *
- * This is the **default** UI used by [openApi].
+ * This is the **default** UI used by [Colleen.openApi].
  */
 fun swaggerUiHtml(
     specPath: String,
