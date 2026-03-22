@@ -53,14 +53,6 @@ data class ServerConfig(
     /** Connection idle timeout in milliseconds (0 = infinite, default: 30s). */
     @JvmField
     var idleTimeout: Long = 30_000,
-
-    /** Connection read timeout in milliseconds (0 = infinite, default: 30s). */
-    @JvmField
-    var readTimeout: Long = 30_000,
-
-    /** Connection write timeout in milliseconds (0 = infinite, default: 30s). */
-    @JvmField
-    var writeTimeout: Long = 30_000,
 )
 
 /**

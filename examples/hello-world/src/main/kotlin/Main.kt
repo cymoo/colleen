@@ -646,8 +646,6 @@ fun main() {
             maxRequestSize = 30 * 1024 * 1024   // 30 MB
             maxFileSize = 10 * 1024 * 1024       // 10 MB per file
             idleTimeout = 60_000
-            readTimeout = 30_000
-            writeTimeout = 30_000
             shutdownTimeout = 30_000
         }
         json {

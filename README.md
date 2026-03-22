@@ -2727,8 +2727,6 @@ app.config {
         // Timeouts (milliseconds)
         shutdownTimeout = 30_000
         idleTimeout = 30_000
-        readTimeout = 30_000
-        writeTimeout = 30_000
     }
 }
 ```
@@ -2858,24 +2856,6 @@ app.config {
 ```
 
 Overly permissive limits may expose the server to resource exhaustion.
-
-### Timeouts
-
-Review timeout settings based on your deployment environment:
-
-```kotlin
-app.config {
-    server {
-        idleTimeout = 60_000
-        readTimeout = 30_000
-        writeTimeout = 30_000
-        shutdownTimeout = 30_000
-    }
-}
-```
-
-- Timeouts that are too long may tie up resources
-- Timeouts that are too short may interrupt legitimate slow clients
 
 ### Structured Logging
 

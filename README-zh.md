@@ -2745,8 +2745,6 @@ app.config {
         // 超时设置（毫秒）
         shutdownTimeout = 30_000
         idleTimeout = 30_000
-        readTimeout = 30_000
-        writeTimeout = 30_000
     }
 }
 ```
@@ -2904,26 +2902,6 @@ app.config {
 - 资源耗尽攻击风险
 
 根据业务需求进行平衡配置。
-
-### 超时策略
-
-根据部署环境（例如反向代理、负载均衡器）合理调整超时参数：
-
-```kotlin
-app.config {
-    server {
-        idleTimeout = 60_000
-        readTimeout = 30_000
-        writeTimeout = 30_000
-        shutdownTimeout = 30_000
-    }
-}
-```
-
-- 超时过长可能导致资源被长时间占用
-- 超时过短可能会误伤合法的慢速客户端
-
-建议结合实际流量模型进行调优。
 
 ### 结构化日志
 

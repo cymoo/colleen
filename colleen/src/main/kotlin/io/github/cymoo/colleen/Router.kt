@@ -73,6 +73,8 @@ sealed class PathSegment {
 
             val segments = UrlPath.split(path).map { parse(it) }
 
+            require(segments.size <= 31) { "Too many path segments" }
+
             // Validate: no duplicate parameter names across all segments
             val paramNames = mutableSetOf<String>()
             for (segment in segments) {
@@ -284,8 +286,8 @@ sealed class PathSegment {
          * - /users/{id} -> lower priority
          * - /files/{name}.txt -> higher than /files/{name}
          */
-        fun priority(segments: List<PathSegment>): Int {
-            var priority = 0
+        fun priority(segments: List<PathSegment>): Long {
+            var priority = 0L
             for (segment in segments) {
                 priority = priority * 4 + when (segment) {
                     is Static -> 3
@@ -407,9 +409,6 @@ object PathMatcher {
                         return MatchResult.NO_MATCH
                     }
                     val value = requestSegments[reqIdx]
-                    if (value.isEmpty()) {
-                        return MatchResult.NO_MATCH
-                    }
                     params[pattern.name] = value
                     reqIdx++
                     patternIdx++
@@ -611,7 +610,7 @@ class RouteNode private constructor(
     }
 
     // Routing priority (higher = more specific)
-    val priority: Int = run {
+    val priority: Long = run {
         val segments = PathSegment.parseAll(path)
         PathSegment.priority(segments)
     }
@@ -810,6 +809,8 @@ internal class Router {
         val obj = controllerMeta.obj
 
         // Register controller-level middlewares
+        // NOTE: Middlewares registered as Prefix middlewares, affecting unrelated routes.
+        // Use PerRoute middleware registration instead?
         controllerMeta.middlewares.forEach {
             addMiddleware(MiddlewareNode.Prefix.of(basePath) { ctx, next ->
                 it.invoke(obj, ctx, next)
@@ -943,12 +944,18 @@ internal class Router {
      * Finds the first and most specific matching route.
      */
     private fun findBestMatchedRoute(ctx: Context): Pair<RouteNode, MatchResult>? {
-        val matches = routes.mapNotNull { route ->
+        var best: Pair<RouteNode, MatchResult>? = null
+
+        for (route in routes) {
             val matchResult = route.matchesPathAndMethod(ctx)
-            if (matchResult.matched) route to matchResult
-            else null
+            if (!matchResult.matched) continue
+
+            if (best == null || route.priority > best.first.priority) {
+                best = route to matchResult
+            }
         }
-        return matches.maxByOrNull { it.first.priority }
+
+        return best
     }
 
     /**
@@ -1047,7 +1054,6 @@ internal class Router {
         }
 
         dispatch(0)?.let {
-            ctx.error = null
             if (!it.handled) throw it.cause
         }
     }

@@ -99,6 +99,11 @@ sealed class Validator<T, Self : Validator<T, Self>>(protected val value: T?) {
 
 class StringValidator(value: String?) : Validator<String, StringValidator>(value) {
 
+    companion object {
+        // Cached regex patterns for performance
+        private val EMAIL_REGEX = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")
+    }
+
     /**
      * Marks this field as required (non-null).
      */
@@ -154,8 +159,7 @@ class StringValidator(value: String?) : Validator<String, StringValidator>(value
 
     fun email(): StringValidator {
         validateIfPresent {
-            val emailRegex = Regex("^[A-Za-z0-9+_.-]+@(.+)$")
-            if (!emailRegex.matches(it)) {
+            if (!EMAIL_REGEX.matches(it)) {
                 addError("must be a valid email address")
             }
         }
@@ -165,7 +169,13 @@ class StringValidator(value: String?) : Validator<String, StringValidator>(value
     fun url(): StringValidator {
         validateIfPresent {
             try {
-                URI(it).toURL()
+                val uri = URI(it)
+                // Validate scheme exists and is http or https for web contexts
+                if (uri.scheme == null || uri.scheme !in listOf("http", "https")) {
+                    addError("must be a valid URL")
+                    return@validateIfPresent
+                }
+                uri.toURL()
             } catch (_: Exception) {
                 addError("must be a valid URL")
             }
@@ -386,16 +396,6 @@ class CollectionValidator<T>(value: Collection<T>?) : Validator<Collection<T>, C
             val notAllowed = it.filter { item -> item !in allowed }
             if (notAllowed.isNotEmpty()) {
                 addError("contains invalid values")
-            }
-        }
-        return this
-    }
-
-    fun allIn(vararg allowed: T): CollectionValidator<T> {
-        validateIfPresent {
-            val notAllowed = it.filter { item -> item !in allowed }
-            if (notAllowed.isNotEmpty()) {
-                addError("all elements must be one of: ${allowed.joinToString(", ")}")
             }
         }
         return this

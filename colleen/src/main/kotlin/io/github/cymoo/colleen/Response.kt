@@ -195,7 +195,7 @@ data class Response(
         path: String = "/",
         domain: String? = null
     ): Response =
-        cookie(name, "", maxAge = 0, path = path, domain = domain, sameSite = null)
+        cookie(name, "", maxAge = 0, path = path, domain = domain, sameSite = Cookie.SameSite.LAX)
 
     /**
      * Merge another response into this one.

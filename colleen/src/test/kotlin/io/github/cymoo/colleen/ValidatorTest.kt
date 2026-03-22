@@ -422,19 +422,6 @@ class ValidationTests {
         }
 
         @Test
-        fun `allIn should validate all elements against allowed values`() {
-            val validResult = validate {
-                field("roles", listOf("admin", "user")).allIn("admin", "user", "guest")
-            }
-            assertTrue(validResult.isSuccess())
-
-            val invalidResult = validate {
-                field("roles", listOf("admin", "superuser")).allIn("admin", "user", "guest")
-            }
-            assertTrue(invalidResult.isFailure())
-        }
-
-        @Test
         fun `notIn should detect forbidden values`() {
             val result = validate {
                 field("tags", listOf("safe", "unsafe")).notIn("unsafe", "banned")

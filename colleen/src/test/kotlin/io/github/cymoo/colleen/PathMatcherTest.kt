@@ -487,6 +487,20 @@ class PathSegmentParseAllTest {
         }
         assertTrue(exception.message!!.contains("Duplicate parameter name 'id'"))
     }
+    @Test
+    fun `priority - reject too many path segments to prevent overflow`() {
+        // Arrange
+        val path = (1..32).joinToString(separator = "/", prefix = "/") { "a" }
+
+        // Act & Assert
+        val exception = assertFailsWith<IllegalArgumentException> {
+            PathSegment.parseAll(path)
+        }
+
+        assertTrue(
+            exception.message!!.contains("Too many path segments")
+        )
+    }
 
     @Test
     fun `parseAll - reject duplicate parameter names in complex segment`() {

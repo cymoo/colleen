@@ -2,11 +2,8 @@ package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.json.JsonMapper
 import io.github.cymoo.colleen.util.TypeRef
-import io.github.cymoo.colleen.util.http.ContentNegotiator
+import io.github.cymoo.colleen.util.http.*
 import io.github.cymoo.colleen.util.http.Cookie
-import io.github.cymoo.colleen.util.http.Headers
-import io.github.cymoo.colleen.util.http.LanguageNegotiator
-import io.github.cymoo.colleen.util.http.QueryString
 import io.github.cymoo.colleen.util.lazyLoom
 import java.io.InputStream
 import java.nio.charset.Charset
@@ -449,21 +446,32 @@ data class FileItem(
     val size: Long,
     val inputStream: InputStream
 ) : Part {
+    @Volatile
+    private var consumed = false
+
     /**
      * Saves the file to the specified path.
      * This can only be called once.
      */
     fun save(path: String) {
+        check(!consumed) { "File already consumed" }
+        consumed = true
+
         val target = Paths.get(path).normalize()
         Files.createDirectories(target.parent)
-
-        Files.newOutputStream(target).use { out ->
-            inputStream.copyTo(out)
+        
+        try {
+            inputStream.use { ins ->
+                Files.newOutputStream(target).use { out ->
+                    ins.copyTo(out)
+                }
+            }
+        } catch (e: Exception) {
+            try {
+                Files.deleteIfExists(target)
+            } catch (_: Exception) {
+            }
+            throw e
         }
-    }
-
-    /** Closes the underlying file stream. */
-    fun close() {
-        inputStream.close()
     }
 }
