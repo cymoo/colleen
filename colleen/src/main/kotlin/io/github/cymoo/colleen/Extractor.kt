@@ -767,34 +767,60 @@ private fun buildResolver(kParam: KParameter, jParam: Parameter, paramName: Stri
     }
 }
 
+private val extractorFactoryCache = HashMap<Class<*>, ExtractorFactory<*>>(16)
+
 /**
  * Resolves the ExtractorFactory for a ParamExtractor type.
  *
+ * Results are cached in [extractorFactoryCache] since this is called during
+ * the build phase (route registration) on the main thread only.
+ *
  * Supported strategies:
  * 1. Kotlin: companion object implementing ExtractorFactory
- *    - resolved via Java reflection on `Companion` field
  * 2. Java: public static FACTORY field implementing ExtractorFactory
  */
 internal fun getExtractorFactory(wrapperClass: Class<*>): ExtractorFactory<*> {
+    return extractorFactoryCache.getOrPut(wrapperClass) {
+        resolveExtractorFactory(wrapperClass)
+    }
+}
+
+/**
+ * Performs the actual reflection-based lookup of an [ExtractorFactory] for the given class.
+ *
+ * Only called once per [wrapperClass] — subsequent lookups are served from the cache.
+ *
+ * @throws IllegalArgumentException if the factory is inaccessible or cannot be found
+ */
+private fun resolveExtractorFactory(wrapperClass: Class<*>): ExtractorFactory<*> {
     // 1. Kotlin: companion object
-    runCatching {
-        // After compilation, kotlin companion object generates a public static field: Companion.
+    try {
         val companionField = wrapperClass.getDeclaredField("Companion")
         val companionInstance = companionField.get(null)
-
         if (companionInstance is ExtractorFactory<*>) {
             return companionInstance
         }
+    } catch (_: NoSuchFieldException) {
+        // Not a Kotlin class with a companion object, try next strategy
+    } catch (e: IllegalAccessException) {
+        throw IllegalArgumentException(
+            "${wrapperClass.simpleName} has a Companion field but it is not accessible", e
+        )
     }
 
     // 2. Java: public static FACTORY field
-    runCatching {
+    try {
         val factoryField = wrapperClass.getField("FACTORY")
         val factoryInstance = factoryField.get(null)
-
         if (factoryInstance is ExtractorFactory<*>) {
             return factoryInstance
         }
+    } catch (_: NoSuchFieldException) {
+        // No FACTORY field found, fall through to error
+    } catch (e: IllegalAccessException) {
+        throw IllegalArgumentException(
+            "${wrapperClass.simpleName} has a FACTORY field but it is not accessible", e
+        )
     }
 
     throw IllegalArgumentException(
@@ -1151,31 +1177,25 @@ internal fun String?.convertTo(targetClass: Class<*>): Any? {
         return null
     }
 
-    return try {
-        when (targetClass) {
-            String::class.java -> this
-            Int::class.java, Integer::class.java ->
-                toIntOrNull() ?: throw TypeConversionFailed(this, "Int")
+    return when (targetClass) {
+        String::class.java -> this
+        Int::class.java, Integer::class.java ->
+            toIntOrNull() ?: throw TypeConversionFailed(this, "Int")
 
-            Long::class.java, java.lang.Long::class.java ->
-                toLongOrNull() ?: throw TypeConversionFailed(this, "Long")
+        Long::class.java, java.lang.Long::class.java ->
+            toLongOrNull() ?: throw TypeConversionFailed(this, "Long")
 
-            Double::class.java, java.lang.Double::class.java ->
-                toDoubleOrNull() ?: throw TypeConversionFailed(this, "Double")
+        Double::class.java, java.lang.Double::class.java ->
+            toDoubleOrNull() ?: throw TypeConversionFailed(this, "Double")
 
-            Float::class.java, java.lang.Float::class.java ->
-                toFloatOrNull() ?: throw TypeConversionFailed(this, "Float")
+        Float::class.java, java.lang.Float::class.java ->
+            toFloatOrNull() ?: throw TypeConversionFailed(this, "Float")
 
-            Boolean::class.java, java.lang.Boolean::class.java ->
-                toLenientBoolean()
+        Boolean::class.java, java.lang.Boolean::class.java ->
+            toLenientBoolean()
 
-            else ->
-                throw IllegalArgumentException("Type '${targetClass.simpleName}' is not supported: Type conversion cannot be done")
-        }
-    } catch (e: ExtractionException) {
-        throw e
-    } catch (e: Exception) {
-        throw TypeConversionFailed(this, targetClass.simpleName, e)
+        else ->
+            throw IllegalArgumentException("Type '${targetClass.simpleName}' is not supported: Type conversion cannot be done")
     }
 }
 

@@ -644,6 +644,11 @@ class Colleen {
         val server = UndertowServer(config.server)
         webServer = server
 
+        // Register event listener before starting server to handle all requests
+        on<Event.ResponseReady> {
+            runCatching { it.ctx.request.stream?.close() }
+        }
+
         // Register shutdown hook
         Runtime.getRuntime().addShutdownHook(
             Thread({ shutdown() }, "shutdown")
@@ -658,10 +663,6 @@ class Colleen {
         }
 
         eventBus.emit(Event.ServerStarted())
-
-        on<Event.ResponseReady> {
-            runCatching { it.ctx.request.stream?.close() }
-        }
     }
 
     /**
@@ -858,14 +859,13 @@ class Colleen {
 
         eventBus.emit(Event.ServerStopping())
 
-        // 1. Stop accepting new HTTP requests
+        // Stop accepting new HTTP requests
         try {
             webServer?.stop()
         } catch (e: Exception) {
             logger.warn("Error stopping server during shutdown", e)
         }
 
-        // 2. Execute user shutdown hooks
         webServer = null
         eventBus.emit(Event.ServerStopped())
     }
