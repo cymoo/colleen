@@ -20,7 +20,7 @@ import java.lang.reflect.Modifier
  * @throws IllegalArgumentException if the lambda cannot be resolved
  *         or the captured instance type does not match the declaring class
  */
-fun resolveLambda(fn: Any): Handler {
+private fun resolveLambda(fn: Any): Handler {
     // Locate the actual implementation method behind the lambda
     val method = findImplMethod(fn) ?: throw IllegalArgumentException("Cannot find method for lambda")
 
@@ -59,7 +59,7 @@ fun resolveLambda(fn: Any): Handler {
  *
  * @return the captured instance, or null if the lambda is static
  */
-fun getCapturedInstance(fn: Any): Any? {
+private fun getCapturedInstance(fn: Any): Any? {
     return fn.javaClass.declaredFields
         // Why arg$: JVM / Kotlin compiler convention for captured variables in lambdas.
         .firstOrNull { it.name.startsWith("arg$") }
@@ -83,7 +83,7 @@ fun getCapturedInstance(fn: Any): Any? {
  *
  * @return the resolved Method, or null if resolution fails
  */
-fun findImplMethod(fn: Any): Method? {
+private fun findImplMethod(fn: Any): Method? {
     try {
         // Obtain SerializedLambda via writeReplace()
         val writeReplace = fn.javaClass.getDeclaredMethod("writeReplace")

@@ -40,7 +40,7 @@ class RateLimiterTest {
             headers = Headers().apply {
                 headers.forEach { (key, value) -> set(key, value) }
             },
-            metadata = Request.RequestMetadata(remoteAddr = ip)
+            serverInfo = Request.ServerInfo(remoteAddr = ip)
         )
         return Context(request = request, app = app)
     }

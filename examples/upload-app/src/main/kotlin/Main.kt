@@ -1,6 +1,6 @@
 import io.github.cymoo.colleen.BadRequest
 import io.github.cymoo.colleen.Colleen
-import io.github.cymoo.colleen.FileItem
+import io.github.cymoo.colleen.FilePart
 import io.github.cymoo.colleen.NotFound
 import io.github.cymoo.colleen.middleware.RequestLogger
 import java.io.File
@@ -44,7 +44,7 @@ class FileManager(uploadDir: String) {
     /**
      * Save uploaded file to local storage with a unique filename
      */
-    fun saveFile(file: FileItem): FileInfo {
+    fun saveFile(file: FilePart): FileInfo {
         // Generate safe filename to prevent path traversal attacks
         val safeFilename = sanitizeFilename(file.filename)
         val timestamp = System.currentTimeMillis()

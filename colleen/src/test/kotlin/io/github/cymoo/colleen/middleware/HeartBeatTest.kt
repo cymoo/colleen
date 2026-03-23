@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-class HeartbeatTest {
+class HeartBeatTest {
 
     private lateinit var app: Colleen
     private var nextCalled = false
@@ -32,13 +32,13 @@ class HeartbeatTest {
     }
 
     // ========================================================================
-    // Basic Heartbeat Tests
+    // Basic HeartBeat Tests
     // ========================================================================
 
     @Test
     fun `should respond 200 for GET request to heartbeat endpoint`() {
         // Arrange
-        val middleware = Heartbeat("/health")
+        val middleware = HeartBeat("/health")
         val ctx = createContext(method = "GET", path = "/health")
 
         // Act
@@ -54,7 +54,7 @@ class HeartbeatTest {
     @Test
     fun `should respond 200 for HEAD request to heartbeat endpoint`() {
         // Arrange
-        val middleware = Heartbeat("/health")
+        val middleware = HeartBeat("/health")
         val ctx = createContext(method = "HEAD", path = "/health")
 
         // Act
@@ -70,7 +70,7 @@ class HeartbeatTest {
     @Test
     fun `should call next for non-heartbeat endpoints`() {
         // Arrange
-        val middleware = Heartbeat("/health")
+        val middleware = HeartBeat("/health")
         val ctx = createContext(method = "GET", path = "/api/users")
 
         // Act
@@ -83,7 +83,7 @@ class HeartbeatTest {
     @Test
     fun `should call next for POST request to heartbeat endpoint`() {
         // Arrange
-        val middleware = Heartbeat("/health")
+        val middleware = HeartBeat("/health")
         val ctx = createContext(method = "POST", path = "/health")
 
         // Act
@@ -96,7 +96,7 @@ class HeartbeatTest {
     @Test
     fun `should support custom endpoint and response text`() {
         // Arrange
-        val middleware = Heartbeat("/ping", "pong")
+        val middleware = HeartBeat("/ping", "pong")
         val ctx = createContext(method = "GET", path = "/ping")
 
         // Act

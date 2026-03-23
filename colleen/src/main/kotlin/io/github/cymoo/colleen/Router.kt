@@ -16,7 +16,7 @@ import kotlin.time.measureTime
  * Represents a single segment in a path pattern.
  * A segment can now contain multiple parts (static text + parameters).
  */
-sealed class PathSegment {
+internal sealed class PathSegment {
     /**
      * Pure static segment (e.g., "users")
      */
@@ -314,7 +314,7 @@ sealed class PathSegment {
  * @property params extracted path parameters
  * @property consumedSegments number of segments consumed (for prefix matching)
  */
-data class MatchResult(
+internal data class MatchResult(
     val matched: Boolean,
     val params: Map<String, String> = emptyMap(),
     val consumedSegments: Int = 0
@@ -334,7 +334,7 @@ data class MatchResult(
 /**
  * Matches request paths against path patterns.
  */
-object PathMatcher {
+internal object PathMatcher {
     /**
      * Maximum allowed path length
      */
@@ -610,7 +610,7 @@ class RouteNode private constructor(
     }
 
     // Routing priority (higher = more specific)
-    val priority: Long = run {
+    internal val priority: Long = run {
         val segments = PathSegment.parseAll(path)
         PathSegment.priority(segments)
     }
@@ -618,14 +618,14 @@ class RouteNode private constructor(
     /**
      * Matches request path (exact match).
      */
-    fun matchesPath(requestPath: String): MatchResult {
+    internal fun matchesPath(requestPath: String): MatchResult {
         return PathMatcher.match(requestPath, path, exactMatch = true)
     }
 
     /**
      * Matches both path and HTTP method.
      */
-    fun matchesPathAndMethod(ctx: Context): MatchResult {
+    internal fun matchesPathAndMethod(ctx: Context): MatchResult {
         if (method != "*" && method != ctx.method) {
             return MatchResult.NO_MATCH
         }
@@ -650,7 +650,7 @@ class RouteNode private constructor(
  */
 sealed class MiddlewareNode {
     abstract val middleware: Middleware
-    abstract fun match(ctx: Context): MatchResult
+    internal abstract fun match(ctx: Context): MatchResult
 
     /**
      * Global middleware that matches all requests.
@@ -747,7 +747,7 @@ class MountNode private constructor(
     /**
      * Matches request path by prefix.
      */
-    fun match(ctx: Context): MatchResult {
+    internal fun match(ctx: Context): MatchResult {
         return PathMatcher.match(ctx.path, prefix, exactMatch = false)
     }
 }

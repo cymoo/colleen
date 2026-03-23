@@ -5,13 +5,13 @@ import io.github.cymoo.colleen.Middleware
 import io.github.cymoo.colleen.Next
 
 /**
- * Heartbeat middleware
+ * HeartBeat middleware
  * Health check endpoint that returns a simple success response
  *
  * @param endpoint Health check path
  * @param responseText Response content, defaults to "ok"
  */
-class Heartbeat @JvmOverloads constructor(
+class HeartBeat @JvmOverloads constructor(
     private val endpoint: String,
     private val responseText: String = "ok"
 ) : Middleware {

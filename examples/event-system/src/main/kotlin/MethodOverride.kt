@@ -1,5 +1,3 @@
-package io.github.cymoo.colleen.extension
-
 import io.github.cymoo.colleen.Colleen
 import io.github.cymoo.colleen.Event
 import io.github.cymoo.colleen.Request

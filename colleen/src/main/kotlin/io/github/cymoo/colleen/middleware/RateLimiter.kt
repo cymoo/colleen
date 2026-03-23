@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicReference
  * @property tokens Current number of available tokens
  * @property lastRefillTime Last time tokens were refilled (in nanoseconds)
  */
-data class TokenBucketState(
+private data class TokenBucketState(
     val tokens: Double,
     val lastRefillTime: Long
 )

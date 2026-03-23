@@ -42,7 +42,7 @@ class SecurityHeaders @JvmOverloads constructor(
         }
 
         // HSTS only on HTTPS
-        if (ctx.request.metadata.isSecure) {
+        if (ctx.request.serverInfo.isSecure) {
             ctx.response.header("Strict-Transport-Security", strictTransportSecurity)
         }
     }

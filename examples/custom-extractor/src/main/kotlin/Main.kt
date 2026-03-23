@@ -2,12 +2,11 @@ import io.github.cymoo.colleen.BadRequest
 import io.github.cymoo.colleen.Colleen
 import io.github.cymoo.colleen.Context
 import io.github.cymoo.colleen.ExtractorFactory
-import io.github.cymoo.colleen.OpenApiParamSpec
-import io.github.cymoo.colleen.OpenApiParameter
-import io.github.cymoo.colleen.OpenApiRequestBody
 import io.github.cymoo.colleen.ParamExtractor
 import io.github.cymoo.colleen.Unauthorized
 import io.github.cymoo.colleen.middleware.RequestLogger
+import io.github.cymoo.colleen.openapi.OpenApiParamSpec
+import io.github.cymoo.colleen.openapi.OpenApiParameter
 import java.lang.reflect.Parameter
 
 /**

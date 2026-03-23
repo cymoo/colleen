@@ -525,7 +525,7 @@ class ExtractorTest {
         val data = buildFakeMultipart("avatar", "avatar.jpg", "image/jpeg", byteArrayOf())
         val ctx = createContext(
             contentType = "multipart/form-data", stream = data.inputStream(), multipart = listOf(
-                FileItem(
+                FilePart(
                     name = "avatar",
                     filename = "avatar.jpg",
                     contentType = "image/jpeg",
@@ -545,7 +545,7 @@ class ExtractorTest {
         val data = buildFakeMultipart("file", "doc.pdf", "application/pdf", byteArrayOf())
         val ctx = createContext(
             contentType = "multipart/form-data", stream = data.inputStream(), multipart = listOf(
-                FileItem(
+                FilePart(
                     name = "file",
                     filename = "doc.pdf",
                     contentType = "application/pdf",

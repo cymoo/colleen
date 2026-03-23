@@ -468,8 +468,8 @@ class TestClientTest {
         // Act
         val response = client.post("/multi-upload")
             .multipart(
-                FileItem("documents", "file1.txt", "text/plain", 5, "file1".toByteArray().inputStream()),
-                FileItem("documents", "file2.txt", "text/plain", 5, "file2".toByteArray().inputStream())
+                FilePart("documents", "file1.txt", "text/plain", 5, "file1".toByteArray().inputStream()),
+                FilePart("documents", "file2.txt", "text/plain", 5, "file2".toByteArray().inputStream())
             )
             .send()
 
@@ -494,9 +494,9 @@ class TestClientTest {
         // Act
         val response = client.post("/mixed")
             .multipart(
-                FormItem("title", "My Document"),
-                FormItem("description", "This is a test"),
-                FileItem("file", "doc.pdf", "application/pdf", 100, ByteArray(100).inputStream())
+                FormField("title", "My Document"),
+                FormField("description", "This is a test"),
+                FilePart("file", "doc.pdf", "application/pdf", 100, ByteArray(100).inputStream())
             )
             .send()
 

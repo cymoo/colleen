@@ -26,6 +26,7 @@ fun main() {
 
     setupEventListeners(app)
 
+    app.httpMethodOverride()
     app.use(Cors())
     app.get("/") { "Hello, World!" }
     app.get("/users/{id}", ::getUser)

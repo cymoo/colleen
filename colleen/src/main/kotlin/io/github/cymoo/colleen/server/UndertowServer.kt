@@ -460,7 +460,7 @@ object UndertowRequestAdapter {
             queryString = exchange.queryString ?: "",
             headers = headers,
             stream = exchange.inputStream,
-            metadata = Request.RequestMetadata(
+            serverInfo = Request.ServerInfo(
                 remoteAddr = exchange.sourceAddress.address.hostAddress,
                 remoteHost = exchange.sourceAddress.hostName
                     ?: exchange.sourceAddress.address.hostAddress,
@@ -512,7 +512,7 @@ object UndertowRequestAdapter {
             for (formValue in formData.get(fieldName)) {
                 val part = if (formValue.isFileItem) {
                     // NOTE: undertow will delete temporary files after exchange completed
-                    FileItem(
+                    FilePart(
                         name = fieldName,
                         filename = formValue.fileName ?: "unknown",
                         contentType = formValue.headers.getFirst(io.undertow.util.Headers.CONTENT_TYPE),
@@ -520,7 +520,7 @@ object UndertowRequestAdapter {
                         inputStream = formValue.fileItem.inputStream,
                     )
                 } else {
-                    FormItem(fieldName, formValue.value)
+                    FormField(fieldName, formValue.value)
                 }
                 parts.add(part)
             }

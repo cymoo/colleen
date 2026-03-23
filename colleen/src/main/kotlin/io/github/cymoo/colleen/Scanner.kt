@@ -10,7 +10,7 @@ import kotlin.reflect.full.findAnnotation
  * @property routes List of route definitions
  * @property obj The controller instance
  */
-data class ControllerInfo(
+internal data class ControllerInfo(
     val basePath: String,
     val middlewares: List<Method>,
     val routes: List<RouteInfo>,
@@ -23,7 +23,7 @@ data class ControllerInfo(
  * @property method The HTTP method (GET, POST, etc.)
  * @property handler The method to handle this route
  */
-data class RouteInfo(
+internal data class RouteInfo(
     val path: String,
     val method: String,
     val handler: Method
@@ -33,7 +33,7 @@ data class RouteInfo(
  * Lightweight controller scanner that discovers routes and middlewares
  * via reflection on annotated methods
  */
-object ControllerScanner {
+internal object ControllerScanner {
 
     /**
      * Scans a controller instance for @Controller, @Use, and HTTP method annotations

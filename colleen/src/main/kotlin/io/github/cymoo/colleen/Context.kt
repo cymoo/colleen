@@ -471,7 +471,7 @@ data class Context(
      * @param name the form field name
      * @return the file item, or `null` if not present
      */
-    fun file(name: String): FileItem? = request.file(name)
+    fun file(name: String): FilePart? = request.file(name)
 
     // ========================================================================
     // Response Delegates

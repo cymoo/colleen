@@ -39,7 +39,7 @@ data class Request(
     val queryString: String = "",
     val headers: Headers = Headers(),
     val stream: InputStream? = null,
-    val metadata: RequestMetadata = RequestMetadata(),
+    val serverInfo: ServerInfo = ServerInfo(),
     private val multipartSupplier: () -> List<Part> = { emptyList() },
 ) {
     /** Full request URI (path + query string). */
@@ -247,7 +247,7 @@ data class Request(
             contentType.startsWith("multipart/form-data") -> {
                 val map = mutableMapOf<String, MutableList<String>>()
                 parts.forEach { part ->
-                    if (part is FormItem) {
+                    if (part is FormField) {
                         map.computeIfAbsent(part.name) { mutableListOf() }.add(part.value)
                     }
                 }
@@ -285,13 +285,13 @@ data class Request(
     private val parts: List<Part> by lazyLoom { multipartSupplier.invoke() }
 
     /** Returns all uploaded files with the given field name. */
-    fun files(name: String): List<FileItem> = parts
-        .filterIsInstance<FileItem>()
+    fun files(name: String): List<FilePart> = parts
+        .filterIsInstance<FilePart>()
         .filter { it.name == name }
 
     /** Returns the first uploaded file with the given field name. */
-    fun file(name: String): FileItem? =
-        parts.filterIsInstance<FileItem>()
+    fun file(name: String): FilePart? =
+        parts.filterIsInstance<FilePart>()
             .firstOrNull { it.name == name }
 
     // ========================================================================
@@ -306,12 +306,12 @@ data class Request(
     val contentLength: Long by lazy { header("content-length")?.toLongOrNull() ?: -1L }
 
     /** Remote address reported by the underlying server. */
-    val remoteAddr = metadata.remoteAddr
+    val remoteAddr = serverInfo.remoteAddr
 
     /** Client IP address, resolved via proxy headers if present. */
     val ip: String by lazy { getRealIp(headers) ?: remoteAddr }
 
-    data class RequestMetadata(
+    data class ServerInfo(
         val remoteAddr: String = "",
         val remoteHost: String = "",
         val remotePort: Int = 0,
@@ -426,7 +426,7 @@ sealed interface Part {
 }
 
 /** Represents a simple form field in a multipart request. */
-data class FormItem(
+data class FormField(
     override val name: String,
     val value: String
 ) : Part
@@ -436,7 +436,7 @@ data class FormItem(
  *
  * Once you read the stream the file becomes consumed and cannot be read again.
  */
-data class FileItem(
+data class FilePart(
     override val name: String,
     @JvmField
     val filename: String,

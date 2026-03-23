@@ -23,10 +23,23 @@
             <artifactId>logback-classic</artifactId>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- Test Dependencies -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-test-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <sourceDirectory>src/main/kotlin</sourceDirectory>
+        <testSourceDirectory>src/test/kotlin</testSourceDirectory>
         <plugins>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
@@ -39,6 +52,12 @@
                 <configuration>
                     <mainClass>MainKt</mainClass>
                 </configuration>
+            </plugin>
+
+            <!-- Test Runner -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

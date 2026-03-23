@@ -30,7 +30,7 @@ class ExtractorJavaTest {
                 "",
                 new Headers(),
                 null,
-                new Request.RequestMetadata(),
+                new Request.ServerInfo(),
                 Collections::emptyList
         );
 
@@ -52,7 +52,7 @@ class ExtractorJavaTest {
                 queryString,
                 new Headers(),
                 null,
-                new Request.RequestMetadata(),
+                new Request.ServerInfo(),
                 Collections::emptyList
         );
 
@@ -71,7 +71,7 @@ class ExtractorJavaTest {
                 "",
                 headerObj,
                 null,
-                new Request.RequestMetadata(),
+                new Request.ServerInfo(),
                 Collections::emptyList
         );
 
@@ -90,7 +90,7 @@ class ExtractorJavaTest {
                 "",
                 headers,
                 null,
-                new Request.RequestMetadata(),
+                new Request.ServerInfo(),
                 Collections::emptyList
         );
 
@@ -109,7 +109,7 @@ class ExtractorJavaTest {
                 "",
                 headers,
                 stream,
-                new Request.RequestMetadata(),
+                new Request.ServerInfo(),
                 Collections::emptyList
         );
 
@@ -128,7 +128,7 @@ class ExtractorJavaTest {
                 "",
                 headers,
                 stream,
-                new Request.RequestMetadata(),
+                new Request.ServerInfo(),
                 Collections::emptyList
         );
 
@@ -145,7 +145,7 @@ class ExtractorJavaTest {
                 "",
                 headers,
                 null,
-                new Request.RequestMetadata(),
+                new Request.ServerInfo(),
                 Collections::emptyList
         );
 
@@ -156,7 +156,7 @@ class ExtractorJavaTest {
                 "",
                 request.getHeaders(),
                 new ByteArrayInputStream(formData.getBytes(StandardCharsets.UTF_8)),
-                request.getMetadata(),
+                request.getServerInfo(),
                 Collections::emptyList
         );
 
@@ -745,7 +745,7 @@ class ExtractorJavaTest {
                     "",
                     new Headers(),
                     stream,
-                    new Request.RequestMetadata(),
+                    new Request.ServerInfo(),
                     Collections::emptyList
             );
 
@@ -807,7 +807,7 @@ class ExtractorJavaTest {
                     "filter=active",
                     headers,
                     stream,
-                    new Request.RequestMetadata(),
+                    new Request.ServerInfo(),
                     Collections::emptyList
             );
 

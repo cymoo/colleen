@@ -1,6 +1,7 @@
 import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.middleware.Cors
 import io.github.cymoo.colleen.middleware.RequestLogger
+import io.github.cymoo.colleen.openapi.*
 import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate

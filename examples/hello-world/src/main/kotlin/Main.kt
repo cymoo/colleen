@@ -555,15 +555,10 @@ fun main() {
     app.use(SecurityHeaders())
     app.use(RequestLogger())
     app.use(metricsMiddleware)
-    app.use(Heartbeat(endpoint = "/health"))
+    app.use(HeartBeat(endpoint = "/health"))
     app.use(RateLimiter(capacity = 200, refillRate = 50.0))
 
     // ---- Event system ----
-
-    // Log every registered route at startup
-    app.on<Event.RouteRegistered> { event ->
-        logger.info("[Route] ${event.node.method} ${event.node.path}")
-    }
 
     // Structured access log when the response is fully sent
     app.on<Event.ResponseSent> { event ->

@@ -142,7 +142,7 @@ class TestClient(private val app: Colleen) {
          * Add a form field part to multipart (convenience method).
          */
         fun field(name: String, value: String): RequestBuilder {
-            multipart(FormItem(name, value))
+            multipart(FormField(name, value))
             return this
         }
 
@@ -156,7 +156,7 @@ class TestClient(private val app: Colleen) {
             content: ByteArray,
             contentType: String = "application/octet-stream"
         ): RequestBuilder {
-            return multipart(FileItem(name, filename, contentType, content.size.toLong(), content.inputStream()))
+            return multipart(FilePart(name, filename, contentType, content.size.toLong(), content.inputStream()))
         }
 
         /**
@@ -287,17 +287,17 @@ class TestClient(private val app: Colleen) {
                 output.write("--$multipartBoundary\r\n".toByteArray())
 
                 when (part) {
-                    is FormItem -> {
+                    is FormField -> {
                         output.write("Content-Disposition: form-data; name=\"${part.name}\"\r\n".toByteArray())
                         output.write("\r\n".toByteArray())
                         output.write(part.value.toByteArray(Charsets.UTF_8))
                         output.write("\r\n".toByteArray())
 
-                        // FormItem is a data class and can be safely copied
+                        // FormField is a data class and can be safely copied
                         unconsumedParts.add(part.copy())
                     }
 
-                    is FileItem -> {
+                    is FilePart -> {
                         val filename = part.filename
                         output.write("Content-Disposition: form-data; name=\"${part.name}\"; filename=\"$filename\"\r\n".toByteArray())
                         output.write("Content-Type: ${part.contentType}\r\n".toByteArray())
@@ -311,7 +311,7 @@ class TestClient(private val app: Colleen) {
 
                         // Create a new, unconsumed InputStream for multipartSupplier
                         unconsumedParts.add(
-                            FileItem(
+                            FilePart(
                                 name = part.name,
                                 filename = part.filename,
                                 contentType = part.contentType,

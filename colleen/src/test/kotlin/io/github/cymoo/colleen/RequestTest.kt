@@ -40,7 +40,7 @@ class RequestTest {
 
         @Test
         fun `should handle metadata correctly`() {
-            val metadata = Request.RequestMetadata(
+            val metadata = Request.ServerInfo(
                 remoteAddr = "192.168.1.100",
                 remoteHost = "client.example.com",
                 remotePort = 54321,
@@ -54,7 +54,7 @@ class RequestTest {
             val request = Request(
                 method = "POST",
                 path = "/api/data",
-                metadata = metadata
+                serverInfo = metadata
             )
 
             assertEquals("192.168.1.100", request.remoteAddr)
@@ -665,12 +665,12 @@ class RequestTest {
             val headers = Headers().apply {
                 add("x-forwarded-for", "203.0.113.1, 198.51.100.1, 192.0.2.1")
             }
-            val metadata = Request.RequestMetadata(remoteAddr = "10.0.0.1")
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1")
             val request = Request(
                 method = "GET",
                 path = "/api",
                 headers = headers,
-                metadata = metadata
+                serverInfo = metadata
             )
 
             assertEquals("203.0.113.1", request.ip)
@@ -681,12 +681,12 @@ class RequestTest {
             val headers = Headers().apply {
                 add("x-real-ip", "203.0.113.1")
             }
-            val metadata = Request.RequestMetadata(remoteAddr = "10.0.0.1")
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1")
             val request = Request(
                 method = "GET",
                 path = "/api",
                 headers = headers,
-                metadata = metadata
+                serverInfo = metadata
             )
 
             assertEquals("203.0.113.1", request.ip)
@@ -694,11 +694,11 @@ class RequestTest {
 
         @Test
         fun `should use remoteAddr when no proxy headers present`() {
-            val metadata = Request.RequestMetadata(remoteAddr = "192.168.1.100")
+            val metadata = Request.ServerInfo(remoteAddr = "192.168.1.100")
             val request = Request(
                 method = "GET",
                 path = "/api",
-                metadata = metadata
+                serverInfo = metadata
             )
 
             assertEquals("192.168.1.100", request.ip)
@@ -709,12 +709,12 @@ class RequestTest {
             val headers = Headers().apply {
                 add("x-forwarded-for", "unknown, 203.0.113.1, 198.51.100.1")
             }
-            val metadata = Request.RequestMetadata(remoteAddr = "10.0.0.1")
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1")
             val request = Request(
                 method = "GET",
                 path = "/api",
                 headers = headers,
-                metadata = metadata
+                serverInfo = metadata
             )
 
             assertEquals("203.0.113.1", request.ip)

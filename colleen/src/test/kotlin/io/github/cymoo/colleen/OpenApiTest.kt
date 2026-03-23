@@ -1,5 +1,6 @@
 package io.github.cymoo.colleen
 
+import io.github.cymoo.colleen.openapi.*
 import io.github.cymoo.colleen.util.http.Headers
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -11,13 +12,13 @@ import java.lang.reflect.Parameter
  * Strategy
  * --------
  * All tests drive the system through its public API: register routes on a [Colleen]
- * instance, call [openApi], then invoke the spec-generation handler directly
+ * instance, call [Colleen.openApi], then invoke the spec-generation handler directly
  * to obtain the spec [Map].  This exercises the full pipeline (route collection →
  * operation building → schema generation) without starting an HTTP server.
  *
  * Helper
  * ------
- * [spec] is a small inline helper that wires [openApi] onto a fresh [Colleen]
+ * [spec] is a small inline helper that wires [Colleen.openApi] onto a fresh [Colleen]
  * instance, then reaches into the registered spec-route handler to produce the map.
  * Tests never touch private internals directly — if a refactor breaks the contract
  * the tests will catch it.
@@ -217,8 +218,8 @@ private fun createTestContext(
 }
 
 /**
- * Builds a [Colleen] app, applies [setup] to register routes, then installs
- * [openApi] and returns the generated spec map.
+ * Builds a [Colleen] app, applies [setup] to register routes, then calls
+ * [Colleen.openApi] and returns the generated spec map.
  *
  * The spec handler is invoked synchronously via a minimal fake [Context] that
  * captures the returned value — no network I/O required.
@@ -1082,7 +1083,7 @@ class OperationIdTest {
         assertFalse(opId.endsWith("_getUser_"))
     }
 
-    inner class OverloadedController {
+    class OverloadedController {
         @Get("/a")
         fun handle1(id: Path<Int>): String = error("stub")
 

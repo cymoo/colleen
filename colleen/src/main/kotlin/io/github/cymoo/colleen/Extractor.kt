@@ -1,5 +1,8 @@
 package io.github.cymoo.colleen
 
+import io.github.cymoo.colleen.openapi.OpenApiParamSpec
+import io.github.cymoo.colleen.openapi.OpenApiParameter
+import io.github.cymoo.colleen.openapi.OpenApiRequestBody
 import io.github.cymoo.colleen.util.TypeRef
 import java.io.InputStream
 import java.lang.reflect.*
@@ -499,7 +502,7 @@ class Stream(value: InputStream?) : ParamExtractor<InputStream?>(value) {
  *
  * This wrapper is only meaningful for multipart requests.
  */
-class UploadedFile(value: FileItem?) : ParamExtractor<FileItem?>(value) {
+class UploadedFile(value: FilePart?) : ParamExtractor<FilePart?>(value) {
     companion object : ExtractorFactory<UploadedFile> {
         private const val DEFAULT_FILE_PARAM = "file"
 

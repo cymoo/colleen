@@ -64,25 +64,6 @@ open class HttpException(
 ) : RuntimeException(message, cause)
 
 // ========================================================================
-// 3xx Redirection
-// ========================================================================
-
-class MovedPermanently(
-    message: String = "Moved Permanently",
-    cause: Throwable? = null
-) : HttpException(301, message, cause)
-
-class Found(
-    message: String = "Found",
-    cause: Throwable? = null
-) : HttpException(302, message, cause)
-
-class NotModified(
-    message: String = "Not Modified",
-    cause: Throwable? = null
-) : HttpException(304, message, cause)
-
-// ========================================================================
 // 4xx Client Error
 // ========================================================================
 

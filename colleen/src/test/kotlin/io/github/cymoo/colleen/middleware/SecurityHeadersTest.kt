@@ -26,7 +26,7 @@ class SecurityHeadersTest {
         val request = Request(
             method = "GET",
             path = "/",
-            metadata = Request.RequestMetadata(isSecure = isSecure)
+            serverInfo = Request.ServerInfo(isSecure = isSecure)
         )
         return Context(request = request, app = app)
     }
