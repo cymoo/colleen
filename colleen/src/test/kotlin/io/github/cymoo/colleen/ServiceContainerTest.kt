@@ -688,4 +688,147 @@ class ServiceContainerTest {
             assertEquals(1, invocations.get())
         }
     }
+
+    // ========================================================================
+    // AutoCloseable lifecycle
+    // ========================================================================
+
+    @Nested
+    inner class AutoCloseableLifecycle {
+
+        private inner class CloseableService : AutoCloseable {
+            var closedCount = 0
+            override fun close() { closedCount++ }
+        }
+
+        private inner class FailingCloseService : AutoCloseable {
+            var closedAttempted = false
+            override fun close() {
+                closedAttempted = true
+                throw RuntimeException("close failed")
+            }
+        }
+
+        private inner class NonCloseableService
+
+        // --- remove ---
+
+        @Test
+        fun `remove closes AutoCloseable instance`() {
+            val svc = CloseableService()
+            container.registerInstance(svc)
+            container.remove<CloseableService>()
+            assertEquals(1, svc.closedCount)
+        }
+
+        @Test
+        fun `remove closes resolved singleton instance`() {
+            val svc = CloseableService()
+            container.registerSingleton<CloseableService> { svc }
+            container.get<CloseableService>() // resolve and cache
+            container.remove<CloseableService>()
+            assertEquals(1, svc.closedCount)
+        }
+
+        @Test
+        fun `remove does not close unresolved singleton factory`() {
+            // factory never invoked → nothing to close
+            val svc = CloseableService()
+            container.registerSingleton<CloseableService> { svc }
+            container.remove<CloseableService>()
+            assertEquals(0, svc.closedCount)
+        }
+
+        @Test
+        fun `remove does not close transient instances - they are not owned by container`() {
+            val svc = CloseableService()
+            container.registerTransient<CloseableService> { svc }
+            container.remove<CloseableService>()
+            assertEquals(0, svc.closedCount)
+        }
+
+        @Test
+        fun `remove closes instance with qualifier`() {
+            val primary = CloseableService()
+            val replica = CloseableService()
+            container.registerInstance(primary, qualifier = Primary)
+            container.registerInstance(replica, qualifier = Replica)
+            container.remove<CloseableService>(Primary)
+            assertEquals(1, primary.closedCount)
+            assertEquals(0, replica.closedCount)
+        }
+
+        @Test
+        fun `remove does not throw when close fails`() {
+            container.registerInstance(FailingCloseService())
+            assertDoesNotThrow { container.remove<FailingCloseService>() }
+        }
+
+        @Test
+        fun `remove still returns true when close fails`() {
+            container.registerInstance(FailingCloseService())
+            assertTrue(container.remove<FailingCloseService>())
+        }
+
+        @Test
+        fun `remove does not attempt to close non-AutoCloseable service`() {
+            // Just verifying no ClassCastException or unexpected behavior
+            container.registerInstance(NonCloseableService())
+            assertDoesNotThrow { container.remove<NonCloseableService>() }
+        }
+
+        // --- clear ---
+
+        @Test
+        fun `clear closes all AutoCloseable instances`() {
+            val a = CloseableService()
+            val b = CloseableService()
+            container.registerInstance(a)
+            container.registerInstance(b, qualifier = Primary)
+            container.clear()
+            assertEquals(1, a.closedCount)
+            assertEquals(1, b.closedCount)
+        }
+
+        @Test
+        fun `clear closes resolved singleton but not unresolved factory`() {
+            val resolved = CloseableService()
+            val unresolved = CloseableService()
+            container.registerSingleton<CloseableService> { resolved }
+            container.get<CloseableService>() // resolve
+            container.registerSingleton<CloseableService>(Primary) { unresolved }
+            // unresolved factory → unresolved instance never created
+            container.clear()
+            assertEquals(1, resolved.closedCount)
+            assertEquals(0, unresolved.closedCount)
+        }
+
+        @Test
+        fun `clear does not throw when one service fails to close`() {
+            container.registerInstance(FailingCloseService())
+            container.registerInstance(CloseableService())
+            assertDoesNotThrow { container.clear() }
+        }
+
+        @Test
+        fun `clear closes remaining services even if one close fails`() {
+            val good = CloseableService()
+            container.registerInstance(FailingCloseService())
+            container.registerInstance(good)
+            container.clear()
+            // good must still be closed despite the other one throwing
+            assertEquals(1, good.closedCount)
+        }
+
+        @Test
+        fun `clear does not close the same instance twice when both instance and factory maps held it`() {
+            // After get(), singleton is in both factories and instances maps
+            val svc = CloseableService()
+            container.registerSingleton<CloseableService> { svc }
+            container.get<CloseableService>()
+            // clear() iterates instances only — should close exactly once
+            container.clear()
+            assertEquals(1, svc.closedCount)
+        }
+    }
 }

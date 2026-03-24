@@ -32,7 +32,7 @@ class Headers {
     /** Sets multiple values for a header, replacing existing ones. */
     operator fun set(key: String, value: List<String>) {
         validateHeaderName(key)
-        data[key.lowercase()] = value as MutableList<String>
+        data[key.lowercase()] = value.toMutableList()
     }
 
     /** Sets the header only if it does not already exist. */

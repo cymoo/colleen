@@ -291,15 +291,11 @@ class ServiceContainer {
      * @param kClass the service class.
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T : Any> getAll(kClass: KClass<T>): List<T> {
-        val cachedKeys = instances.keys.filterTo(mutableSetOf()) { it.type == kClass }
-        val cached = cachedKeys.mapNotNull { instances[it] as? T }
-        val fromFactories = factories
-            .filterKeys { it.type == kClass && it !in cachedKeys }
-            .values
-            .map { it() as T }  // let exceptions propagate naturally
-        return cached + fromFactories
-    }
+    fun <T : Any> getAll(kClass: KClass<T>): List<T> =
+        factories.filterKeys { it.type == kClass }
+            .map { (_, factory) -> factory() as T } +
+        instances.filterKeys { it.type == kClass && !factories.containsKey(it) }.values
+            .map { it as T }
 
     // ========================================================================
     // Introspection
@@ -324,15 +320,33 @@ class ServiceContainer {
      */
     inline fun <reified T : Any> remove(qualifier: Any? = null): Boolean {
         val key = ServiceKey(T::class, qualifier)
-        return (instances.remove(key) != null) or (factories.remove(key) != null)
+        val removed = instances.remove(key)
+        removed?.closeIfNeeded()
+        return (removed != null) or (factories.remove(key) != null)
     }
 
     /**
      * Removes all registered services.
      */
     fun clear() {
+        instances.values.forEach { it.closeIfNeeded() }
         instances.clear()
         factories.clear()
+    }
+
+    @PublishedApi
+    internal fun Any.closeIfNeeded() {
+        if (this is AutoCloseable) {
+            runCatching { close() }
+                .onFailure { ex ->
+                    logger.error(
+                        "Failed to close service instance of type '{}': {}",
+                        this::class.qualifiedName,
+                        ex.message,
+                        ex
+                    )
+                }
+        }
     }
 
     /**

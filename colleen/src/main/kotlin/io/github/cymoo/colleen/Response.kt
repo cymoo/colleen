@@ -3,6 +3,7 @@ package io.github.cymoo.colleen
 import io.github.cymoo.colleen.util.http.Cookie
 import io.github.cymoo.colleen.util.http.Headers
 import java.io.InputStream
+import java.util.function.BiConsumer
 import java.util.function.Consumer
 import kotlin.time.Duration
 
@@ -74,12 +75,21 @@ data class Response(
         return this
     }
 
-    /** Get a response header value */
+    /** Get the first value of a response header */
     fun header(key: String): String? = headers[key]
 
-    /** Set a response header */
+    /** Get all values of a response header */
+    fun headers(key: String): List<String> = headers.getAll(key)
+
+    /** Set (replace) a response header */
     fun header(key: String, value: String): Response {
         headers[key] = value
+        return this
+    }
+
+    /** Append a response header value without replacing existing ones */
+    fun addHeader(key: String, value: String): Response {
+        headers.add(key, value)
         return this
     }
 
@@ -120,7 +130,13 @@ data class Response(
         body = ResponseBody.Bytes(data)
     }
 
-    /** Set streaming response */
+    /**
+     * Set streaming response.
+     *
+     * **Ownership transfer**: The provided [stream] is consumed and closed
+     * by the framework after the response is fully written. Callers must
+     * NOT close or reuse it after calling this method.
+     */
     @JvmOverloads
     fun stream(stream: InputStream, contentType: String = "application/octet-stream") {
         headers["Content-Type"] = contentType
@@ -205,7 +221,9 @@ data class Response(
     internal fun merge(subResponse: Response): Response {
         this.status = subResponse.status
         this.body = subResponse.body
-        subResponse.headers.forEach { key, values -> this.headers[key] = values }
+        subResponse.headers.forEach { key, values ->
+            this.headers[key] = values
+        }
         return this
     }
 
