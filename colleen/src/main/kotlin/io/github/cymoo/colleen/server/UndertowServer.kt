@@ -139,47 +139,33 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         // 1. Stop accepting new HTTP requests
         gracefulShutdownHandler.shutdown()
 
-        // 2. Wait for in-flight HTTP handlers to complete.
-        //    virtualExecutor remains open so that in-flight requests
-        //    can still be dispatched during this phase.
-        val httpCompleted = gracefulShutdownHandler.awaitShutdown(
-            config.shutdownTimeout
-        )
-
+        // 2. Wait for in-flight HTTP handlers to complete
+        val httpCompleted = gracefulShutdownHandler.awaitShutdown(config.shutdownTimeout)
         if (!httpCompleted) {
             logger.warn("HTTP shutdown timeout exceeded")
         }
 
-        // 3. Now that all HTTP requests are drained (or timed out),
-        //    shut down the virtual executor — no new tasks will arrive.
+        // 3. Shut down virtual executor (should be idle after step 2)
         virtualExecutor?.shutdown()
 
-        // 4. Wait for virtual threads to finish (best-effort)
+        // 4. Brief wait as a safety net — normally returns immediately
         virtualExecutor?.let {
-            val terminated = it.awaitTermination(
-                config.shutdownTimeout,
-                TimeUnit.MILLISECONDS
-            )
-            if (!terminated) {
+            if (!it.awaitTermination(2, TimeUnit.SECONDS)) {
                 logger.warn("Virtual threads did not terminate, forcing shutdown")
                 it.shutdownNow()
             }
         }
 
-        // 5. Shut down SSE executor if it was ever initialized
+        // 5. Gracefully shut down SSE executor if initialized
         if (lazySseExecutor.isInitialized()) {
             sseExecutor.shutdown()
-            val sseTerminated = sseExecutor.awaitTermination(
-                config.shutdownTimeout,
-                TimeUnit.MILLISECONDS
-            )
-            if (!sseTerminated) {
+            if (!sseExecutor.awaitTermination(config.shutdownTimeout, TimeUnit.MILLISECONDS)) {
                 logger.warn("SSE executor did not terminate, forcing shutdown")
                 sseExecutor.shutdownNow()
             }
         }
 
-        // 6. Now it is safe to stop Undertow itself
+        // 6. Stop Undertow
         server.stop()
     }
 
