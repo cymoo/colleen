@@ -83,8 +83,11 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
      * - Lazily initialized
      * - Long-lived tasks
      * - Uses virtual threads when enabled, otherwise daemon platform threads
+     *
+     * Exposed as a separate [Lazy] to allow checking [Lazy.isInitialized]
+     * during shutdown without accidentally triggering initialization.
      */
-    private val sseExecutor by lazy {
+    private val lazySseExecutor = lazy {
         if (config.useVirtualThreads) {
             Executors.newVirtualThreadPerTaskExecutor()
         } else {
@@ -96,6 +99,7 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             }
         }
     }
+    private val sseExecutor: ExecutorService by lazySseExecutor
 
     /**
      * Starts the HTTP server.
@@ -119,7 +123,8 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
      * 2. Stop application-level async execution
      * 3. Wait for in-flight HTTP requests
      * 4. Wait for virtual threads (best-effort)
-     * 5. Stop Undertow itself
+     * 5. Shut down SSE executor (if initialized)
+     * 6. Stop Undertow itself
      */
     override fun stop() {
         logger.info("Shutting down server...")
@@ -151,7 +156,20 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             }
         }
 
-        // 5. Now it is safe to stop Undertow itself
+        // 5. Shut down SSE executor if it was ever initialized
+        if (lazySseExecutor.isInitialized()) {
+            sseExecutor.shutdown()
+            val sseTerminated = sseExecutor.awaitTermination(
+                config.shutdownTimeout,
+                TimeUnit.MILLISECONDS
+            )
+            if (!sseTerminated) {
+                logger.warn("SSE executor did not terminate, forcing shutdown")
+                sseExecutor.shutdownNow()
+            }
+        }
+
+        // 6. Now it is safe to stop Undertow itself
         server.stop()
     }
 
@@ -422,23 +440,37 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
 object UndertowRequestAdapter {
 
     /**
-     * Creates a FormParserFactory configured for multipart handling.
+     * Cached FormParserFactory instances keyed by relevant config values.
+     *
+     * Since ServerConfig is typically stable for the server lifetime,
+     * this effectively caches a single factory instance and avoids
+     * recreating it on every multipart request.
+     */
+    private data class FormParserCacheKey(val maxFileSize: Long, val fileSizeThreshold: Long)
+
+    private val formParserFactoryCache = java.util.concurrent.ConcurrentHashMap<FormParserCacheKey, FormParserFactory>()
+
+    /**
+     * Returns a cached FormParserFactory configured for multipart handling.
      *
      * Applies:
      * - Maximum file size limits
      * - In-memory / disk threshold
      * - UTF-8 as default charset
      */
-    private fun createFormParserFactory(config: ServerConfig): FormParserFactory {
-        val multipart = MultiPartParserDefinition().apply {
-            maxIndividualFileSize = config.maxFileSize
-            setFileSizeThreshold(config.fileSizeThreshold)
-        }
+    private fun getFormParserFactory(config: ServerConfig): FormParserFactory {
+        val key = FormParserCacheKey(config.maxFileSize, config.fileSizeThreshold)
+        return formParserFactoryCache.computeIfAbsent(key) {
+            val multipart = MultiPartParserDefinition().apply {
+                maxIndividualFileSize = config.maxFileSize
+                setFileSizeThreshold(config.fileSizeThreshold)
+            }
 
-        return FormParserFactory.Builder()
-            .addParser(multipart)
-            .withDefaultCharset(StandardCharsets.UTF_8.name())
-            .build()
+            FormParserFactory.Builder()
+                .addParser(multipart)
+                .withDefaultCharset(StandardCharsets.UTF_8.name())
+                .build()
+        }
     }
 
     /**
@@ -489,7 +521,7 @@ object UndertowRequestAdapter {
      * - The request body MUST NOT be consumed before parsing
      */
     private fun parseMultipart(exchange: HttpServerExchange, config: ServerConfig): List<Part> {
-        val parser = createFormParserFactory(config).createParser(exchange) ?: error("Request is not multipart")
+        val parser = getFormParserFactory(config).createParser(exchange) ?: error("Request is not multipart")
         val formData: FormData
 
         try {
