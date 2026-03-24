@@ -121,11 +121,17 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
      *
      * Shutdown order:
      * 1. Stop accepting new requests
-     * 2. Stop application-level async execution
-     * 3. Wait for in-flight HTTP requests
+     * 2. Wait for in-flight HTTP requests to complete
+     * 3. Shut down virtual executor (no new dispatch possible after step 2)
      * 4. Wait for virtual threads (best-effort)
      * 5. Shut down SSE executor (if initialized)
      * 6. Stop Undertow itself
+     *
+     * Note: virtualExecutor.shutdown() MUST be called AFTER
+     * gracefulShutdownHandler.awaitShutdown() completes.
+     * Otherwise, in-flight requests accepted before step 1 may
+     * fail with RejectedExecutionException when they attempt to
+     * dispatch to the already-shut-down executor.
      */
     override fun stop() {
         logger.info("Shutting down server...")
@@ -133,10 +139,9 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         // 1. Stop accepting new HTTP requests
         gracefulShutdownHandler.shutdown()
 
-        // 2. Stop application-level async work first
-        virtualExecutor?.shutdown()
-
-        // 3. Wait for HTTP handlers to complete
+        // 2. Wait for in-flight HTTP handlers to complete.
+        //    virtualExecutor remains open so that in-flight requests
+        //    can still be dispatched during this phase.
         val httpCompleted = gracefulShutdownHandler.awaitShutdown(
             config.shutdownTimeout
         )
@@ -144,6 +149,10 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         if (!httpCompleted) {
             logger.warn("HTTP shutdown timeout exceeded")
         }
+
+        // 3. Now that all HTTP requests are drained (or timed out),
+        //    shut down the virtual executor — no new tasks will arrive.
+        virtualExecutor?.shutdown()
 
         // 4. Wait for virtual threads to finish (best-effort)
         virtualExecutor?.let {
