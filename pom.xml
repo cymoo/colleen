@@ -50,7 +50,7 @@
 
     <properties>
         <!-- Version Management -->
-        <revision>0.3.8</revision>
+        <revision>0.3.9</revision>
 
         <!-- Java & Kotlin versions -->
         <java.version>21</java.version>
