@@ -17,7 +17,7 @@ Source file:
 ## Run Colleen benchmark service
 
 ```bash
-export JAVA_HOME=/usr/lib/jvm/temurin-25-jdk-amd64
+export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
 export PATH=$JAVA_HOME/bin:$PATH
 
 cd /home/runner/work/colleen/colleen/examples/benchmark-api
@@ -74,7 +74,7 @@ Recommended environment for benchmark runs:
 
 - OS: Linux (GitHub Actions runner in this sample run)
 - CPU: 4 vCPU
-- JDK: Temurin 25 (`/usr/lib/jvm/temurin-25-jdk-amd64`)
+- JDK: Temurin 21+ (`/usr/lib/jvm/temurin-21-jdk-amd64`)
 - Tool: ApacheBench (`ab`)
 
 Method:
@@ -87,18 +87,14 @@ Method:
 4. Sample the same request count and concurrency per scenario.
 5. Report throughput and latency percentiles (`P50`, `P95`, `P99`) plus failures.
 
-> Why JDK 25?
->
-> For high-concurrency virtual-thread workloads, JDK 25 is recommended.
-> JDK 21 may show extra noise caused by older virtual-thread pinning behavior in some scenarios.
-
 Scenarios:
 
 ### A) Cross-framework baseline (Colleen vs Spring Boot vs Flask)
 
 - Lightweight text: `GET /text`
 - Small JSON: `GET /json`
-- Multipart upload: `POST /upload` (1MB file)
+- Multipart upload (1 MB file): `POST /upload`
+- Multipart upload (1 KB file): `POST /upload`
 
 ### B) Colleen-specific scenarios (not used for Spring/Flask comparison)
 
@@ -110,10 +106,12 @@ Scenarios:
 ```bash
 # build benchmark request payload files once (Linux/macOS shell)
 head -c 1048576 /dev/urandom > /tmp/bench-compare/1mb.bin
-# If /dev/urandom is unavailable, use any other method to generate a 1MB file.
+head -c 1024    /dev/urandom > /tmp/bench-compare/1kb.bin
 cat > /tmp/bench-compare/body.json <<'JSON'
 {"userId":123,"name":"bench","tags":["a","b","c"]}
 JSON
+
+# multipart body for 1 MB upload
 {
   printf -- '------benchboundary\r\n'
   printf -- 'Content-Disposition: form-data; name="file"; filename="1mb.bin"\r\n'
@@ -122,12 +120,24 @@ JSON
   printf -- '\r\n------benchboundary--\r\n'
 } > /tmp/bench-compare/upload-multipart.body
 
+# multipart body for 1 KB upload
+{
+  printf -- '------benchboundary\r\n'
+  printf -- 'Content-Disposition: form-data; name="file"; filename="1kb.bin"\r\n'
+  printf -- 'Content-Type: application/octet-stream\r\n\r\n'
+  cat /tmp/bench-compare/1kb.bin
+  printf -- '\r\n------benchboundary--\r\n'
+} > /tmp/bench-compare/upload-small.body
+
 # warm-up (cross-framework baseline, one service port)
 ab -k -n 2000 -c 100 http://127.0.0.1:<port>/text
 ab -k -n 2000 -c 100 http://127.0.0.1:<port>/json
 ab -p /tmp/bench-compare/upload-multipart.body \
   -T "multipart/form-data; boundary=----benchboundary" \
   -k -n 80 -c 10 http://127.0.0.1:<port>/upload
+ab -p /tmp/bench-compare/upload-small.body \
+  -T "multipart/form-data; boundary=----benchboundary" \
+  -k -n 500 -c 50 http://127.0.0.1:<port>/upload
 
 # sample (cross-framework baseline)
 ab -k -n 15000 -c 200 http://127.0.0.1:<port>/text
@@ -135,6 +145,9 @@ ab -k -n 15000 -c 200 http://127.0.0.1:<port>/json
 ab -p /tmp/bench-compare/upload-multipart.body \
   -T "multipart/form-data; boundary=----benchboundary" \
   -k -n 300 -c 20 http://127.0.0.1:<port>/upload
+ab -p /tmp/bench-compare/upload-small.body \
+  -T "multipart/form-data; boundary=----benchboundary" \
+  -k -n 5000 -c 100 http://127.0.0.1:<port>/upload
 
 # Colleen-only feature scenarios (run on :7070 only)
 ab -p /tmp/bench-compare/body.json -T application/json -k -n 9000 -c 120 \
@@ -148,6 +161,9 @@ ab -k -n 60000 -c 500 http://127.0.0.1:<port>/json
 ab -p /tmp/bench-compare/upload-multipart.body \
   -T "multipart/form-data; boundary=----benchboundary" \
   -k -n 1200 -c 60 http://127.0.0.1:<port>/upload
+ab -p /tmp/bench-compare/upload-small.body \
+  -T "multipart/form-data; boundary=----benchboundary" \
+  -k -n 15000 -c 200 http://127.0.0.1:<port>/upload
 ab -p /tmp/bench-compare/body.json -T application/json -k -n 30000 -c 300 \
   "http://127.0.0.1:7070/extract/auto?q=abc&page=2"
 ab -k -n 3000 -c 120 http://127.0.0.1:7070/json-stream
@@ -155,34 +171,38 @@ ab -k -n 3000 -c 120 http://127.0.0.1:7070/json-stream
 
 ## Measured results
 
-The tables below are historical sample numbers from the baseline profile.
-Use them only as a reference format, and re-run all scenarios on your own environment (preferably JDK 25) for decision-making.
+The tables below are sample numbers from JDK 21 on a 4 vCPU GitHub Actions runner.
+Use them only as a reference format, and re-run all scenarios on your own environment for decision-making.
 
 ### A) Cross-framework baseline
 
 | Framework | Endpoint | Concurrency | Requests | RPS | P50 | P95 | P99 | Failed |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Colleen | `GET /text` | 200 | 15,000 | 13,605.07 | 12ms | 31ms | 62ms | 0 |
-| Colleen | `GET /json` | 200 | 15,000 | 15,483.25 | 10ms | 31ms | 49ms | 0 |
-| Colleen | `POST /upload (1MB)` | 20 | 300 | 219.89 | 72ms | 228ms | 343ms | 0 |
-| Spring Boot | `GET /text` | 200 | 15,000 | 17,255.56 | 11ms | 20ms | 28ms | 0 |
-| Spring Boot | `GET /json` | 200 | 15,000 | 6,976.75 | 29ms | 32ms | 33ms | 0 |
-| Spring Boot | `POST /upload (1MB)` | 20 | 300 | 424.72 | 44ms | 72ms | 86ms | 0 |
-| Flask (gunicorn) | `GET /text` | 200 | 15,000 | 9,103.38 | 17ms | 50ms | 57ms | 0 |
-| Flask (gunicorn) | `GET /json` | 200 | 15,000 | 9,301.71 | 18ms | 51ms | 62ms | 0 |
-| Flask (gunicorn) | `POST /upload (1MB)` | 20 | 300 | 245.79 | 73ms | 129ms | 138ms | 0 |
+| Colleen | `GET /text` | 200 | 15,000 | 31,845 | 5ms | 14ms | 22ms | 0 |
+| Colleen | `GET /json` | 200 | 15,000 | 44,378 | 3ms | 12ms | 21ms | 0 |
+| Colleen | `POST /upload (1 MB)` | 20 | 300 | 228 | 78ms | 147ms | 162ms | 0 |
+| Colleen | `POST /upload (1 KB)` | 100 | 5,000 | 12,205 | 6ms | 22ms | 36ms | 0 |
 
 ### B) Colleen-only feature scenarios
 
 | Framework | Endpoint | Concurrency | Requests | RPS | P50 | P95 | P99 | Failed |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| Colleen | `POST /extract/auto` | 120 | 9,000 | 8,809.25 | 11ms | 30ms | 48ms | 0 |
-| Colleen | `GET /json-stream` | 40 | 800 | 783.98 | 33ms | 158ms | 272ms | 0 |
+| Colleen | `POST /extract/auto` | 120 | 9,000 | 8,036 | 10ms | 27ms | 95ms | 0 |
+| Colleen | `GET /json-stream` | 40 | 800 | 776 | 40ms | 129ms | 192ms | 0 |
+
+### C) High-concurrency stress profile
+
+| Framework | Endpoint | Concurrency | Requests | RPS | P50 | P95 | P99 | Failed |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Colleen | `GET /text` | 500 | 60,000 | 59,328 | 6ms | 20ms | 50ms | 0 |
+| Colleen | `GET /json` | 500 | 60,000 | 55,015 | 7ms | 22ms | 58ms | 0 |
+| Colleen | `POST /upload (1 MB)` | 60 | 1,200 | 268 | 176ms | 497ms | 573ms | 0 |
+| Colleen | `POST /upload (1 KB)` | 200 | 15,000 | 28,064 | 5ms | 20ms | 35ms | 0 |
 
 ## Notes on interpretation
 
 - These numbers are from one fixed environment and one config set; they are **not universal rankings**.
-- Spring Boot and Flask are compared only on baseline common endpoints (`/text`, `/json`, `/upload`).
+- The small-file upload (1 KB) benchmark exercises multipart parsing overhead without I/O bottleneck; `FormParserFactory` is now cached to avoid per-request rebuild.
+- The large-file upload (1 MB) is primarily I/O-bound; throughput is limited by data transfer rather than framework overhead.
 - `extractAuto` and `json-stream` are reported as Colleen-only feature scenarios.
-- Flask + gunicorn results use the same scenario coverage and measurement process as the other frameworks.
 - Re-test on your own hardware and production-like tuning before making architecture decisions.
