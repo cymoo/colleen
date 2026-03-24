@@ -17,6 +17,7 @@ import io.undertow.util.HttpString
 import org.xnio.Options
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -448,7 +449,7 @@ object UndertowRequestAdapter {
      */
     private data class FormParserCacheKey(val maxFileSize: Long, val fileSizeThreshold: Long)
 
-    private val formParserFactoryCache = java.util.concurrent.ConcurrentHashMap<FormParserCacheKey, FormParserFactory>()
+    private val formParserFactoryCache = ConcurrentHashMap<FormParserCacheKey, FormParserFactory>()
 
     /**
      * Returns a cached FormParserFactory configured for multipart handling.
