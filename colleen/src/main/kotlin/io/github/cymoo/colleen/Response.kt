@@ -380,8 +380,12 @@ sealed class ResponseBody {
     }
 
     /** WebSocket upgrade body */
-    class WebSocket(val handler: Consumer<WsConnection>, val pathParams: Map<String, String>) : ResponseBody() {
-        override fun materialize(ctx: Context) = RawResponseBody.WebSocket(handler, pathParams)
+    class WebSocket(
+        val handler: Consumer<WsConnection>,
+        val pathParams: Map<String, String>,
+        val queryParams: Map<String, List<String>>,
+    ) : ResponseBody() {
+        override fun materialize(ctx: Context) = RawResponseBody.WebSocket(handler, pathParams, queryParams)
     }
 }
 
@@ -405,7 +409,11 @@ sealed class RawResponseBody {
 
     class Sse(val handler: Consumer<SseConnection>) : RawResponseBody()
 
-    class WebSocket(val handler: Consumer<WsConnection>, val pathParams: Map<String, String>) : RawResponseBody()
+    class WebSocket(
+        val handler: Consumer<WsConnection>,
+        val pathParams: Map<String, String>,
+        val queryParams: Map<String, List<String>>,
+    ) : RawResponseBody()
 }
 
 /**

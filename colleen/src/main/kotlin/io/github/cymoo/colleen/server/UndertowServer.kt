@@ -384,7 +384,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
             }
 
             is RawResponseBody.WebSocket -> {
-                handleWebSocketUpgrade(body.handler, body.pathParams, exchange)
+                handleWebSocketUpgrade(body.handler, body.pathParams, body.queryParams, exchange)
             }
         }
     }
@@ -442,6 +442,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
     private fun handleWebSocketUpgrade(
         handler: Consumer<WsConnection>,
         pathParams: Map<String, String>,
+        queryParams: Map<String, List<String>>,
         exchange: HttpServerExchange,
     ) {
         val callback = WebSocketConnectionCallback { _: WebSocketHttpExchange, wsChannel: WebSocketChannel ->
@@ -450,7 +451,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
 
             // Create the Colleen WsChannel adapter
             val channel = UndertowWsChannel(wsChannel)
-            val connection = WsConnection(channel, pathParams)
+            val connection = WsConnection(channel, pathParams, queryParams)
 
             // Invoke user handler to set up callbacks
             try {
@@ -462,7 +463,11 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
             }
 
             // Register Undertow receive listener
+            val maxMsgSize = wsConfig.maxMessageSizeBytes
             wsChannel.receiveSetter.set(object : AbstractReceiveListener() {
+                override fun getMaxTextBufferSize(): Long = maxMsgSize
+                override fun getMaxBinaryBufferSize(): Long = maxMsgSize
+
                 override fun onFullTextMessage(channel: WebSocketChannel, message: BufferedTextMessage) {
                     connection.dispatchMessage(WsMessage.Text(message.data))
                 }
@@ -513,7 +518,6 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
             wsChannel.resumeReceives()
         }
 
-        // Set max message size on the handshake handler
         val handshakeHandler = WebSocketProtocolHandshakeHandler(callback)
 
         // Perform the upgrade handshake

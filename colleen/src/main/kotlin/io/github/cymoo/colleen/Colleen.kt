@@ -30,6 +30,7 @@ import kotlin.time.measureTime
  * - Lifecycle hooks for extending framework behavior via listeners
  * - Elegant Exception handling
  * - SSE (Server-Sent Events) support
+ * - WebSocket support
  * - Validation utilities
  *
  * ### Example

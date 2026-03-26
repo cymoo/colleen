@@ -1050,8 +1050,8 @@ internal class Router {
         }
 
         executeMiddlewareChain(ctx, matchedMiddlewares) {
-            // Set the WebSocket response body with the handler and path params
-            ctx.response.body = ResponseBody.WebSocket(wsRoute.handler, ctx.pathParams)
+            // Set the WebSocket response body with the handler, path params, and query params
+            ctx.response.body = ResponseBody.WebSocket(wsRoute.handler, ctx.pathParams, ctx.request.queries)
         }
     }
 

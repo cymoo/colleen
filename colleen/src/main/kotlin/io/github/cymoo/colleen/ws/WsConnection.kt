@@ -117,6 +117,8 @@ class WsConnection internal constructor(
     private val channel: WsChannel,
     /** Path parameters extracted from the WebSocket route pattern. */
     val pathParams: Map<String, String>,
+    /** Query parameters from the WebSocket handshake request. */
+    val queryParams: Map<String, List<String>> = emptyMap(),
 ) : AutoCloseable {
 
     private val closed = AtomicBoolean(false)
@@ -138,6 +140,20 @@ class WsConnection internal constructor(
      * Returns a path parameter value by name, or null if not found.
      */
     fun pathParam(key: String): String? = pathParams[key]
+
+    // ========================================================================
+    // Query Parameters
+    // ========================================================================
+
+    /**
+     * Returns the first query parameter value by name, or null if not found.
+     */
+    fun query(key: String): String? = queryParams[key]?.firstOrNull()
+
+    /**
+     * Returns all query parameter values for the given name.
+     */
+    fun queryList(key: String): List<String> = queryParams[key] ?: emptyList()
 
     // ========================================================================
     // Send
@@ -294,9 +310,10 @@ class WsConnection internal constructor(
             } finally {
                 callbacks = ArrayList(closeCallbacks)
                 closeCallbacks.clear()
-                messageCallbacks.clear()
             }
         }
+        synchronized(messageCallbacks) { messageCallbacks.clear() }
+        synchronized(errorCallbacks) { errorCallbacks.clear() }
 
         val finalReason = closeReason.get()
         callbacks.forEach { cb ->
