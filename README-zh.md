@@ -277,6 +277,7 @@ Colleen 提供了一组完整示例，覆盖常见功能与集成方式：
 - **[redis](examples/redis/src/main/kotlin/Main.kt)** - Redis 集成示例，包含可配置 TTL 的响应缓存中间件
 - **[middleware-showcase](examples/middleware-showcase)** - 内置中间件使用示例
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events 实现实时推送，包含保活与连接生命周期管理
+- **[websocket](examples/websocket/src/main/kotlin/Main.kt)** - WebSocket 支持，包含 Echo、聊天室、中间件认证与控制器风格处理
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - 子应用架构示例，支持独立中间件、服务与错误处理
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient 使用示例
 - **[validator](examples/validator/src/main/kotlin/Main.kt)** - Validator 使用示例
@@ -1112,6 +1113,82 @@ app.get("/events") { ctx ->
 ```
 
 > SSE 连接会保持打开状态，直到 handler 执行完成或客户端主动断开连接。
+
+#### WebSocket
+
+```kotlin
+// Echo 服务器
+app.ws("/echo") { conn ->
+    conn.onMessage { msg ->
+        when (msg) {
+            is WsMessage.Text -> conn.send(msg.data)
+            is WsMessage.Binary -> conn.send(msg.data)
+        }
+    }
+    conn.onClose { reason ->
+        println("连接关闭: $reason")
+    }
+}
+```
+
+##### 路径参数与查询参数
+
+```kotlin
+// ws://localhost:8000/chat/general?name=Alice
+app.ws("/chat/{room}") { conn ->
+    val room = conn.pathParam("room")     // "general"
+    val name = conn.query("name")         // "Alice"
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
+    }
+}
+```
+
+##### WebSocket 中间件
+
+WebSocket 中间件在握手阶段运行，连接建立之前执行。
+签名与 HTTP 中间件相同，可检查 HTTP 头、Cookie 和查询参数。
+
+```kotlin
+// 全局 WS 中间件
+app.wsUse { ctx, next ->
+    val token = ctx.header("Authorization")
+    if (token != null) next()
+    else ctx.status(401).text("Unauthorized")
+}
+
+// 前缀作用域 WS 中间件
+app.wsUse("/admin") { ctx, next ->
+    if (isAdmin(ctx)) next()
+    else ctx.status(403).text("Forbidden")
+}
+```
+
+##### 控制器风格 WebSocket
+
+```kotlin
+@Controller("/notifications")
+class NotificationController {
+    @Ws("/live")
+    fun live(conn: WsConnection) {
+        conn.onMessage { msg -> /* ... */ }
+    }
+}
+```
+
+##### WebSocket 配置
+
+```kotlin
+app.config {
+    ws {
+        idleTimeoutMs = 600_000           // 10 分钟（默认 5 分钟）
+        maxMessageSizeBytes = 128 * 1024  // 128 KB（默认 64 KB）
+    }
+}
+```
+
+> WebSocket 连接保持打开状态，直到任一端关闭。消息通过 `onMessage` 回调分发，
+> `onClose` / `onError` 处理生命周期事件。
 
 ---
 

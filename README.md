@@ -289,6 +289,8 @@ Colleen comes with comprehensive examples demonstrating various features and int
 - **[middleware-showcase](examples/middleware-showcase)** - Usage examples of various built-in middleware
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events for real-time server push with keep-alive and
   connection lifecycle handling
+- **[websocket](examples/websocket/src/main/kotlin/Main.kt)** - WebSocket support with echo, chat rooms, middleware
+  authentication, and controller-style handlers
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - Modular application architecture with independent
   middleware, error handling, and service
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient usage for application testing
@@ -1143,6 +1145,82 @@ app.get("/events") { ctx ->
 ```
 
 > The SSE connection remains open until the handler completes or the client disconnects.
+
+#### WebSocket
+
+```kotlin
+// Echo server
+app.ws("/echo") { conn ->
+    conn.onMessage { msg ->
+        when (msg) {
+            is WsMessage.Text -> conn.send(msg.data)
+            is WsMessage.Binary -> conn.send(msg.data)
+        }
+    }
+    conn.onClose { reason ->
+        println("Closed: $reason")
+    }
+}
+```
+
+##### Path and Query Parameters
+
+```kotlin
+// ws://localhost:8000/chat/general?name=Alice
+app.ws("/chat/{room}") { conn ->
+    val room = conn.pathParam("room")     // "general"
+    val name = conn.query("name")         // "Alice"
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
+    }
+}
+```
+
+##### WebSocket Middleware
+
+WebSocket middleware runs during the handshake phase, before the connection is established.
+It uses the same `Middleware` signature and can inspect HTTP headers, cookies, and query parameters.
+
+```kotlin
+// Global WS middleware
+app.wsUse { ctx, next ->
+    val token = ctx.header("Authorization")
+    if (token != null) next()
+    else ctx.status(401).text("Unauthorized")
+}
+
+// Prefix-scoped WS middleware
+app.wsUse("/admin") { ctx, next ->
+    if (isAdmin(ctx)) next()
+    else ctx.status(403).text("Forbidden")
+}
+```
+
+##### Controller-Style WebSocket
+
+```kotlin
+@Controller("/notifications")
+class NotificationController {
+    @Ws("/live")
+    fun live(conn: WsConnection) {
+        conn.onMessage { msg -> /* ... */ }
+    }
+}
+```
+
+##### WebSocket Configuration
+
+```kotlin
+app.config {
+    ws {
+        idleTimeoutMs = 600_000           // 10 minutes (default: 5 min)
+        maxMessageSizeBytes = 128 * 1024  // 128 KB (default: 64 KB)
+    }
+}
+```
+
+> The WebSocket connection stays open until either side closes it. Messages are dispatched via
+> `onMessage` callbacks, and `onClose` / `onError` handle lifecycle events.
 
 ---
 
