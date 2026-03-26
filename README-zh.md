@@ -10,17 +10,18 @@
 4. [路由](#路由)
 5. [参数提取](#参数提取)
 6. [请求处理](#请求处理)
-7. [数据验证](#数据验证)
-8. [中间件](#中间件)
-9. [依赖注入](#依赖注入)
-10. [错误处理](#错误处理)
-11. [事件系统](#事件系统)
-12. [子应用](#子应用)
-13. [OpenAPI 文档](#openapi-文档)
-14. [测试](#测试)
-15. [Java 支持](#java-支持)
-16. [应用配置](#应用配置)
-17. [生产建议](#生产建议)
+7. [WebSocket](#websocket)
+8. [数据验证](#数据验证)
+9. [中间件](#中间件)
+10. [依赖注入](#依赖注入)
+11. [错误处理](#错误处理)
+12. [事件系统](#事件系统)
+13. [子应用](#子应用)
+14. [OpenAPI 文档](#openapi-文档)
+15. [测试](#测试)
+16. [Java 支持](#java-支持)
+17. [应用配置](#应用配置)
+18. [生产建议](#生产建议)
 
 ---
 
@@ -1114,10 +1115,15 @@ app.get("/events") { ctx ->
 
 > SSE 连接会保持打开状态，直到 handler 执行完成或客户端主动断开连接。
 
-#### WebSocket
+---
+
+## WebSocket
+
+Colleen 内置 WebSocket 支持，提供基于回调的 API 实现双向实时通信。
+
+### 基本 WebSocket 路由
 
 ```kotlin
-// Echo 服务器
 app.ws("/echo") { conn ->
     conn.onMessage { msg ->
         when (msg) {
@@ -1128,10 +1134,16 @@ app.ws("/echo") { conn ->
     conn.onClose { reason ->
         println("连接关闭: $reason")
     }
+    conn.onError { error ->
+        println("错误: ${error.message}")
+    }
 }
 ```
 
-##### 路径参数与查询参数
+### 路径参数与查询参数
+
+WebSocket 路由支持与 HTTP 路由相同的路径模式。
+握手 URL 中的查询参数同样可以访问。
 
 ```kotlin
 // ws://localhost:8000/chat/general?name=Alice
@@ -1144,7 +1156,7 @@ app.ws("/chat/{room}") { conn ->
 }
 ```
 
-##### WebSocket 中间件
+### WebSocket 中间件
 
 WebSocket 中间件在握手阶段运行，连接建立之前执行。
 签名与 HTTP 中间件相同，可检查 HTTP 头、Cookie 和查询参数。
@@ -1164,7 +1176,22 @@ app.wsUse("/admin") { ctx, next ->
 }
 ```
 
-##### 控制器风格 WebSocket
+### 子应用中的 WebSocket
+
+挂载在子应用中的 WebSocket 路由可以自动工作。
+升级请求会像普通 HTTP 请求一样委托给子应用。
+
+```kotlin
+val chatApp = Colleen()
+chatApp.ws("/room/{id}") { conn ->
+    conn.onMessage { msg -> /* ... */ }
+}
+
+app.mount("/chat", chatApp)
+// 连接地址: ws://localhost:8000/chat/room/42
+```
+
+### 控制器风格 WebSocket
 
 ```kotlin
 @Controller("/notifications")
@@ -1176,7 +1203,7 @@ class NotificationController {
 }
 ```
 
-##### WebSocket 配置
+### WebSocket 配置
 
 ```kotlin
 app.config {

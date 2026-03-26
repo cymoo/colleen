@@ -10,17 +10,18 @@
 4. [Routing](#routing)
 5. [Parameter Extraction](#parameter-extraction)
 6. [Request Handling](#request-handling)
-7. [Validation](#validation)
-8. [Middleware](#middleware)
-9. [Dependency Injection](#dependency-injection)
-10. [Error Handling](#error-handling)
-11. [Events System](#events-system)
-12. [Sub-Applications](#sub-applications)
-13. [OpenAPI Documentation](#openapi-documentation)
-14. [Testing](#testing)
-15. [Java Support](#java-support)
-16. [Configuration](#configuration)
-17. [Production Notes](#production-notes)
+7. [WebSocket](#websocket)
+8. [Validation](#validation)
+9. [Middleware](#middleware)
+10. [Dependency Injection](#dependency-injection)
+11. [Error Handling](#error-handling)
+12. [Events System](#events-system)
+13. [Sub-Applications](#sub-applications)
+14. [OpenAPI Documentation](#openapi-documentation)
+15. [Testing](#testing)
+16. [Java Support](#java-support)
+17. [Configuration](#configuration)
+18. [Production Notes](#production-notes)
 
 ---
 
@@ -1146,10 +1147,16 @@ app.get("/events") { ctx ->
 
 > The SSE connection remains open until the handler completes or the client disconnects.
 
-#### WebSocket
+---
+
+## WebSocket
+
+Colleen provides built-in WebSocket support with a callback-based API for bidirectional
+real-time communication.
+
+### Basic WebSocket Route
 
 ```kotlin
-// Echo server
 app.ws("/echo") { conn ->
     conn.onMessage { msg ->
         when (msg) {
@@ -1160,10 +1167,16 @@ app.ws("/echo") { conn ->
     conn.onClose { reason ->
         println("Closed: $reason")
     }
+    conn.onError { error ->
+        println("Error: ${error.message}")
+    }
 }
 ```
 
-##### Path and Query Parameters
+### Path and Query Parameters
+
+WebSocket routes support the same path patterns as HTTP routes.
+Query parameters from the handshake URL are also accessible.
 
 ```kotlin
 // ws://localhost:8000/chat/general?name=Alice
@@ -1176,7 +1189,7 @@ app.ws("/chat/{room}") { conn ->
 }
 ```
 
-##### WebSocket Middleware
+### WebSocket Middleware
 
 WebSocket middleware runs during the handshake phase, before the connection is established.
 It uses the same `Middleware` signature and can inspect HTTP headers, cookies, and query parameters.
@@ -1196,7 +1209,22 @@ app.wsUse("/admin") { ctx, next ->
 }
 ```
 
-##### Controller-Style WebSocket
+### WebSocket in Sub-Applications
+
+WebSocket routes in mounted sub-applications work automatically.
+The upgrade request is delegated to the sub-app just like normal HTTP requests.
+
+```kotlin
+val chatApp = Colleen()
+chatApp.ws("/room/{id}") { conn ->
+    conn.onMessage { msg -> /* ... */ }
+}
+
+app.mount("/chat", chatApp)
+// Connect to: ws://localhost:8000/chat/room/42
+```
+
+### Controller-Style WebSocket
 
 ```kotlin
 @Controller("/notifications")
@@ -1208,7 +1236,7 @@ class NotificationController {
 }
 ```
 
-##### WebSocket Configuration
+### WebSocket Configuration
 
 ```kotlin
 app.config {
