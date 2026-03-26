@@ -251,6 +251,7 @@ class WsConnection internal constructor(
      * Dispatches an incoming message to registered callbacks.
      */
     internal fun dispatchMessage(message: WsMessage) {
+        if (isClosed) return
         val callbacks: List<Consumer<WsMessage>>
         synchronized(messageCallbacks) {
             callbacks = ArrayList(messageCallbacks)
@@ -264,6 +265,7 @@ class WsConnection internal constructor(
      * Dispatches an error to registered callbacks.
      */
     internal fun dispatchError(error: Throwable) {
+        if (isClosed) return
         val callbacks: List<Consumer<Throwable>>
         synchronized(errorCallbacks) {
             callbacks = ArrayList(errorCallbacks)
