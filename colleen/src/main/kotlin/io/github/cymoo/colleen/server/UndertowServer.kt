@@ -3,6 +3,10 @@ package io.github.cymoo.colleen.server
 import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.util.http.Headers
 import io.github.cymoo.colleen.util.http.UrlPath
+import io.github.cymoo.colleen.ws.WsChannel
+import io.github.cymoo.colleen.ws.WsCloseReason
+import io.github.cymoo.colleen.ws.WsConnection
+import io.github.cymoo.colleen.ws.WsMessage
 import io.undertow.Undertow
 import io.undertow.UndertowOptions
 import io.undertow.server.HttpHandler
@@ -14,8 +18,14 @@ import io.undertow.server.handlers.form.FormParserFactory
 import io.undertow.server.handlers.form.MultiPartParserDefinition
 import io.undertow.util.HeaderValues
 import io.undertow.util.HttpString
+import io.undertow.websockets.WebSocketConnectionCallback
+import io.undertow.websockets.WebSocketProtocolHandshakeHandler
+import io.undertow.websockets.core.*
+import io.undertow.websockets.spi.WebSocketHttpExchange
+import org.xnio.ChannelListener
 import org.xnio.Options
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
@@ -39,7 +49,7 @@ import kotlin.use
  * - HTTP request dispatch and response writing
  * - SSE execution and connection management
  */
-class UndertowServer(private val config: ServerConfig) : WebServer {
+class UndertowServer(private val config: ServerConfig, private val wsConfig: io.github.cymoo.colleen.ws.WsConfig) : WebServer {
     private lateinit var server: Undertow
 
     /**
@@ -372,6 +382,10 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
             is RawResponseBody.Sse -> {
                 handleSseResponse(body.handler, exchange)
             }
+
+            is RawResponseBody.WebSocket -> {
+                handleWebSocketUpgrade(body.handler, body.pathParams, exchange)
+            }
         }
     }
 
@@ -412,6 +426,122 @@ class UndertowServer(private val config: ServerConfig) : WebServer {
         override fun write(text: String) = writer.write(text)
         override fun flush() = writer.flush()
         override fun close() = writer.close()
+    }
+
+    // ========================================================================
+    // WebSocket Handling
+    // ========================================================================
+
+    /**
+     * Handles a WebSocket upgrade request.
+     *
+     * Uses Undertow's WebSocketProtocolHandshakeHandler to perform the
+     * HTTP→WebSocket upgrade, then bridges the Undertow WebSocketChannel
+     * to Colleen's WsConnection abstraction.
+     */
+    private fun handleWebSocketUpgrade(
+        handler: Consumer<WsConnection>,
+        pathParams: Map<String, String>,
+        exchange: HttpServerExchange,
+    ) {
+        val callback = WebSocketConnectionCallback { _: WebSocketHttpExchange, wsChannel: WebSocketChannel ->
+            // Apply WS configuration
+            wsChannel.idleTimeout = wsConfig.idleTimeoutMs
+
+            // Create the Colleen WsChannel adapter
+            val channel = UndertowWsChannel(wsChannel)
+            val connection = WsConnection(channel, pathParams)
+
+            // Invoke user handler to set up callbacks
+            try {
+                handler.accept(connection)
+            } catch (e: Exception) {
+                logger.error("WebSocket handler setup failed: ${e.message}", e)
+                connection.close(WsCloseReason.Error(e))
+                return@WebSocketConnectionCallback
+            }
+
+            // Register Undertow receive listener
+            wsChannel.receiveSetter.set(object : AbstractReceiveListener() {
+                override fun onFullTextMessage(channel: WebSocketChannel, message: BufferedTextMessage) {
+                    connection.dispatchMessage(WsMessage.Text(message.data))
+                }
+
+                override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
+                    val data = message.data
+                    try {
+                        val pooled = data.resource
+                        val totalSize = pooled.sumOf { it.remaining() }
+                        val bytes = ByteArray(totalSize)
+                        var offset = 0
+                        for (buf in pooled) {
+                            val len = buf.remaining()
+                            buf.get(bytes, offset, len)
+                            offset += len
+                        }
+                        connection.dispatchMessage(WsMessage.Binary(bytes))
+                    } finally {
+                        data.free()
+                    }
+                }
+
+                override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
+                    val reason = if (cm.code == CloseMessage.NORMAL_CLOSURE) {
+                        WsCloseReason.Normal
+                    } else {
+                        WsCloseReason.Protocol(cm.code, cm.reason ?: "")
+                    }
+                    connection.close(reason)
+                }
+
+                override fun onError(channel: WebSocketChannel, error: Throwable) {
+                    connection.dispatchError(error)
+                    if (error is IOException) {
+                        connection.close(WsCloseReason.ClientDisconnected)
+                    } else {
+                        connection.close(WsCloseReason.Error(error))
+                    }
+                }
+            })
+
+            // Register close listener
+            wsChannel.addCloseTask(ChannelListener {
+                connection.close(WsCloseReason.ClientDisconnected)
+            })
+
+            // Start receiving messages
+            wsChannel.resumeReceives()
+        }
+
+        // Set max message size on the handshake handler
+        val handshakeHandler = WebSocketProtocolHandshakeHandler(callback)
+
+        // Perform the upgrade handshake
+        handshakeHandler.handleRequest(exchange)
+    }
+
+    /**
+     * Undertow-backed WebSocket channel implementation.
+     *
+     * Bridges Undertow's async WebSocketChannel to Colleen's blocking WsChannel interface.
+     */
+    private class UndertowWsChannel(private val channel: WebSocketChannel) : WsChannel {
+
+        override fun sendText(text: String) {
+            WebSockets.sendTextBlocking(text, channel)
+        }
+
+        override fun sendBinary(data: ByteBuffer) {
+            WebSockets.sendBinaryBlocking(data, channel)
+        }
+
+        override fun close(code: Int, reason: String) {
+            runCatching { WebSockets.sendCloseBlocking(code, reason, channel) }
+        }
+
+        override fun close() {
+            close(1000, "")
+        }
     }
 
     private fun writeInternalError(exchange: HttpServerExchange) {

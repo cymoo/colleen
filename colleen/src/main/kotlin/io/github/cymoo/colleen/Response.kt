@@ -2,6 +2,7 @@ package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.util.http.Cookie
 import io.github.cymoo.colleen.util.http.Headers
+import io.github.cymoo.colleen.ws.WsConnection
 import java.io.InputStream
 import java.util.function.BiConsumer
 import java.util.function.Consumer
@@ -377,6 +378,11 @@ sealed class ResponseBody {
     class Sse(val handler: Consumer<SseConnection>) : ResponseBody() {
         override fun materialize(ctx: Context) = RawResponseBody.Sse(handler)
     }
+
+    /** WebSocket upgrade body */
+    class WebSocket(val handler: Consumer<WsConnection>, val pathParams: Map<String, String>) : ResponseBody() {
+        override fun materialize(ctx: Context) = RawResponseBody.WebSocket(handler, pathParams)
+    }
 }
 
 @JvmInline
@@ -398,6 +404,8 @@ sealed class RawResponseBody {
     class Stream(val input: InputStream) : RawResponseBody()
 
     class Sse(val handler: Consumer<SseConnection>) : RawResponseBody()
+
+    class WebSocket(val handler: Consumer<WsConnection>, val pathParams: Map<String, String>) : RawResponseBody()
 }
 
 /**
