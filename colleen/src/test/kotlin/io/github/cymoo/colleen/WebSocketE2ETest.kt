@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * E2E test suite for WebSocket support.
@@ -267,7 +268,7 @@ class WebSocketE2ETest {
                 .buildAsync(URI.create("$baseUrl/auth-ws"), listener)
                 .get(5, TimeUnit.SECONDS)
             // If we get here, the handshake succeeded but should have failed
-            Assertions.fail<Unit>("WebSocket handshake should have been rejected")
+            fail("WebSocket handshake should have been rejected")
         } catch (e: Exception) {
             // Expected: handshake failure (403)
             assertTrue(true)
@@ -294,7 +295,7 @@ class WebSocketE2ETest {
             client.newWebSocketBuilder()
                 .buildAsync(URI.create("$baseUrl/nonexistent-ws"), listener)
                 .get(5, TimeUnit.SECONDS)
-            Assertions.fail<Unit>("WebSocket handshake should have failed for non-existent path")
+            fail("WebSocket handshake should have failed for non-existent path")
         } catch (e: Exception) {
             // Expected: 404 which causes handshake failure
             assertTrue(true)
