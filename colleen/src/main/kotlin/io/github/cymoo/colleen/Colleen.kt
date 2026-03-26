@@ -445,6 +445,12 @@ class Colleen {
      * The handler receives a [WsConnection] after a successful WebSocket handshake.
      * Register callbacks on the connection to handle messages, errors, and close events.
      *
+     * The connection provides access to:
+     * - **Path/query parameters** via `pathParam()`, `query()`, `queryList()`
+     * - **Application services** via `getService<T>()`, `getServiceOrNull<T>()`
+     * - **Request-scoped state** set by WS middleware during the handshake via
+     *   `getState<T>()`, `getStateOrNull<T>()`, `setState()`, `hasState()`
+     *
      * ### Example
      * ```kotlin
      * app.ws("/chat/{room}") { conn ->
