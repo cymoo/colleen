@@ -642,3 +642,222 @@ class WebSocketE2ETest {
     }
 }
 
+/**
+ * E2E tests for WebSocket routing through mounted sub-applications.
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class WebSocketSubAppE2ETest {
+
+    private lateinit var app: Colleen
+    private lateinit var client: HttpClient
+    private val baseUrl = "ws://127.0.0.1:8895"
+
+    @BeforeAll
+    fun setup() {
+        client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build()
+
+        app = Colleen()
+
+        // Sub-app with WS routes
+        val chatApp = Colleen()
+        chatApp.ws("/echo") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send("sub: ${msg.data}")
+            }
+        }
+        chatApp.ws("/room/{name}") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    conn.send("room=${conn.pathParam("name")}: ${msg.data}")
+                }
+            }
+        }
+
+        // WS middleware on the sub-app
+        chatApp.wsUse { ctx, next ->
+            if (ctx.path.startsWith("/protected")) {
+                val token = ctx.header("X-Token")
+                if (token == "ok") next()
+                else ctx.status(403).text("Forbidden")
+            } else {
+                next()
+            }
+        }
+        chatApp.ws("/protected/data") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send("protected: ${msg.data}")
+            }
+        }
+
+        app.mount("/ws", chatApp)
+
+        // Nested sub-app: app -> /api -> /v1
+        val apiApp = Colleen()
+        val v1App = Colleen()
+        v1App.ws("/stream") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send("v1: ${msg.data}")
+            }
+        }
+        apiApp.mount("/v1", v1App)
+        app.mount("/api", apiApp)
+
+        // Root-level WS route (should still work alongside mounts)
+        app.ws("/root-echo") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send("root: ${msg.data}")
+            }
+        }
+
+        app.listen(port = 8895, host = "127.0.0.1")
+        Thread.sleep(500)
+    }
+
+    @AfterAll
+    fun teardown() {
+        app.stop()
+    }
+
+    // Reuse TestListener from main test
+    private class TestListener : WebSocket.Listener {
+        val messages = CopyOnWriteArrayList<String>()
+        val closeCode = AtomicReference<Int>()
+        val errors = CopyOnWriteArrayList<Throwable>()
+        val openLatch = CountDownLatch(1)
+        val closeLatch = CountDownLatch(1)
+        private val textBuffer = StringBuilder()
+
+        override fun onOpen(webSocket: WebSocket) {
+            openLatch.countDown()
+            webSocket.request(1)
+        }
+
+        override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*> {
+            textBuffer.append(data)
+            if (last) {
+                messages.add(textBuffer.toString())
+                textBuffer.setLength(0)
+            }
+            webSocket.request(1)
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*> {
+            closeCode.set(statusCode)
+            closeLatch.countDown()
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onError(webSocket: WebSocket, error: Throwable) {
+            errors.add(error)
+            closeLatch.countDown()
+        }
+    }
+
+    private fun connectWs(path: String, headers: Map<String, String> = emptyMap()): Pair<WebSocket, TestListener> {
+        val listener = TestListener()
+        val builder = client.newWebSocketBuilder()
+        headers.forEach { (k, v) -> builder.header(k, v) }
+        val ws = builder.buildAsync(URI.create("$baseUrl$path"), listener).get(5, TimeUnit.SECONDS)
+        assertTrue(listener.openLatch.await(5, TimeUnit.SECONDS), "WebSocket should open")
+        return ws to listener
+    }
+
+    private fun awaitCondition(timeoutMs: Long = 3000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return
+            Thread.sleep(50)
+        }
+        assertTrue(condition(), "Condition not met within ${timeoutMs}ms")
+    }
+
+    @Test
+    fun `root WS route should still work alongside mounts`() {
+        val (ws, listener) = connectWs("/root-echo")
+        try {
+            ws.sendText("hello", true).get(5, TimeUnit.SECONDS)
+            awaitCondition { listener.messages.size >= 1 }
+            assertEquals("root: hello", listener.messages[0])
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `WS route in mounted sub-app should work`() {
+        val (ws, listener) = connectWs("/ws/echo")
+        try {
+            ws.sendText("hello", true).get(5, TimeUnit.SECONDS)
+            awaitCondition { listener.messages.size >= 1 }
+            assertEquals("sub: hello", listener.messages[0])
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `WS route with path params in sub-app should work`() {
+        val (ws, listener) = connectWs("/ws/room/lobby")
+        try {
+            ws.sendText("hi", true).get(5, TimeUnit.SECONDS)
+            awaitCondition { listener.messages.size >= 1 }
+            assertEquals("room=lobby: hi", listener.messages[0])
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `WS middleware in sub-app should reject unauthorized`() {
+        val listener = TestListener()
+        try {
+            client.newWebSocketBuilder()
+                .buildAsync(URI.create("$baseUrl/ws/protected/data"), listener)
+                .get(5, TimeUnit.SECONDS)
+            fail("Should have been rejected")
+        } catch (_: Exception) {
+            // Expected: 403 handshake failure
+        }
+    }
+
+    @Test
+    fun `WS middleware in sub-app should allow authorized`() {
+        val (ws, listener) = connectWs("/ws/protected/data", mapOf("X-Token" to "ok"))
+        try {
+            ws.sendText("secret", true).get(5, TimeUnit.SECONDS)
+            awaitCondition { listener.messages.size >= 1 }
+            assertEquals("protected: secret", listener.messages[0])
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `WS route in nested sub-app should work`() {
+        val (ws, listener) = connectWs("/api/v1/stream")
+        try {
+            ws.sendText("data", true).get(5, TimeUnit.SECONDS)
+            awaitCondition { listener.messages.size >= 1 }
+            assertEquals("v1: data", listener.messages[0])
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `non-existent WS path in sub-app should return 404`() {
+        val listener = TestListener()
+        try {
+            client.newWebSocketBuilder()
+                .buildAsync(URI.create("$baseUrl/ws/nonexistent"), listener)
+                .get(5, TimeUnit.SECONDS)
+            fail("Should have failed for non-existent path")
+        } catch (_: Exception) {
+            // Expected: 404 handshake failure
+        }
+    }
+}
+

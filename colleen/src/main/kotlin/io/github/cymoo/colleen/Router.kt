@@ -1024,35 +1024,56 @@ internal class Router {
     /**
      * Handles a WebSocket upgrade request.
      *
-     * 1. Match against WS routes
+     * 1. Match against local WS routes
      * 2. If matched, run WS middleware chain, then set WebSocket response body
-     * 3. If not matched, throw 404
+     * 3. If not matched locally, delegate to mounted sub-apps
+     * 4. If no sub-app handles it, throw 404
      */
     private fun handleWsUpgrade(ctx: Context) {
         val matched = findBestMatchedWsRoute(ctx)
 
-        if (matched == null) {
-            throw RouteNotFound(ctx.fullPath, ctx.method)
+        if (matched != null) {
+            val (wsRoute, matchResult) = matched
+            ctx.pattern = wsRoute.path
+
+            // Apply path parameters
+            matchResult.params.forEach { (key, value) ->
+                ctx.setPathParam(key, value)
+            }
+
+            // Collect matching WS middlewares
+            val matchedMiddlewares = wsMiddlewares.mapNotNull { mw ->
+                val result = mw.match(ctx)
+                if (result.matched) mw to result else null
+            }
+
+            executeMiddlewareChain(ctx, matchedMiddlewares) {
+                // Set the WebSocket response body with the handler, path params, and query params
+                ctx.response.body = ResponseBody.WebSocket(wsRoute.handler, ctx.pathParams, ctx.request.queries)
+            }
+            return
         }
 
-        val (wsRoute, matchResult) = matched
-        ctx.pattern = wsRoute.path
+        // No local WS route matched — try mounted sub-apps
+        val matchedMounts = findMatchedMounts(ctx)
 
-        // Apply path parameters
-        matchResult.params.forEach { (key, value) ->
-            ctx.setPathParam(key, value)
+        if (matchedMounts.isNotEmpty()) {
+            for ((mount, matchResult) in matchedMounts) {
+                try {
+                    val subCtx = executeMount(ctx, mount, matchResult)
+                    val subPattern = subCtx.pattern
+                    ctx.response.merge(subCtx.response)
+                    if (subPattern != null) {
+                        ctx.pattern = UrlPath.join(mount.prefix, subPattern)
+                    }
+                    return
+                } catch (_: NotFound) {
+                    continue
+                }
+            }
         }
 
-        // Collect matching WS middlewares
-        val matchedMiddlewares = wsMiddlewares.mapNotNull { mw ->
-            val result = mw.match(ctx)
-            if (result.matched) mw to result else null
-        }
-
-        executeMiddlewareChain(ctx, matchedMiddlewares) {
-            // Set the WebSocket response body with the handler, path params, and query params
-            ctx.response.body = ResponseBody.WebSocket(wsRoute.handler, ctx.pathParams, ctx.request.queries)
-        }
+        throw RouteNotFound(ctx.fullPath, ctx.method)
     }
 
     /**
