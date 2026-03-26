@@ -286,8 +286,7 @@ Colleen comes with comprehensive examples demonstrating various features and int
   parameter queries
 - **[redis](examples/redis/src/main/kotlin/Main.kt)** - Redis integration with HTTP response caching middleware and
   configurable TTL
-- **[signed-cookie](examples/signed-cookie/src/main/kotlin/Main.kt)** - Cryptographic cookie signing with key rotation
-  support
+- **[middleware-showcase](examples/middleware-showcase)** - Usage examples of various built-in middleware
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events for real-time server push with keep-alive and
   connection lifecycle handling
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - Modular application architecture with independent

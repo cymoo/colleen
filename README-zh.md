@@ -275,7 +275,7 @@ Colleen 提供了一组完整示例，覆盖常见功能与集成方式：
 - **[event-system](examples/event-system/src/main/kotlin/Main.kt)** - 生命周期事件、请求/响应追踪与执行耗时统计
 - **[jdbc](examples/jdbc/src/main/kotlin/Main.kt)** - JDBC 集成示例，包含 SQLite、批量执行与命名参数查询
 - **[redis](examples/redis/src/main/kotlin/Main.kt)** - Redis 集成示例，包含可配置 TTL 的响应缓存中间件
-- **[signed-cookie](examples/signed-cookie/src/main/kotlin/Main.kt)** - 加密签名 Cookie，支持密钥轮换
+- **[middleware-showcase](examples/middleware-showcase)** - 内置中间件使用示例
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events 实现实时推送，包含保活与连接生命周期管理
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - 子应用架构示例，支持独立中间件、服务与错误处理
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient 使用示例

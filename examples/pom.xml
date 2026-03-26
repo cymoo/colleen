@@ -20,7 +20,6 @@
         <module>auth-app</module>
         <module>render-html</module>
         <module>testing</module>
-        <module>signed-cookie</module>
         <module>upload-app</module>
         <module>sse</module>
         <module>event-system</module>
@@ -35,6 +34,7 @@
         <module>jdbc</module>
         <module>openapi</module>
         <module>auto-reload</module>
+        <module>middleware-showcase</module>
     </modules>
 
     <properties>

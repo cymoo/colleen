@@ -10,7 +10,7 @@
         <version>${revision}</version>
     </parent>
 
-    <artifactId>signed-cookie</artifactId>
+    <artifactId>middleware-showcase</artifactId>
 
     <dependencies>
         <dependency>
