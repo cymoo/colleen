@@ -160,6 +160,75 @@ class WebSocketE2ETest {
 
         // Controller-style WS route
         app.addController(WsChatController())
+
+        // ---- Service/State access tests ----
+
+        // Provide a service
+        app.provide(GreetingService("Hello"))
+
+        // WS middleware that sets state
+        app.wsUse { ctx, next ->
+            if (ctx.path.startsWith("/state-ws") || ctx.path.startsWith("/service-ws")) {
+                ctx.setState("userId", 42)
+                ctx.setState("role", "admin")
+                next()
+            } else {
+                next()
+            }
+        }
+
+        // WS route that reads state set by middleware
+        app.ws("/state-ws") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    val userId = conn.getState<Int>("userId")
+                    val role = conn.getState<String>("role")
+                    conn.send("userId=$userId role=$role")
+                }
+            }
+        }
+
+        // WS route that reads service from app
+        app.ws("/service-ws") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    val svc = conn.getService<GreetingService>()
+                    conn.send("${svc.greet(msg.data)}")
+                }
+            }
+        }
+
+        // WS route that uses both state and service
+        app.ws("/both-ws") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    val hasUser = conn.hasState("userId")
+                    val svc = conn.getServiceOrNull<GreetingService>()
+                    conn.send("hasUser=$hasUser svc=${svc != null}")
+                }
+            }
+        }
+
+        // WS route that mutates state
+        app.ws("/state-mutate-ws") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    if (msg.data.startsWith("set:")) {
+                        val parts = msg.data.substringAfter("set:").split("=", limit = 2)
+                        conn.setState(parts[0], parts[1])
+                        conn.send("ok")
+                    } else if (msg.data.startsWith("get:")) {
+                        val key = msg.data.substringAfter("get:")
+                        val value = conn.getStateOrNull<String>(key)
+                        conn.send("value=$value")
+                    }
+                }
+            }
+        }
+    }
+
+    class GreetingService(private val prefix: String) {
+        fun greet(name: String): String = "$prefix, $name!"
     }
 
     @Controller("/api")
@@ -635,6 +704,78 @@ class WebSocketE2ETest {
                 ws.sendBinary(ByteBuffer.wrap(data), true).get(5, TimeUnit.SECONDS)
                 awaitCondition { listener.binaryMessages.size >= 1 }
                 assertTrue(data.contentEquals(listener.binaryMessages[0]))
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+    }
+
+    // ========================================================================
+    // State Access (from WS middleware)
+    // ========================================================================
+
+    @Nested
+    inner class StateAccess {
+        @Test
+        fun `should access state set by WS middleware`() {
+            val (ws, listener) = connectWs("/state-ws")
+            try {
+                ws.sendText("hello", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                assertEquals("userId=42 role=admin", listener.messages[0])
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+
+        @Test
+        fun `should mutate state during connection lifetime`() {
+            val (ws, listener) = connectWs("/state-mutate-ws")
+            try {
+                ws.sendText("set:myKey=myValue", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                assertEquals("ok", listener.messages[0])
+
+                ws.sendText("get:myKey", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 2 }
+                assertEquals("value=myValue", listener.messages[1])
+
+                ws.sendText("get:missing", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 3 }
+                assertEquals("value=null", listener.messages[2])
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+    }
+
+    // ========================================================================
+    // Service Access
+    // ========================================================================
+
+    @Nested
+    inner class ServiceAccess {
+        @Test
+        fun `should access service from app`() {
+            val (ws, listener) = connectWs("/service-ws")
+            try {
+                ws.sendText("World", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                assertEquals("Hello, World!", listener.messages[0])
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+
+        @Test
+        fun `should access both state and service`() {
+            val (ws, listener) = connectWs("/both-ws")
+            try {
+                ws.sendText("test", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                // /both-ws middleware does not set state for this path,
+                // but getServiceOrNull should find it
+                assertEquals("hasUser=false svc=true", listener.messages[0])
             } finally {
                 ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
             }

@@ -1176,6 +1176,47 @@ app.wsUse("/admin") { ctx, next ->
 }
 ```
 
+### 状态与服务访问
+
+WebSocket 连接可以访问通过 `provide()` 注册的应用服务，
+以及 WS 中间件在握手阶段设置的请求级状态。
+
+```kotlin
+app.provide(ChatService())
+
+app.wsUse { ctx, next ->
+    val userId = authenticate(ctx.header("Authorization"))
+    ctx.setState("userId", userId)
+    next()
+}
+
+app.ws("/chat/{room}") { conn ->
+    val chatService = conn.getService<ChatService>()
+    val userId = conn.getState<Int>("userId")
+    val room = conn.pathParam("room")
+
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) {
+            chatService.broadcast(room!!, userId, msg.data)
+        }
+    }
+}
+```
+
+`WsConnection` 上的可用方法：
+
+| 方法 | 说明 |
+|---|---|
+| `getService<T>()` | 获取必需服务（未注册时抛异常） |
+| `getServiceOrNull<T>()` | 获取可选服务（未注册返回 null） |
+| `getServices<T>()` | 获取某类型的所有实例 |
+| `getState<T>(key)` | 获取必需状态（不存在时抛异常） |
+| `getStateOrNull<T>(key)` | 获取可选状态（不存在返回 null） |
+| `setState(key, value)` | 设置或更新状态 |
+| `hasState(key)` | 检查状态是否存在 |
+
+> 服务解析会沿父应用链向上查找，因此在父应用注册的服务可以在子应用的 WebSocket 路由中访问。
+
 ### 子应用中的 WebSocket
 
 挂载在子应用中的 WebSocket 路由可以自动工作。

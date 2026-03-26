@@ -545,6 +545,19 @@ data class Context(
     }
 
     /**
+     * Collects all state entries from this context and its parent chain
+     * into a single mutable map.
+     *
+     * Used internally to snapshot handshake-phase state for WebSocket connections.
+     * Parent state is collected first, then overridden by child state.
+     */
+    internal fun collectStates(): MutableMap<String, Any?> {
+        val result = parentContext?.collectStates() ?: mutableMapOf()
+        result.putAll(states)
+        return result
+    }
+
+    /**
      * Creates a sub-context for a mounted app.
      *
      * Used internally when routing requests to mounted sub-app.

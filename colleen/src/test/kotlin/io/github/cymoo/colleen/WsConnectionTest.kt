@@ -24,7 +24,9 @@ class WsConnectionTest {
         channel: TestWsChannel = createTestChannel(),
         pathParams: Map<String, String> = emptyMap(),
         queryParams: Map<String, List<String>> = emptyMap(),
-    ): WsConnection = WsConnection(channel, pathParams, queryParams)
+        app: Colleen? = null,
+        states: MutableMap<String, Any?> = mutableMapOf(),
+    ): WsConnection = WsConnection(channel, pathParams, queryParams, app, states)
 
     private class TestWsChannel : WsChannel {
         val sentTexts = mutableListOf<String>()
@@ -810,6 +812,185 @@ class WsConnectionTest {
             )
             assertEquals("42", conn.pathParam("id"))
             assertEquals("99", conn.query("id"))
+        }
+    }
+
+    // ========================================================================
+    // State Management
+    // ========================================================================
+
+    @Nested
+    inner class StateManagement {
+        @Test
+        fun `should set and get state`() {
+            val conn = createConnection()
+            conn.setState("user", "Alice")
+            assertEquals("Alice", conn.getState<String>("user"))
+        }
+
+        @Test
+        fun `should get state set via constructor`() {
+            val conn = createConnection(states = mutableMapOf("key" to "value"))
+            assertEquals("value", conn.getState<String>("key"))
+        }
+
+        @Test
+        fun `should throw for missing state`() {
+            val conn = createConnection()
+            assertThrows<NoSuchElementException> {
+                conn.getState<String>("missing")
+            }
+        }
+
+        @Test
+        fun `getStateOrNull should return null for missing state`() {
+            val conn = createConnection()
+            assertNull(conn.getStateOrNull<String>("missing"))
+        }
+
+        @Test
+        fun `getStateOrNull should return value for existing state`() {
+            val conn = createConnection()
+            conn.setState("count", 42)
+            assertEquals(42, conn.getStateOrNull<Int>("count"))
+        }
+
+        @Test
+        fun `hasState should return false for missing state`() {
+            val conn = createConnection()
+            assertFalse(conn.hasState("missing"))
+        }
+
+        @Test
+        fun `hasState should return true for existing state`() {
+            val conn = createConnection()
+            conn.setState("key", "value")
+            assertTrue(conn.hasState("key"))
+        }
+
+        @Test
+        fun `hasState should return true for null-valued state`() {
+            val conn = createConnection()
+            conn.setState("key", null)
+            assertTrue(conn.hasState("key"))
+        }
+
+        @Test
+        fun `setState should overwrite existing state`() {
+            val conn = createConnection()
+            conn.setState("key", "first")
+            conn.setState("key", "second")
+            assertEquals("second", conn.getState<String>("key"))
+        }
+
+        @Test
+        fun `middleware state from constructor should be accessible`() {
+            val states = mutableMapOf<String, Any?>(
+                "userId" to 123,
+                "role" to "admin",
+                "nullable" to null
+            )
+            val conn = createConnection(states = states)
+
+            assertEquals(123, conn.getState<Int>("userId"))
+            assertEquals("admin", conn.getState<String>("role"))
+            assertTrue(conn.hasState("nullable"))
+            assertNull(conn.getStateOrNull<String>("nullable"))
+        }
+    }
+
+    // ========================================================================
+    // Service Injection
+    // ========================================================================
+
+    class TestService(val name: String)
+    class AnotherService(val value: Int)
+
+    @Nested
+    inner class ServiceInjection {
+
+        @Test
+        fun `should resolve service from app`() {
+            val app = Colleen()
+            app.provide(TestService("hello"))
+            val conn = createConnection(app = app)
+
+            val service = conn.getService<TestService>()
+            assertEquals("hello", service.name)
+        }
+
+        @Test
+        fun `should throw for unregistered service`() {
+            val app = Colleen()
+            val conn = createConnection(app = app)
+
+            assertThrows<IllegalStateException> {
+                conn.getService<TestService>()
+            }
+        }
+
+        @Test
+        fun `getServiceOrNull should return null for unregistered service`() {
+            val app = Colleen()
+            val conn = createConnection(app = app)
+
+            assertNull(conn.getServiceOrNull<TestService>())
+        }
+
+        @Test
+        fun `should resolve service from parent app`() {
+            val parentApp = Colleen()
+            parentApp.provide(TestService("from-parent"))
+
+            val childApp = Colleen()
+            childApp.parent = parentApp
+
+            val conn = createConnection(app = childApp)
+            val service = conn.getService<TestService>()
+            assertEquals("from-parent", service.name)
+        }
+
+        @Test
+        fun `should resolve multiple services`() {
+            val app = Colleen()
+            app.provide(TestService("svc"))
+            app.provide(AnotherService(42))
+
+            val conn = createConnection(app = app)
+            assertEquals("svc", conn.getService<TestService>().name)
+            assertEquals(42, conn.getService<AnotherService>().value)
+        }
+
+        @Test
+        fun `getService with Java Class should work`() {
+            val app = Colleen()
+            app.provide(TestService("java-compat"))
+            val conn = createConnection(app = app)
+
+            val service = conn.getService(TestService::class.java)
+            assertEquals("java-compat", service.name)
+        }
+
+        @Test
+        fun `getServiceOrNull with Java Class should return null for unregistered`() {
+            val app = Colleen()
+            val conn = createConnection(app = app)
+
+            assertNull(conn.getServiceOrNull(TestService::class.java))
+        }
+
+        @Test
+        fun `should return empty list for getServices when no app`() {
+            val conn = createConnection()
+            assertEquals(emptyList(), conn.getServices<TestService>())
+        }
+
+        @Test
+        fun `no app should throw on getService`() {
+            val conn = createConnection()
+            assertThrows<IllegalStateException> {
+                conn.getService<TestService>()
+            }
         }
     }
 }

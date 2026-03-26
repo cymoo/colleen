@@ -1,5 +1,6 @@
 package io.github.cymoo.colleen.ws
 
+import io.github.cymoo.colleen.Colleen
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -7,6 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import java.util.function.Consumer
 import kotlin.concurrent.withLock
+import kotlin.reflect.KClass
 
 // ============================================================================
 // WsMessage
@@ -119,6 +121,20 @@ class WsConnection internal constructor(
     val pathParams: Map<String, String>,
     /** Query parameters from the WebSocket handshake request. */
     val queryParams: Map<String, List<String>> = emptyMap(),
+    /**
+     * The Colleen application that owns this connection.
+     *
+     * Used for service resolution. Walks up the parent chain when the
+     * owning app is a mounted sub-application.
+     */
+    private val app: Colleen? = null,
+    /**
+     * Request-scoped state carried over from the WS handshake phase.
+     *
+     * State set by WS middleware during the upgrade handshake is captured here
+     * and remains accessible for the lifetime of the connection.
+     */
+    private val states: MutableMap<String, Any?> = mutableMapOf(),
 ) : AutoCloseable {
 
     private val closed = AtomicBoolean(false)
@@ -154,6 +170,147 @@ class WsConnection internal constructor(
      * Returns all query parameter values for the given name.
      */
     fun queryList(key: String): List<String> = queryParams[key] ?: emptyList()
+
+    // ========================================================================
+    // State Management
+    // ========================================================================
+
+    /**
+     * Returns true if the state exists, regardless of whether the value is null.
+     */
+    fun hasState(key: String): Boolean = states.containsKey(key)
+
+    /**
+     * Returns the state value for the given key.
+     *
+     * @param key the state key
+     * @return the non-null state value
+     * @throws NoSuchElementException if the state key does not exist
+     * @throws NullPointerException if the value is null
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Any> getState(key: String): T {
+        if (!states.containsKey(key)) {
+            throw NoSuchElementException("State '$key' not found")
+        }
+        return states[key] as T
+    }
+
+    /**
+     * Returns the state value for the given key, or null if the key does not exist.
+     *
+     * @param key the state key
+     * @return the state value if the key exists (may be null), or null if the key doesn't exist
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun <T> getStateOrNull(key: String): T? {
+        if (!states.containsKey(key)) return null
+        return states[key] as T?
+    }
+
+    /**
+     * Sets a state value for the given key.
+     *
+     * @param key the state key
+     * @param value the state value (may be null)
+     */
+    fun setState(key: String, value: Any?) {
+        states[key] = value
+    }
+
+    // ========================================================================
+    // Service Injection
+    // ========================================================================
+
+    /**
+     * Retrieves a required service instance.
+     *
+     * Resolution walks up the app parent chain (for mounted sub-apps).
+     *
+     * ```kotlin
+     * val db = conn.getService<Database>()
+     * ```
+     *
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @throws IllegalStateException if the service is not registered or app is not available.
+     * @see getServiceOrNull
+     */
+    inline fun <reified T : Any> getService(qualifier: Any? = null): T =
+        resolveService(T::class, qualifier)
+            ?: error("Service ${T::class.simpleName}(qualifier=$qualifier) not registered")
+
+    /**
+     * Retrieves an optional service instance, or `null` if not registered.
+     *
+     * ```kotlin
+     * val db = conn.getServiceOrNull<Database>()
+     * ```
+     *
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @see getService
+     */
+    inline fun <reified T : Any> getServiceOrNull(qualifier: Any? = null): T? =
+        resolveService(T::class, qualifier)
+
+    /**
+     * Retrieves all registered instances of type [T] from the current app,
+     * regardless of qualifier.
+     *
+     * ```kotlin
+     * val handlers = conn.getServices<EventHandler>()
+     * ```
+     */
+    inline fun <reified T : Any> getServices(): List<T> =
+        resolveAllServices(T::class)
+
+    /**
+     * Internal resolver for getServices.
+     */
+    @PublishedApi
+    internal fun <T : Any> resolveAllServices(kClass: KClass<T>): List<T> =
+        app?.serviceContainer?.getAll(kClass) ?: emptyList()
+
+    /**
+     * Internal recursive resolver shared by all public retrieval methods.
+     */
+    @PublishedApi
+    internal fun <T : Any> resolveService(kClass: KClass<T>, qualifier: Any? = null): T? =
+        resolveServiceFromApp(app, kClass, qualifier)
+
+    /**
+     * Walks up the app parent chain to resolve a service.
+     */
+    private fun <T : Any> resolveServiceFromApp(current: Colleen?, kClass: KClass<T>, qualifier: Any?): T? {
+        if (current == null) return null
+        return current.serviceContainer.getOrNull(kClass, qualifier)
+            ?: resolveServiceFromApp(current.parent, kClass, qualifier)
+    }
+
+    // ========================================================================
+    // Java-compatible Service Injection
+    // ========================================================================
+
+    /**
+     * Retrieves a required service instance (Java-compatible).
+     *
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     * @throws IllegalStateException if the service is not registered.
+     */
+    @JvmOverloads
+    fun <T : Any> getService(clazz: Class<T>, qualifier: Any? = null): T =
+        resolveService(clazz.kotlin, qualifier)
+            ?: error("Service ${clazz.simpleName}(qualifier=$qualifier) not registered")
+
+    /**
+     * Retrieves an optional service instance (Java-compatible), or `null` if not registered.
+     *
+     * @param clazz     the service class.
+     * @param qualifier optional qualifier to distinguish instances of the same type.
+     */
+    @JvmOverloads
+    fun <T : Any> getServiceOrNull(clazz: Class<T>, qualifier: Any? = null): T? =
+        resolveService(clazz.kotlin, qualifier)
 
     // ========================================================================
     // Send

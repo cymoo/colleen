@@ -1209,6 +1209,48 @@ app.wsUse("/admin") { ctx, next ->
 }
 ```
 
+### State and Service Access
+
+WebSocket connections can access application services registered via `provide()` and
+request-scoped state set by WS middleware during the handshake phase.
+
+```kotlin
+app.provide(ChatService())
+
+app.wsUse { ctx, next ->
+    val userId = authenticate(ctx.header("Authorization"))
+    ctx.setState("userId", userId)
+    next()
+}
+
+app.ws("/chat/{room}") { conn ->
+    val chatService = conn.getService<ChatService>()
+    val userId = conn.getState<Int>("userId")
+    val room = conn.pathParam("room")
+
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) {
+            chatService.broadcast(room!!, userId, msg.data)
+        }
+    }
+}
+```
+
+Available methods on `WsConnection`:
+
+| Method | Description |
+|---|---|
+| `getService<T>()` | Required service (throws if not found) |
+| `getServiceOrNull<T>()` | Optional service (returns null) |
+| `getServices<T>()` | All instances of a type |
+| `getState<T>(key)` | Required state (throws if not found) |
+| `getStateOrNull<T>(key)` | Optional state (returns null) |
+| `setState(key, value)` | Set or update state |
+| `hasState(key)` | Check if state exists |
+
+> Service resolution walks up the parent app chain, so services registered
+> on a parent app are accessible from WebSocket routes in mounted sub-apps.
+
 ### WebSocket in Sub-Applications
 
 WebSocket routes in mounted sub-applications work automatically.
