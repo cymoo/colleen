@@ -1,5 +1,6 @@
 package io.github.cymoo.colleen
 
+import io.github.cymoo.colleen.util.http.Headers
 import io.github.cymoo.colleen.ws.*
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -26,7 +27,8 @@ class WsConnectionTest {
         queryParams: Map<String, List<String>> = emptyMap(),
         app: Colleen? = null,
         states: MutableMap<String, Any?> = mutableMapOf(),
-    ): WsConnection = WsConnection(channel, pathParams, queryParams, app, states)
+        headers: Headers = Headers(),
+    ): WsConnection = WsConnection(channel, pathParams, queryParams, app, states, headers)
 
     private class TestWsChannel : WsChannel {
         val sentTexts = mutableListOf<String>()
@@ -161,6 +163,60 @@ class WsConnectionTest {
         fun `empty query params`() {
             val conn = createConnection()
             assertEquals(emptyMap(), conn.queryParams)
+        }
+    }
+
+    // ========================================================================
+    // Headers
+    // ========================================================================
+
+    @Nested
+    inner class HeaderAccess {
+        @Test
+        fun `should return header value`() {
+            val headers = Headers()
+            headers["Authorization"] = "Bearer token123"
+            val conn = createConnection(headers = headers)
+            assertEquals("Bearer token123", conn.header("Authorization"))
+        }
+
+        @Test
+        fun `should be case insensitive`() {
+            val headers = Headers()
+            headers["X-Custom-Header"] = "value"
+            val conn = createConnection(headers = headers)
+            assertEquals("value", conn.header("x-custom-header"))
+            assertEquals("value", conn.header("X-CUSTOM-HEADER"))
+        }
+
+        @Test
+        fun `should return null for missing header`() {
+            val conn = createConnection()
+            assertNull(conn.header("X-Missing"))
+        }
+
+        @Test
+        fun `should return all values for multi-valued header`() {
+            val headers = Headers()
+            headers.add("X-Multi", "value1")
+            headers.add("X-Multi", "value2")
+            val conn = createConnection(headers = headers)
+            assertEquals(listOf("value1", "value2"), conn.headerValues("X-Multi"))
+        }
+
+        @Test
+        fun `should return empty list for missing headerValues`() {
+            val conn = createConnection()
+            assertEquals(emptyList(), conn.headerValues("X-Missing"))
+        }
+
+        @Test
+        fun `should return first value for multi-valued header via header()`() {
+            val headers = Headers()
+            headers.add("Accept", "text/html")
+            headers.add("Accept", "application/json")
+            val conn = createConnection(headers = headers)
+            assertEquals("text/html", conn.header("Accept"))
         }
     }
 

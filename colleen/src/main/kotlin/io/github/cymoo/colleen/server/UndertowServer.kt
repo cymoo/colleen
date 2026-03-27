@@ -384,7 +384,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
             }
 
             is RawResponseBody.WebSocket -> {
-                handleWebSocketUpgrade(body.handler, body.pathParams, body.queryParams, body.app, body.states, exchange)
+                handleWebSocketUpgrade(body.handler, body.pathParams, body.queryParams, body.app, body.states, body.headers, exchange)
             }
         }
     }
@@ -445,6 +445,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
         queryParams: Map<String, List<String>>,
         app: Colleen?,
         states: Map<String, Any?>,
+        headers: Headers,
         exchange: HttpServerExchange,
     ) {
         val callback = WebSocketConnectionCallback { _: WebSocketHttpExchange, wsChannel: WebSocketChannel ->
@@ -453,7 +454,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
 
             // Create the Colleen WsChannel adapter
             val channel = UndertowWsChannel(wsChannel)
-            val connection = WsConnection(channel, pathParams, queryParams, app, states.toMutableMap())
+            val connection = WsConnection(channel, pathParams, queryParams, app, states.toMutableMap(), headers)
 
             // Invoke user handler to set up callbacks
             try {

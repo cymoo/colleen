@@ -1173,16 +1173,19 @@ app.ws("/echo") { conn ->
 }
 ```
 
-### Path and Query Parameters
+### Path Parameters, Query Parameters, and Headers
 
 WebSocket routes support the same path patterns as HTTP routes.
-Query parameters from the handshake URL are also accessible.
+Query parameters from the handshake URL and HTTP headers from the upgrade request
+are also accessible.
 
 ```kotlin
 // ws://localhost:8000/chat/general?name=Alice
+// Headers: Authorization: Bearer token123
 app.ws("/chat/{room}") { conn ->
     val room = conn.pathParam("room")     // "general"
     val name = conn.query("name")         // "Alice"
+    val auth = conn.header("Authorization") // "Bearer token123"
     conn.onMessage { msg ->
         if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
     }
@@ -1240,6 +1243,11 @@ Available methods on `WsConnection`:
 
 | Method | Description |
 |---|---|
+| `pathParam(key)` | Path parameter from the route pattern |
+| `query(key)` | First query parameter value |
+| `queryList(key)` | All query parameter values |
+| `header(key)` | HTTP header from the upgrade request |
+| `headerValues(key)` | All values of a multi-valued header |
 | `getService<T>()` | Required service (throws if not found) |
 | `getServiceOrNull<T>()` | Optional service (returns null) |
 | `getServices<T>()` | All instances of a type |

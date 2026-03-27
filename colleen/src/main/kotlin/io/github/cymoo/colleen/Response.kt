@@ -386,8 +386,9 @@ sealed class ResponseBody {
         val queryParams: Map<String, List<String>>,
         val app: Colleen? = null,
         val states: Map<String, Any?> = emptyMap(),
+        val headers: Headers = Headers(),
     ) : ResponseBody() {
-        override fun materialize(ctx: Context) = RawResponseBody.WebSocket(handler, pathParams, queryParams, app, states)
+        override fun materialize(ctx: Context) = RawResponseBody.WebSocket(handler, pathParams, queryParams, app, states, headers)
     }
 }
 
@@ -417,6 +418,7 @@ sealed class RawResponseBody {
         val queryParams: Map<String, List<String>>,
         val app: Colleen? = null,
         val states: Map<String, Any?> = emptyMap(),
+        val headers: Headers = Headers(),
     ) : RawResponseBody()
 }
 

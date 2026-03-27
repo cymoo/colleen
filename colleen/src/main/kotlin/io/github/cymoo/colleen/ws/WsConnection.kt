@@ -1,6 +1,7 @@
 package io.github.cymoo.colleen.ws
 
 import io.github.cymoo.colleen.Colleen
+import io.github.cymoo.colleen.util.http.Headers
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -135,6 +136,14 @@ class WsConnection internal constructor(
      * and remains accessible for the lifetime of the connection.
      */
     private val states: MutableMap<String, Any?> = mutableMapOf(),
+    /**
+     * HTTP headers from the WebSocket upgrade (handshake) request.
+     *
+     * These are the headers sent by the client during the initial HTTP
+     * request that triggers the WebSocket upgrade. Useful for authentication,
+     * session tracking, or any other header-based logic.
+     */
+    private val requestHeaders: Headers = Headers(),
 ) : AutoCloseable {
 
     private val closed = AtomicBoolean(false)
@@ -181,6 +190,35 @@ class WsConnection internal constructor(
      * Returns all query parameter values for the given name.
      */
     fun queryList(key: String): List<String> = queryParams[key] ?: emptyList()
+
+    // ========================================================================
+    // Headers
+    // ========================================================================
+
+    /**
+     * Returns the first value of the specified HTTP header from the upgrade request,
+     * or null if the header is not present.
+     *
+     * Header names are case-insensitive.
+     *
+     * ```kotlin
+     * val auth = conn.header("Authorization")
+     * val origin = conn.header("Origin")
+     * ```
+     */
+    fun header(key: String): String? = requestHeaders[key]
+
+    /**
+     * Returns all values of the specified HTTP header from the upgrade request.
+     *
+     * Returns an empty list if the header is not present.
+     * Header names are case-insensitive.
+     *
+     * ```kotlin
+     * val cookies = conn.headerValues("Cookie")
+     * ```
+     */
+    fun headerValues(key: String): List<String> = requestHeaders.getAll(key)
 
     // ========================================================================
     // State Management

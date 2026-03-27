@@ -103,7 +103,9 @@ fun main() {
     }
 
     app.ws("/secure/data") { conn ->
-        conn.send("Welcome to the secure channel!")
+        // Access HTTP headers from the upgrade request
+        val origin = conn.header("Origin") ?: "unknown"
+        conn.send("Welcome to the secure channel! (Origin: $origin)")
 
         conn.onMessage { msg ->
             if (msg is WsMessage.Text) {

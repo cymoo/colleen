@@ -1140,16 +1140,18 @@ app.ws("/echo") { conn ->
 }
 ```
 
-### 路径参数与查询参数
+### 路径参数、查询参数与请求头
 
 WebSocket 路由支持与 HTTP 路由相同的路径模式。
-握手 URL 中的查询参数同样可以访问。
+握手 URL 中的查询参数以及升级请求的 HTTP 头同样可以访问。
 
 ```kotlin
 // ws://localhost:8000/chat/general?name=Alice
+// Headers: Authorization: Bearer token123
 app.ws("/chat/{room}") { conn ->
     val room = conn.pathParam("room")     // "general"
     val name = conn.query("name")         // "Alice"
+    val auth = conn.header("Authorization") // "Bearer token123"
     conn.onMessage { msg ->
         if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
     }
@@ -1207,6 +1209,11 @@ app.ws("/chat/{room}") { conn ->
 
 | 方法 | 说明 |
 |---|---|
+| `pathParam(key)` | 从路由模式中获取路径参数 |
+| `query(key)` | 获取查询参数的第一个值 |
+| `queryList(key)` | 获取查询参数的所有值 |
+| `header(key)` | 获取升级请求的 HTTP 头 |
+| `headerValues(key)` | 获取多值 HTTP 头的所有值 |
 | `getService<T>()` | 获取必需服务（未注册时抛异常） |
 | `getServiceOrNull<T>()` | 获取可选服务（未注册返回 null） |
 | `getServices<T>()` | 获取某类型的所有实例 |

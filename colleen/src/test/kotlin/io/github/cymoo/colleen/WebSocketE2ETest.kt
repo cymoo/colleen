@@ -225,6 +225,17 @@ class WebSocketE2ETest {
                 }
             }
         }
+
+        // WS route that echoes back request headers
+        app.ws("/header-ws") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    val headerName = msg.data
+                    val value = conn.header(headerName)
+                    conn.send("$headerName=$value")
+                }
+            }
+        }
     }
 
     class GreetingService(private val prefix: String) {
@@ -776,6 +787,37 @@ class WebSocketE2ETest {
                 // /both-ws middleware does not set state for this path,
                 // but getServiceOrNull should find it
                 assertEquals("hasUser=false svc=true", listener.messages[0])
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+    }
+
+    // ========================================================================
+    // Header Access
+    // ========================================================================
+
+    @Nested
+    inner class HeaderAccess {
+        @Test
+        fun `should access request header from connection`() {
+            val (ws, listener) = connectWs("/header-ws", mapOf("X-Custom-Header" to "my-value"))
+            try {
+                ws.sendText("X-Custom-Header", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                assertEquals("X-Custom-Header=my-value", listener.messages[0])
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+
+        @Test
+        fun `should return null for missing header`() {
+            val (ws, listener) = connectWs("/header-ws")
+            try {
+                ws.sendText("X-Nonexistent", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                assertEquals("X-Nonexistent=null", listener.messages[0])
             } finally {
                 ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
             }
