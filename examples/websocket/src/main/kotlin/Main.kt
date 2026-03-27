@@ -217,10 +217,11 @@ fun main() {
                         if (chatWs) chatWs.close();
                         const room = document.getElementById('chat-room').value;
                         const name = document.getElementById('chat-name').value;
-                        chatWs = new WebSocket('ws://' + location.host + '/chat/' + room + '?name=' + encodeURIComponent(name));
-                        chatWs.onopen = () => { log('chat-log', '✅ Joined #' + room + ' as ' + name); setStatus('chat-status', true); };
-                        chatWs.onmessage = (e) => log('chat-log', e.data);
-                        chatWs.onclose = () => { log('chat-log', '❌ Left room'); setStatus('chat-status', false); chatWs = null; };
+                        const ws = new WebSocket('ws://' + location.host + '/chat/' + room + '?name=' + encodeURIComponent(name));
+                        chatWs = ws;
+                        ws.onopen = () => { log('chat-log', '✅ Joined #' + room + ' as ' + name); setStatus('chat-status', true); };
+                        ws.onmessage = (e) => log('chat-log', e.data);
+                        ws.onclose = () => { log('chat-log', '❌ Left room'); setStatus('chat-status', false); if (chatWs === ws) chatWs = null; };
                     }
                     function chatSend() {
                         if (!chatWs) return log('chat-log', '⚠️ Not connected');

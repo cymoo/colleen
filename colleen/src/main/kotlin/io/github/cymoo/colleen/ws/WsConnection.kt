@@ -143,6 +143,17 @@ class WsConnection internal constructor(
     private val closeCallbacks = ArrayList<Consumer<WsCloseReason>>()
     private val errorCallbacks = ArrayList<Consumer<Throwable>>()
 
+    /**
+     * Set to true once close() has collected the close callbacks.
+     * Guarded by [closeCallbacks] lock.
+     *
+     * This flag bridges the gap between [closed] (set via CAS) and the synchronized
+     * block where [closeReason] is set and callbacks are drained. Without it, a
+     * concurrent [onClose] call could observe [isClosed] == true but read [closeReason]
+     * before it has been set to its final value.
+     */
+    private var closeCallbacksCollected = false
+
     /** Whether the connection has been closed. */
     val isClosed: Boolean get() = closed.get()
 
@@ -375,14 +386,21 @@ class WsConnection internal constructor(
     /**
      * Registers a callback invoked when the connection is closed.
      *
-     * If the connection is already closed, the callback is invoked immediately.
+     * If the connection is already closed AND the close procedure has finished
+     * collecting callbacks, the callback is invoked immediately with the close reason.
+     * Otherwise, the callback is added to the pending list for close() to invoke.
+     *
      * Multiple callbacks may be registered.
      */
     fun onClose(callback: Consumer<WsCloseReason>) {
         synchronized(closeCallbacks) {
-            if (isClosed) {
+            if (closeCallbacksCollected) {
+                // close() has already collected and cleared the list;
+                // invoke immediately with the final reason.
                 runCatching { callback.accept(closeReason.get()) }
             } else {
+                // Either not yet closed, or close() is in progress but hasn't
+                // collected the callbacks yet. Either way, add to the list.
                 closeCallbacks.add(callback)
             }
         }
@@ -449,27 +467,29 @@ class WsConnection internal constructor(
     fun close(reason: WsCloseReason) {
         if (!closed.compareAndSet(false, true)) return
 
-        closeReason.compareAndSet(WsCloseReason.Normal, reason)
+        // Send close frame BEFORE acquiring the closeCallbacks lock
+        // to avoid holding the lock during potentially blocking network I/O.
+        val code = when (reason) {
+            is WsCloseReason.Normal -> 1000
+            is WsCloseReason.Protocol -> reason.code
+            else -> 1001
+        }
+        val msg = when (reason) {
+            is WsCloseReason.Normal -> ""
+            is WsCloseReason.Protocol -> reason.reason
+            is WsCloseReason.ClientDisconnected -> "Client disconnected"
+            is WsCloseReason.Error -> reason.cause.message ?: "Error"
+        }
+        runCatching { channel.close(code, msg) }
 
+        // Set reason and collect callbacks atomically under the closeCallbacks lock.
+        // This ensures that a concurrent onClose() call always sees the correct reason.
         val callbacks: List<Consumer<WsCloseReason>>
         synchronized(closeCallbacks) {
-            try {
-                val code = when (reason) {
-                    is WsCloseReason.Normal -> 1000
-                    is WsCloseReason.Protocol -> reason.code
-                    else -> 1001
-                }
-                val msg = when (reason) {
-                    is WsCloseReason.Normal -> ""
-                    is WsCloseReason.Protocol -> reason.reason
-                    is WsCloseReason.ClientDisconnected -> "Client disconnected"
-                    is WsCloseReason.Error -> reason.cause.message ?: "Error"
-                }
-                runCatching { channel.close(code, msg) }
-            } finally {
-                callbacks = ArrayList(closeCallbacks)
-                closeCallbacks.clear()
-            }
+            closeReason.compareAndSet(WsCloseReason.Normal, reason)
+            callbacks = ArrayList(closeCallbacks)
+            closeCallbacks.clear()
+            closeCallbacksCollected = true
         }
         synchronized(messageCallbacks) { messageCallbacks.clear() }
         synchronized(errorCallbacks) { errorCallbacks.clear() }

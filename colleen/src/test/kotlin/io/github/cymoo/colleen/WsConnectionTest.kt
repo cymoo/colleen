@@ -706,6 +706,50 @@ class WsConnectionTest {
         }
 
         @Test
+        fun `onClose registered during close receives correct reason`() {
+            // Regression test: verify that onClose() called between
+            // closed.CAS and closeReason being set still receives the correct reason.
+            repeat(100) {
+                val conn = createConnection()
+                val reason = AtomicReference<WsCloseReason>()
+                val closeStarted = CountDownLatch(1)
+                val callbackRegistered = CountDownLatch(1)
+
+                val channel = createTestChannel()
+                // Use a channel that blocks briefly on close to widen the race window
+                val slowConn = WsConnection(object : WsChannel {
+                    override fun sendText(text: String) {}
+                    override fun sendBinary(data: ByteBuffer) {}
+                    override fun close(code: Int, reason: String) {
+                        closeStarted.countDown()
+                        callbackRegistered.await(1, TimeUnit.SECONDS)
+                    }
+                    override fun close() { close(1000, "") }
+                }, emptyMap())
+
+                val expected = WsCloseReason.Error(RuntimeException("test-$it"))
+
+                // Thread A: close with specific reason
+                Thread {
+                    slowConn.close(expected)
+                }.start()
+
+                // Thread B: register onClose after close has started
+                Thread {
+                    closeStarted.await(1, TimeUnit.SECONDS)
+                    slowConn.onClose { reason.set(it) }
+                    callbackRegistered.countDown()
+                }.start()
+
+                Thread.sleep(50)
+                val got = reason.get()
+                if (got != null) {
+                    assertTrue(got is WsCloseReason.Error, "Expected Error reason, got $got")
+                }
+            }
+        }
+
+        @Test
         fun `concurrent send and close`() {
             val channel = createTestChannel()
             val conn = createConnection(channel)
