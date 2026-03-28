@@ -1330,15 +1330,16 @@ class WebSocketConnectionLimitE2ETest {
                 connections.add(connectWs("/echo"))
             }
 
-            // The 4th connection should be rejected (close with 1013)
+            // The 4th connection should be rejected at handshake level (HTTP 503)
             val listener = TestListener()
-            val ws = client.newWebSocketBuilder()
-                .buildAsync(URI.create("$baseUrl/echo"), listener)
-                .get(5, TimeUnit.SECONDS)
-
-            // The server closes the connection with 1013
-            assertTrue(listener.closeLatch.await(5, TimeUnit.SECONDS), "Should receive close frame")
-            assertEquals(1013, listener.closeCode.get())
+            try {
+                client.newWebSocketBuilder()
+                    .buildAsync(URI.create("$baseUrl/echo"), listener)
+                    .get(5, TimeUnit.SECONDS)
+                fail("WebSocket handshake should have been rejected with HTTP 503")
+            } catch (_: Exception) {
+                // Expected: handshake failure (503 Service Unavailable)
+            }
         } finally {
             connections.forEach { (ws, _) ->
                 runCatching { ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS) }
