@@ -237,6 +237,7 @@ internal class UndertowWebSocketSupport(
 
             override fun onError(channel: WebSocketChannel, error: Throwable) {
                 if (isMessageTooLarge(error)) {
+                    connection.dispatchError(error)
                     runCatching { WebSockets.sendCloseBlocking(1009, "Message Too Big", channel) }
                     connection.close(WsCloseReason.Protocol(1009, "Message Too Big"))
                     return

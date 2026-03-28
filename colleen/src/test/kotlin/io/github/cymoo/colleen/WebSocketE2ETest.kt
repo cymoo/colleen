@@ -1337,9 +1337,7 @@ class WebSocketConnectionLimitE2ETest {
                     .buildAsync(URI.create("$baseUrl/echo"), listener)
                     .get(5, TimeUnit.SECONDS)
                 fail("4th connection should be rejected before websocket upgrade")
-            } catch (_: Exception) {
-                assertTrue(true)
-            }
+            } catch (_: Exception) {}
         } finally {
             connections.forEach { (ws, _) ->
                 runCatching { ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS) }
