@@ -1339,7 +1339,6 @@ class WebSocketConnectionLimitE2ETest {
                 fail("WebSocket handshake should have been rejected with HTTP 503")
             } catch (_: Exception) {
                 // Expected: handshake failure (503 Service Unavailable)
-                assertTrue(true)
             }
         } finally {
             connections.forEach { (ws, _) ->
