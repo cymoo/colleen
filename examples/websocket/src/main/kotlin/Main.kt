@@ -1,9 +1,6 @@
 import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.middleware.RequestLogger
-import io.github.cymoo.colleen.ws.Ws
-import io.github.cymoo.colleen.ws.WsCloseReason
-import io.github.cymoo.colleen.ws.WsConnection
-import io.github.cymoo.colleen.ws.WsMessage
+import io.github.cymoo.colleen.ws.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
 
@@ -12,13 +9,13 @@ import java.util.concurrent.CopyOnWriteArraySet
  *
  * Features demonstrated:
  * - Echo server (text and binary)
- * - Chat rooms with path parameters
- * - Query parameter access
+ * - Chat rooms with path parameters and query parameters
  * - WebSocket middleware for authentication
  * - Connection lifecycle (onMessage, onClose, onError)
- * - Controller-style WebSocket handlers (@Ws annotation)
- * - WebSocket configuration (idle timeout, max message size)
+ * - Controller-style WebSocket handlers (@Ws and @WsUse annotations)
+ * - WebSocket configuration (idle timeout, max message size, ping/pong, max connections)
  * - Concurrent connection management
+ * - Mounted sub-application with WS routes and middleware
  * - HTML client page with interactive WebSocket demo
  */
 fun main() {
@@ -26,11 +23,17 @@ fun main() {
 
     app.use(RequestLogger())
 
-    // WebSocket configuration
+    // ========================================================================
+    // WebSocket Configuration
+    // ========================================================================
+
     app.config {
         ws {
-            idleTimeoutMs = 600_000        // 10 minutes
-            maxMessageSizeBytes = 128 * 1024  // 128 KB
+            idleTimeoutMs = 600_000          // 10 minutes idle timeout
+            maxMessageSizeBytes = 128 * 1024 // 128 KB max message size
+            pingIntervalMs = 30_000          // Ping every 30s to keep connections alive
+            pingTimeoutMs = 10_000           // Close if no pong within 10s
+            maxConnections = 1000            // Allow up to 1000 concurrent connections
         }
     }
 
@@ -96,6 +99,7 @@ fun main() {
     app.wsUse("/secure") { ctx, next ->
         val token = ctx.query("token") ?: ctx.header("Authorization")?.removePrefix("Bearer ")
         if (token == "secret123") {
+            ctx.setState("user", "authenticated-user")
             next()
         } else {
             ctx.status(401).text("Unauthorized: invalid or missing token")
@@ -103,9 +107,10 @@ fun main() {
     }
 
     app.ws("/secure/data") { conn ->
-        // Access HTTP headers from the upgrade request
+        // Access state set by middleware and HTTP headers from the upgrade request
+        val user = conn.getStateOrNull<String>("user") ?: "unknown"
         val origin = conn.header("Origin") ?: "unknown"
-        conn.send("Welcome to the secure channel! (Origin: $origin)")
+        conn.send("Welcome, $user! (Origin: $origin)")
 
         conn.onMessage { msg ->
             if (msg is WsMessage.Text) {
@@ -115,13 +120,40 @@ fun main() {
     }
 
     // ========================================================================
-    // 4. Controller-Style WebSocket (@Ws annotation)
+    // 4. Controller-Style WebSocket (@Ws and @WsUse annotations)
     // ========================================================================
 
     app.addController(NotificationController())
 
     // ========================================================================
-    // 5. Home Page — HTML WebSocket Client
+    // 5. Mounted Sub-Application with WS Routes
+    // ========================================================================
+
+    val adminApp = Colleen()
+
+    // WS middleware on the sub-app
+    adminApp.wsUse { ctx, next ->
+        val role = ctx.header("X-Role")
+        if (role == "admin") {
+            next()
+        } else {
+            ctx.status(403).text("Admin access required")
+        }
+    }
+
+    adminApp.ws("/console") { conn ->
+        conn.send("Welcome to admin console")
+        conn.onMessage { msg ->
+            if (msg is WsMessage.Text) {
+                conn.send("admin> ${msg.data}")
+            }
+        }
+    }
+
+    app.mount("/admin", adminApp)
+
+    // ========================================================================
+    // 6. Home Page — HTML WebSocket Client
     // ========================================================================
 
     app.get("/") { ctx ->
@@ -248,15 +280,28 @@ fun main() {
 }
 
 // ============================================================================
-// Controller
+// Controller with @WsUse Middleware
 // ============================================================================
 
 @Controller("/notifications")
 class NotificationController {
 
+    /** Controller-level WebSocket middleware — reject without token */
+    @WsUse
+    fun authenticate(ctx: Context, next: Next) {
+        val token = ctx.query("token")
+        if (token != null) {
+            ctx.setState("subscriber", token)
+            next()
+        } else {
+            ctx.status(401).text("Missing token query parameter")
+        }
+    }
+
     @Ws("/live")
     fun liveNotifications(conn: WsConnection) {
-        conn.send("Connected to notification stream")
+        val subscriber = conn.getStateOrNull<String>("subscriber") ?: "unknown"
+        conn.send("Connected to notification stream (subscriber=$subscriber)")
 
         conn.onMessage { msg ->
             if (msg is WsMessage.Text) {
@@ -265,7 +310,7 @@ class NotificationController {
         }
 
         conn.onClose { reason ->
-            println("Notification client disconnected: $reason")
+            println("Notification client '$subscriber' disconnected: $reason")
         }
     }
 }
