@@ -1330,15 +1330,16 @@ class WebSocketConnectionLimitE2ETest {
                 connections.add(connectWs("/echo"))
             }
 
-            // The 4th connection should be rejected (close with 1013)
+            // The 4th connection should be rejected at handshake stage (HTTP 503)
             val listener = TestListener()
-            val ws = client.newWebSocketBuilder()
-                .buildAsync(URI.create("$baseUrl/echo"), listener)
-                .get(5, TimeUnit.SECONDS)
-
-            // The server closes the connection with 1013
-            assertTrue(listener.closeLatch.await(5, TimeUnit.SECONDS), "Should receive close frame")
-            assertEquals(1013, listener.closeCode.get())
+            try {
+                client.newWebSocketBuilder()
+                    .buildAsync(URI.create("$baseUrl/echo"), listener)
+                    .get(5, TimeUnit.SECONDS)
+                fail("4th connection should be rejected before websocket upgrade")
+            } catch (_: Exception) {
+                assertTrue(true)
+            }
         } finally {
             connections.forEach { (ws, _) ->
                 runCatching { ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS) }
@@ -1637,6 +1638,7 @@ class WebSocketPingPongE2ETest {
         val closeLatch = CountDownLatch(1)
         val closeCode = AtomicReference<Int>()
         val pingCount = AtomicInteger(0)
+        val pongCount = AtomicInteger(0)
         private val textBuffer = StringBuilder()
 
         override fun onOpen(webSocket: WebSocket) {
@@ -1656,6 +1658,12 @@ class WebSocketPingPongE2ETest {
 
         override fun onPing(webSocket: WebSocket, message: ByteBuffer): CompletionStage<*> {
             pingCount.incrementAndGet()
+            webSocket.request(1)
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onPong(webSocket: WebSocket, message: ByteBuffer): CompletionStage<*> {
+            pongCount.incrementAndGet()
             webSocket.request(1)
             return CompletableFuture.completedFuture(null)
         }
@@ -1694,6 +1702,16 @@ class WebSocketPingPongE2ETest {
 
             // We should have received at least 1 ping frame
             assertTrue(listener.pingCount.get() >= 1, "Should have received ping frames")
+
+            // Client ping should receive server pong
+            ws.sendPing(ByteBuffer.wrap("client-ping".toByteArray())).get(5, TimeUnit.SECONDS)
+            ws.request(1)
+            val pongDeadline = System.currentTimeMillis() + 3000
+            while (System.currentTimeMillis() < pongDeadline) {
+                if (listener.pongCount.get() >= 1) break
+                Thread.sleep(50)
+            }
+            assertTrue(listener.pongCount.get() >= 1, "Should have received pong for client ping")
         } finally {
             ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
         }

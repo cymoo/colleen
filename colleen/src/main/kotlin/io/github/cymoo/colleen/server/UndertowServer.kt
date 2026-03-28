@@ -1,12 +1,10 @@
 package io.github.cymoo.colleen.server
 
 import io.github.cymoo.colleen.*
+import io.github.cymoo.colleen.server.undertow.UndertowWebSocketSupport
 import io.github.cymoo.colleen.util.http.Headers
 import io.github.cymoo.colleen.util.http.UrlPath
-import io.github.cymoo.colleen.ws.WsChannel
-import io.github.cymoo.colleen.ws.WsCloseReason
-import io.github.cymoo.colleen.ws.WsConnection
-import io.github.cymoo.colleen.ws.WsMessage
+import io.github.cymoo.colleen.ws.WsConfig
 import io.undertow.Undertow
 import io.undertow.UndertowOptions
 import io.undertow.server.HttpHandler
@@ -18,19 +16,10 @@ import io.undertow.server.handlers.form.FormParserFactory
 import io.undertow.server.handlers.form.MultiPartParserDefinition
 import io.undertow.util.HeaderValues
 import io.undertow.util.HttpString
-import io.undertow.websockets.WebSocketConnectionCallback
-import io.undertow.websockets.WebSocketProtocolHandshakeHandler
-import io.undertow.websockets.core.*
-import io.undertow.websockets.spi.WebSocketHttpExchange
-import org.xnio.ChannelListener
 import org.xnio.Options
 import java.io.IOException
-import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.*
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import java.util.function.Consumer
 import kotlin.io.bufferedWriter
 import kotlin.io.copyTo
@@ -49,7 +38,7 @@ import kotlin.use
  * - HTTP request dispatch and response writing
  * - SSE execution and connection management
  */
-class UndertowServer(private val config: ServerConfig, private val wsConfig: io.github.cymoo.colleen.ws.WsConfig) : WebServer {
+class UndertowServer(private val config: ServerConfig, private val wsConfig: WsConfig) : WebServer {
     private lateinit var server: Undertow
 
     /**
@@ -112,58 +101,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
     }
     private val sseExecutor: ExecutorService by lazySseExecutor
 
-    // ========================================================================
-    // WebSocket Infrastructure
-    // ========================================================================
-
-    /**
-     * Executor for WebSocket message dispatch.
-     *
-     * Messages are dispatched from IO threads to this executor via per-connection
-     * [OrderedExecutor] wrappers to ensure sequential processing per connection.
-     *
-     * Lazily initialized on first WebSocket connection.
-     */
-    private val lazyWsExecutor = lazy {
-        if (config.useVirtualThreads) {
-            Executors.newVirtualThreadPerTaskExecutor()
-        } else {
-            Executors.newCachedThreadPool { runnable ->
-                Thread(runnable).apply {
-                    isDaemon = true
-                    name = "ws-worker-${threadCounter.incrementAndGet()}"
-                }
-            }
-        }
-    }
-    private val wsExecutor: ExecutorService by lazyWsExecutor
-    private val threadCounter = AtomicInteger(0)
-
-    /**
-     * Tracks all active WebSocket connections for graceful shutdown.
-     */
-    private val activeWsConnections: MutableSet<WsConnection> = ConcurrentHashMap.newKeySet()
-
-    /**
-     * Tracks the number of active WebSocket connections for connection limiting.
-     */
-    private val wsConnectionCount = AtomicInteger(0)
-
-    /**
-     * Scheduler for WebSocket ping/pong heartbeat.
-     *
-     * Sends periodic ping frames and detects dead connections.
-     * Only initialized when [io.github.cymoo.colleen.ws.WsConfig.pingIntervalMs] > 0.
-     */
-    private val lazyPingScheduler = lazy {
-        Executors.newSingleThreadScheduledExecutor { runnable ->
-            Thread(runnable).apply {
-                isDaemon = true
-                name = "ws-ping-scheduler"
-            }
-        }
-    }
-    private val pingScheduler: ScheduledExecutorService by lazyPingScheduler
+    private val webSocketSupport = UndertowWebSocketSupport(config, wsConfig)
 
     /**
      * Starts the HTTP server.
@@ -222,29 +160,8 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
             }
         }
 
-        // 5. Gracefully close all active WebSocket connections
-        val snapshot = ArrayList(activeWsConnections)
-        snapshot.forEach { conn ->
-            runCatching { conn.close(WsCloseReason.Normal) }
-        }
-        activeWsConnections.clear()
-
-        // 6. Shut down WebSocket ping scheduler
-        if (lazyPingScheduler.isInitialized()) {
-            pingScheduler.shutdown()
-            if (!pingScheduler.awaitTermination(2, TimeUnit.SECONDS)) {
-                pingScheduler.shutdownNow()
-            }
-        }
-
-        // 7. Shut down WebSocket executor
-        if (lazyWsExecutor.isInitialized()) {
-            wsExecutor.shutdown()
-            if (!wsExecutor.awaitTermination(config.shutdownTimeout, TimeUnit.MILLISECONDS)) {
-                logger.warn("WebSocket executor did not terminate, forcing shutdown")
-                wsExecutor.shutdownNow()
-            }
-        }
+        // 5~7. WebSocket graceful close + scheduler/executor shutdown
+        webSocketSupport.shutdown(config.shutdownTimeout)
 
         // 8. Gracefully shut down SSE executor if initialized
         if (lazySseExecutor.isInitialized()) {
@@ -464,7 +381,15 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
             }
 
             is RawResponseBody.WebSocket -> {
-                handleWebSocketUpgrade(body.handler, body.pathParams, body.queryParams, body.app, body.states, body.headers, exchange)
+                webSocketSupport.handleUpgrade(
+                    body.handler,
+                    body.pathParams,
+                    body.queryParams,
+                    body.app,
+                    body.states,
+                    body.headers,
+                    exchange,
+                )
             }
         }
     }
@@ -506,286 +431,6 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
         override fun write(text: String) = writer.write(text)
         override fun flush() = writer.flush()
         override fun close() = writer.close()
-    }
-
-    // ========================================================================
-    // WebSocket Handling
-    // ========================================================================
-
-    /**
-     * Handles a WebSocket upgrade request.
-     *
-     * Uses Undertow's WebSocketProtocolHandshakeHandler to perform the
-     * HTTP→WebSocket upgrade, then bridges the Undertow WebSocketChannel
-     * to Colleen's WsConnection abstraction.
-     *
-     * Features:
-     * - Connection limit enforcement
-     * - Active connection tracking for graceful shutdown
-     * - Per-connection ordered message dispatch (off IO thread)
-     * - Ping/pong heartbeat for dead connection detection
-     * - Proper 1009 close code for oversized messages
-     */
-    private fun handleWebSocketUpgrade(
-        handler: Consumer<WsConnection>,
-        pathParams: Map<String, String>,
-        queryParams: Map<String, List<String>>,
-        app: Colleen?,
-        states: Map<String, Any?>,
-        headers: Headers,
-        exchange: HttpServerExchange,
-    ) {
-        val callback = WebSocketConnectionCallback { _: WebSocketHttpExchange, wsChannel: WebSocketChannel ->
-            // Check connection limit
-            val current = wsConnectionCount.incrementAndGet()
-            if (wsConfig.maxConnections > 0 && current > wsConfig.maxConnections) {
-                wsConnectionCount.decrementAndGet()
-                runCatching {
-                    WebSockets.sendCloseBlocking(1013, "Try Again Later", wsChannel)
-                }
-                return@WebSocketConnectionCallback
-            }
-
-            // Apply WS configuration
-            wsChannel.idleTimeout = wsConfig.idleTimeoutMs
-
-            // Create the Colleen WsChannel adapter
-            val channel = UndertowWsChannel(wsChannel)
-            val connection = WsConnection(channel, pathParams, queryParams, app, states.toMutableMap(), headers)
-
-            // Track connection for graceful shutdown
-            activeWsConnections.add(connection)
-
-            // Create per-connection ordered executor for message dispatch
-            val orderedDispatcher = OrderedExecutor(wsExecutor)
-
-            // Invoke user handler to set up callbacks
-            try {
-                handler.accept(connection)
-            } catch (e: Exception) {
-                logger.error("WebSocket handler setup failed: ${e.message}", e)
-                connection.close(WsCloseReason.Error(e))
-                return@WebSocketConnectionCallback
-            }
-
-            // Schedule ping/pong heartbeat
-            var pingFuture: ScheduledFuture<*>? = null
-            if (wsConfig.pingIntervalMs > 0) {
-                val lastPong = AtomicLong(System.currentTimeMillis())
-
-                pingFuture = pingScheduler.scheduleAtFixedRate({
-                    try {
-                        if (connection.isClosed) return@scheduleAtFixedRate
-                        val sinceLastPong = System.currentTimeMillis() - lastPong.get()
-                        if (sinceLastPong > wsConfig.pingIntervalMs + wsConfig.pingTimeoutMs) {
-                            // Pong timeout — close the dead connection
-                            connection.close(WsCloseReason.Protocol(1001, "Ping timeout"))
-                            return@scheduleAtFixedRate
-                        }
-                        WebSockets.sendPing(ByteBuffer.allocate(0), wsChannel, null)
-                    } catch (_: Exception) {
-                        // Connection already closed; task will be cancelled by onClose
-                    }
-                }, wsConfig.pingIntervalMs, wsConfig.pingIntervalMs, TimeUnit.MILLISECONDS)
-
-                // Register pong listener to track last pong time
-                wsChannel.receiveSetter.set(object : AbstractReceiveListener() {
-                    override fun getMaxTextBufferSize(): Long = wsConfig.maxMessageSizeBytes
-                    override fun getMaxBinaryBufferSize(): Long = wsConfig.maxMessageSizeBytes
-
-                    override fun onFullTextMessage(channel: WebSocketChannel, message: BufferedTextMessage) {
-                        val msg = WsMessage.Text(message.data)
-                        orderedDispatcher.execute { connection.dispatchMessage(msg) }
-                    }
-
-                    override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                        val data = message.data
-                        try {
-                            val bytes = extractBinaryData(data)
-                            val msg = WsMessage.Binary(bytes)
-                            orderedDispatcher.execute { connection.dispatchMessage(msg) }
-                        } finally {
-                            data.free()
-                        }
-                    }
-
-                    override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
-                        val reason = if (cm.code == CloseMessage.NORMAL_CLOSURE) {
-                            WsCloseReason.Normal
-                        } else {
-                            WsCloseReason.Protocol(cm.code, cm.reason ?: "")
-                        }
-                        connection.close(reason)
-                    }
-
-                    override fun onError(channel: WebSocketChannel, error: Throwable) {
-                        connection.dispatchError(error)
-                        if (error is IOException) {
-                            connection.close(WsCloseReason.ClientDisconnected)
-                        } else {
-                            connection.close(WsCloseReason.Error(error))
-                        }
-                    }
-
-                    override fun onFullPongMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                        lastPong.set(System.currentTimeMillis())
-                        message.data.free()
-                    }
-
-
-                })
-            } else {
-                // No ping/pong — simpler receive listener
-                val maxMsgSize = wsConfig.maxMessageSizeBytes
-                wsChannel.receiveSetter.set(object : AbstractReceiveListener() {
-                    override fun getMaxTextBufferSize(): Long = maxMsgSize
-                    override fun getMaxBinaryBufferSize(): Long = maxMsgSize
-
-                    override fun onFullTextMessage(channel: WebSocketChannel, message: BufferedTextMessage) {
-                        val msg = WsMessage.Text(message.data)
-                        orderedDispatcher.execute { connection.dispatchMessage(msg) }
-                    }
-
-                    override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                        val data = message.data
-                        try {
-                            val bytes = extractBinaryData(data)
-                            val msg = WsMessage.Binary(bytes)
-                            orderedDispatcher.execute { connection.dispatchMessage(msg) }
-                        } finally {
-                            data.free()
-                        }
-                    }
-
-                    override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
-                        val reason = if (cm.code == CloseMessage.NORMAL_CLOSURE) {
-                            WsCloseReason.Normal
-                        } else {
-                            WsCloseReason.Protocol(cm.code, cm.reason ?: "")
-                        }
-                        connection.close(reason)
-                    }
-
-                    override fun onError(channel: WebSocketChannel, error: Throwable) {
-                        connection.dispatchError(error)
-                        if (error is IOException) {
-                            connection.close(WsCloseReason.ClientDisconnected)
-                        } else {
-                            connection.close(WsCloseReason.Error(error))
-                        }
-                    }
-
-
-                })
-            }
-
-            // Register close listener for cleanup
-            val capturedPingFuture = pingFuture
-            connection.onClose {
-                capturedPingFuture?.cancel(false)
-                activeWsConnections.remove(connection)
-                wsConnectionCount.decrementAndGet()
-            }
-
-            wsChannel.addCloseTask(ChannelListener {
-                connection.close(WsCloseReason.ClientDisconnected)
-            })
-
-            // Start receiving messages
-            wsChannel.resumeReceives()
-        }
-
-        val handshakeHandler = WebSocketProtocolHandshakeHandler(callback)
-
-        // Perform the upgrade handshake
-        handshakeHandler.handleRequest(exchange)
-    }
-
-    /**
-     * Extracts binary data from a pooled buffer message into a byte array.
-     */
-    private fun extractBinaryData(data: org.xnio.Pooled<Array<ByteBuffer>>): ByteArray {
-        val pooled = data.resource
-        val totalSize = pooled.sumOf { it.remaining() }
-        val bytes = ByteArray(totalSize)
-        var offset = 0
-        for (buf in pooled) {
-            val len = buf.remaining()
-            buf.get(bytes, offset, len)
-            offset += len
-        }
-        return bytes
-    }
-
-    /**
-     * Executor that processes tasks sequentially in submission order.
-     *
-     * Tasks are dispatched to a shared delegate executor, but execution is serialized:
-     * at most one task runs at a time for a given [OrderedExecutor] instance.
-     * This ensures per-connection message ordering while offloading work from IO threads.
-     */
-    private class OrderedExecutor(private val delegate: Executor) : Executor {
-        private val queue = ConcurrentLinkedQueue<Runnable>()
-        private val running = AtomicBoolean(false)
-
-        override fun execute(task: Runnable) {
-            queue.add(task)
-            tryDrain()
-        }
-
-        private fun tryDrain() {
-            if (running.compareAndSet(false, true)) {
-                try {
-                    delegate.execute {
-                        try {
-                            while (true) {
-                                val task = queue.poll() ?: break
-                                try {
-                                    task.run()
-                                } catch (_: Exception) {
-                                    // Task-level errors are handled by the task itself
-                                    // (WsConnection.dispatchMessage uses runCatching internally)
-                                }
-                            }
-                        } finally {
-                            running.set(false)
-                            // Re-check in case a task was added after our last poll()
-                            if (queue.isNotEmpty()) {
-                                tryDrain()
-                            }
-                        }
-                    }
-                } catch (_: RejectedExecutionException) {
-                    // Expected during shutdown — executor has been shut down.
-                    // Release lock so pending tasks can be drained if executor resumes.
-                    running.set(false)
-                }
-            }
-        }
-    }
-
-    /**
-     * Undertow-backed WebSocket channel implementation.
-     *
-     * Bridges Undertow's async WebSocketChannel to Colleen's blocking WsChannel interface.
-     */
-    private class UndertowWsChannel(private val channel: WebSocketChannel) : WsChannel {
-
-        override fun sendText(text: String) {
-            WebSockets.sendTextBlocking(text, channel)
-        }
-
-        override fun sendBinary(data: ByteBuffer) {
-            WebSockets.sendBinaryBlocking(data, channel)
-        }
-
-        override fun close(code: Int, reason: String) {
-            runCatching { WebSockets.sendCloseBlocking(code, reason, channel) }
-        }
-
-        override fun close() {
-            close(1000, "")
-        }
     }
 
     private fun writeInternalError(exchange: HttpServerExchange) {
