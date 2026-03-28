@@ -3,7 +3,7 @@ package io.github.cymoo.colleen
 import io.github.cymoo.colleen.openapi.buildSpec
 import io.github.cymoo.colleen.openapi.collectRoutes
 import io.github.cymoo.colleen.openapi.swaggerUiHtml
-import io.github.cymoo.colleen.server.UndertowServer
+import io.github.cymoo.colleen.server.undertow.UndertowServer
 import io.github.cymoo.colleen.server.WebServer
 import io.github.cymoo.colleen.util.http.HtmlEscape
 import io.github.cymoo.colleen.util.http.HttpStatus

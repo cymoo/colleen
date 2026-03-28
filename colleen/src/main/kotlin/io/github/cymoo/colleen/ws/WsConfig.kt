@@ -56,7 +56,7 @@ data class WsConfig(
      * Maximum number of concurrent WebSocket connections.
      *
      * When the limit is reached, new WebSocket upgrade requests are rejected
-     * with close code 1013 (Try Again Later).
+     * with HTTP 503 (Service Unavailable) before the WebSocket handshake completes.
      * Set to 0 for no limit.
      *
      * Default: 0 (unlimited).
