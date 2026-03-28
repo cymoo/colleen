@@ -106,8 +106,9 @@ interface WsChannel : AutoCloseable {
  * ## Threading model
  * - [send] methods are serialized internally and may be called from multiple threads.
  * - [close] may be called at any time from any thread.
- * - Event callbacks ([onMessage], [onClose], [onError]) are invoked on the
- *   server adapter's IO thread and should not block.
+ * - Event callbacks ([onMessage], [onClose], [onError]) are dispatched to a worker
+ *   thread by the server adapter to avoid blocking IO threads.
+ *   Messages for the same connection are processed sequentially in order.
  *
  * ## Lifecycle
  * 1. Connection is established by the framework after successful WebSocket handshake.
@@ -151,6 +152,12 @@ class WsConnection internal constructor(
     private val messageCallbacks = ArrayList<Consumer<WsMessage>>()
     private val closeCallbacks = ArrayList<Consumer<WsCloseReason>>()
     private val errorCallbacks = ArrayList<Consumer<Throwable>>()
+
+    /**
+     * Lock for [states] access. Required because [setState] and [getState] may be
+     * called from multiple threads (e.g. onMessage worker thread and user code).
+     */
+    private val statesLock = Any()
 
     /**
      * Set to true once close() has collected the close callbacks.
@@ -227,7 +234,7 @@ class WsConnection internal constructor(
     /**
      * Returns true if the state exists, regardless of whether the value is null.
      */
-    fun hasState(key: String): Boolean = states.containsKey(key)
+    fun hasState(key: String): Boolean = synchronized(statesLock) { states.containsKey(key) }
 
     /**
      * Returns the state value for the given key.
@@ -238,11 +245,11 @@ class WsConnection internal constructor(
      * @throws NullPointerException if the value is null
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T : Any> getState(key: String): T {
+    fun <T : Any> getState(key: String): T = synchronized(statesLock) {
         if (!states.containsKey(key)) {
             throw NoSuchElementException("State '$key' not found")
         }
-        return states[key] as T
+        states[key] as T
     }
 
     /**
@@ -252,9 +259,9 @@ class WsConnection internal constructor(
      * @return the state value if the key exists (may be null), or null if the key doesn't exist
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T> getStateOrNull(key: String): T? {
+    fun <T> getStateOrNull(key: String): T? = synchronized(statesLock) {
         if (!states.containsKey(key)) return null
-        return states[key] as T?
+        states[key] as T?
     }
 
     /**
@@ -263,7 +270,7 @@ class WsConnection internal constructor(
      * @param key the state key
      * @param value the state value (may be null)
      */
-    fun setState(key: String, value: Any?) {
+    fun setState(key: String, value: Any?) = synchronized(statesLock) {
         states[key] = value
     }
 

@@ -161,6 +161,40 @@ class WebSocketE2ETest {
         // Controller-style WS route
         app.addController(WsChatController())
 
+        // Controller-style WS route with @WsUse middleware
+        app.addController(GuardedWsController())
+
+        // ---- Message ordering test endpoint ----
+        app.ws("/ordering") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    // Simulate some work to make ordering issues more visible
+                    Thread.sleep(10)
+                    conn.send("echo:${msg.data}")
+                }
+            }
+        }
+
+        // ---- Concurrent state access test endpoint ----
+        app.ws("/concurrent-state") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    when {
+                        msg.data.startsWith("set:") -> {
+                            val parts = msg.data.substringAfter("set:").split("=", limit = 2)
+                            conn.setState(parts[0], parts[1])
+                            conn.send("set-ok")
+                        }
+                        msg.data.startsWith("get:") -> {
+                            val key = msg.data.substringAfter("get:")
+                            val value = conn.getStateOrNull<String>(key)
+                            conn.send("got:$key=$value")
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- Service/State access tests ----
 
         // Provide a service
@@ -249,6 +283,30 @@ class WebSocketE2ETest {
             conn.onMessage { msg ->
                 if (msg is WsMessage.Text) {
                     conn.send("controller: ${msg.data}")
+                }
+            }
+        }
+    }
+
+    @Controller("/guarded")
+    class GuardedWsController {
+        @WsUse
+        fun auth(ctx: Context, next: Next) {
+            val token = ctx.header("X-Guard-Token")
+            if (token == "pass") {
+                ctx.setState("guard", "ok")
+                next()
+            } else {
+                ctx.status(403).text("Forbidden by @WsUse")
+            }
+        }
+
+        @Ws("/endpoint")
+        fun endpoint(conn: WsConnection) {
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    val guard = conn.getStateOrNull<String>("guard") ?: "none"
+                    conn.send("guard=$guard ${msg.data}")
                 }
             }
         }
@@ -823,6 +881,89 @@ class WebSocketE2ETest {
             }
         }
     }
+
+    // ========================================================================
+    // @WsUse Annotation
+    // ========================================================================
+
+    @Nested
+    inner class WsUseAnnotation {
+        @Test
+        fun `controller @WsUse should allow authorized connections`() {
+            val (ws, listener) = connectWs("/guarded/endpoint", mapOf("X-Guard-Token" to "pass"))
+            try {
+                ws.sendText("hello", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                assertEquals("guard=ok hello", listener.messages[0])
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+
+        @Test
+        fun `controller @WsUse should reject unauthorized connections`() {
+            val listener = TestListener()
+            try {
+                client.newWebSocketBuilder()
+                    .buildAsync(URI.create("$baseUrl/guarded/endpoint"), listener)
+                    .get(5, TimeUnit.SECONDS)
+                fail("WebSocket handshake should have been rejected by @WsUse")
+            } catch (_: Exception) {
+                // Expected: 403 handshake failure
+                assertTrue(true)
+            }
+        }
+    }
+
+    // ========================================================================
+    // Message Ordering (off IO thread)
+    // ========================================================================
+
+    @Nested
+    inner class MessageOrdering {
+        @Test
+        fun `should process messages in order when dispatched off IO thread`() {
+            val (ws, listener) = connectWs("/ordering")
+            try {
+                val count = 20
+                for (i in 1..count) {
+                    ws.sendText("msg-$i", true).get(5, TimeUnit.SECONDS)
+                }
+                awaitCondition(timeoutMs = 10_000) { listener.messages.size >= count }
+                val expected = (1..count).map { "echo:msg-$it" }
+                assertEquals(expected, listener.messages.toList())
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+    }
+
+    // ========================================================================
+    // Concurrent State Access
+    // ========================================================================
+
+    @Nested
+    inner class ConcurrentStateAccess {
+        @Test
+        fun `should safely read and write state from message callbacks`() {
+            val (ws, listener) = connectWs("/concurrent-state")
+            try {
+                ws.sendText("set:key1=value1", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 1 }
+                assertEquals("set-ok", listener.messages[0])
+
+                ws.sendText("get:key1", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 2 }
+                assertEquals("got:key1=value1", listener.messages[1])
+
+                ws.sendText("get:missing", true).get(5, TimeUnit.SECONDS)
+                awaitCondition { listener.messages.size >= 3 }
+                assertEquals("got:missing=null", listener.messages[2])
+            } finally {
+                ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            }
+        }
+    }
 }
 
 /**
@@ -891,6 +1032,23 @@ class WebSocketSubAppE2ETest {
         app.ws("/root-echo") { conn ->
             conn.onMessage { msg ->
                 if (msg is WsMessage.Text) conn.send("root: ${msg.data}")
+            }
+        }
+
+        // Parent-level WS middleware for /ws prefix
+        // This tests fix #5: WS middleware should run for mounted sub-app routes
+        app.wsUse("/ws") { ctx, next ->
+            ctx.setState("parentMw", "true")
+            next()
+        }
+
+        // Sub-app route that checks parent middleware state
+        chatApp.ws("/with-parent-mw") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) {
+                    val parentMw = conn.getStateOrNull<String>("parentMw") ?: "false"
+                    conn.send("parentMw=$parentMw ${msg.data}")
+                }
             }
         }
 
@@ -1042,5 +1200,502 @@ class WebSocketSubAppE2ETest {
             // Expected: 404 handshake failure
         }
     }
+
+    @Test
+    fun `WS middleware on parent app should run for mounted sub-app routes`() {
+        // The parent app has wsUse middleware registered for /ws prefix
+        // that was added in setup
+        val (ws, listener) = connectWs("/ws/with-parent-mw")
+        try {
+            ws.sendText("test", true).get(5, TimeUnit.SECONDS)
+            awaitCondition { listener.messages.size >= 1 }
+            assertEquals("parentMw=true test", listener.messages[0])
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
 }
 
+
+/**
+ * E2E tests for WebSocket connection limits.
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class WebSocketConnectionLimitE2ETest {
+
+    private lateinit var app: Colleen
+    private lateinit var client: HttpClient
+    private val baseUrl = "ws://127.0.0.1:8896"
+
+    @BeforeAll
+    fun setup() {
+        client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build()
+
+        app = Colleen()
+        app.config {
+            ws {
+                maxConnections = 3
+                pingIntervalMs = 0  // disable ping for these tests
+            }
+        }
+        app.ws("/echo") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send(msg.data)
+            }
+        }
+
+        app.listen(port = 8896, host = "127.0.0.1")
+        Thread.sleep(500)
+    }
+
+    @AfterAll
+    fun teardown() {
+        app.stop()
+    }
+
+    private class TestListener : WebSocket.Listener {
+        val messages = CopyOnWriteArrayList<String>()
+        val openLatch = CountDownLatch(1)
+        val closeLatch = CountDownLatch(1)
+        val closeCode = AtomicReference<Int>()
+        val errors = CopyOnWriteArrayList<Throwable>()
+        private val textBuffer = StringBuilder()
+
+        override fun onOpen(webSocket: WebSocket) {
+            openLatch.countDown()
+            webSocket.request(1)
+        }
+
+        override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*> {
+            textBuffer.append(data)
+            if (last) {
+                messages.add(textBuffer.toString())
+                textBuffer.setLength(0)
+            }
+            webSocket.request(1)
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*> {
+            closeCode.set(statusCode)
+            closeLatch.countDown()
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onError(webSocket: WebSocket, error: Throwable) {
+            errors.add(error)
+            closeLatch.countDown()
+        }
+    }
+
+    private fun connectWs(path: String): Pair<WebSocket, TestListener> {
+        val listener = TestListener()
+        val ws = client.newWebSocketBuilder()
+            .buildAsync(URI.create("$baseUrl$path"), listener)
+            .get(5, TimeUnit.SECONDS)
+        assertTrue(listener.openLatch.await(5, TimeUnit.SECONDS), "WebSocket should open")
+        return ws to listener
+    }
+
+    @Test
+    fun `should accept connections within limit`() {
+        val connections = (1..3).map { connectWs("/echo") }
+        try {
+            connections.forEachIndexed { idx, (ws, _) ->
+                ws.sendText("msg-$idx", true).get(5, TimeUnit.SECONDS)
+            }
+            connections.forEachIndexed { idx, (_, listener) ->
+                val deadline = System.currentTimeMillis() + 3000
+                while (System.currentTimeMillis() < deadline) {
+                    if (listener.messages.size >= 1) break
+                    Thread.sleep(50)
+                }
+                assertEquals("msg-$idx", listener.messages[0])
+            }
+        } finally {
+            connections.forEach { (ws, _) ->
+                runCatching { ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS) }
+            }
+        }
+    }
+
+    @Test
+    fun `should reject connections exceeding limit`() {
+        val connections = mutableListOf<Pair<WebSocket, TestListener>>()
+        try {
+            // Fill up to the limit
+            for (i in 1..3) {
+                connections.add(connectWs("/echo"))
+            }
+
+            // The 4th connection should be rejected (close with 1013)
+            val listener = TestListener()
+            val ws = client.newWebSocketBuilder()
+                .buildAsync(URI.create("$baseUrl/echo"), listener)
+                .get(5, TimeUnit.SECONDS)
+
+            // The server closes the connection with 1013
+            assertTrue(listener.closeLatch.await(5, TimeUnit.SECONDS), "Should receive close frame")
+            assertEquals(1013, listener.closeCode.get())
+        } finally {
+            connections.forEach { (ws, _) ->
+                runCatching { ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS) }
+            }
+        }
+    }
+
+    @Test
+    fun `should accept new connections after existing ones close`() {
+        val connections = mutableListOf<Pair<WebSocket, TestListener>>()
+        try {
+            // Fill up to the limit
+            for (i in 1..3) {
+                connections.add(connectWs("/echo"))
+            }
+
+            // Close one connection
+            val (ws0, listener0) = connections.removeAt(0)
+            ws0.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+            listener0.closeLatch.await(5, TimeUnit.SECONDS)
+
+            // Wait a bit for the server to process the close
+            Thread.sleep(200)
+
+            // Now a new connection should be accepted
+            val newConn = connectWs("/echo")
+            connections.add(newConn)
+            val (newWs, newListener) = newConn
+            newWs.sendText("new-conn", true).get(5, TimeUnit.SECONDS)
+            val deadline = System.currentTimeMillis() + 3000
+            while (System.currentTimeMillis() < deadline) {
+                if (newListener.messages.size >= 1) break
+                Thread.sleep(50)
+            }
+            assertEquals("new-conn", newListener.messages[0])
+        } finally {
+            connections.forEach { (ws, _) ->
+                runCatching { ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS) }
+            }
+        }
+    }
+}
+
+/**
+ * E2E tests for WebSocket graceful shutdown.
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class WebSocketGracefulShutdownE2ETest {
+
+    private lateinit var client: HttpClient
+
+    @BeforeAll
+    fun setup() {
+        client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build()
+    }
+
+    private class TestListener : WebSocket.Listener {
+        val messages = CopyOnWriteArrayList<String>()
+        val openLatch = CountDownLatch(1)
+        val closeLatch = CountDownLatch(1)
+        val closeCode = AtomicReference<Int>()
+        val errors = CopyOnWriteArrayList<Throwable>()
+        private val textBuffer = StringBuilder()
+
+        override fun onOpen(webSocket: WebSocket) {
+            openLatch.countDown()
+            webSocket.request(1)
+        }
+
+        override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*> {
+            textBuffer.append(data)
+            if (last) {
+                messages.add(textBuffer.toString())
+                textBuffer.setLength(0)
+            }
+            webSocket.request(1)
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*> {
+            closeCode.set(statusCode)
+            closeLatch.countDown()
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onError(webSocket: WebSocket, error: Throwable) {
+            errors.add(error)
+            closeLatch.countDown()
+        }
+    }
+
+    @Test
+    fun `server stop should gracefully close active WS connections`() {
+        val app = Colleen()
+        app.config {
+            ws {
+                pingIntervalMs = 0
+            }
+        }
+        app.ws("/echo") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send(msg.data)
+            }
+        }
+
+        app.listen(port = 8897, host = "127.0.0.1")
+        Thread.sleep(500)
+
+        try {
+            // Connect and verify working
+            val listener = TestListener()
+            val ws = client.newWebSocketBuilder()
+                .buildAsync(URI.create("ws://127.0.0.1:8897/echo"), listener)
+                .get(5, TimeUnit.SECONDS)
+            assertTrue(listener.openLatch.await(5, TimeUnit.SECONDS), "WebSocket should open")
+
+            ws.sendText("before-shutdown", true).get(5, TimeUnit.SECONDS)
+            val deadline = System.currentTimeMillis() + 3000
+            while (System.currentTimeMillis() < deadline) {
+                if (listener.messages.size >= 1) break
+                Thread.sleep(50)
+            }
+            assertEquals("before-shutdown", listener.messages[0])
+
+            // Stop the server — should close WS connections gracefully
+            app.stop()
+
+            // The client should receive a close frame
+            assertTrue(listener.closeLatch.await(5, TimeUnit.SECONDS), "Should receive close after shutdown")
+            // Close code should be 1000 (Normal) since server closes gracefully
+            assertEquals(1000, listener.closeCode.get())
+        } catch (_: Exception) {
+            app.stop()
+        }
+    }
+}
+
+/**
+ * E2E tests for WebSocket oversized message handling.
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class WebSocketOversizedMessageE2ETest {
+
+    private lateinit var app: Colleen
+    private lateinit var client: HttpClient
+    private val baseUrl = "ws://127.0.0.1:8898"
+
+    @BeforeAll
+    fun setup() {
+        client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build()
+
+        app = Colleen()
+        app.config {
+            ws {
+                maxMessageSizeBytes = 1024  // 1 KB limit
+                pingIntervalMs = 0
+            }
+        }
+        app.ws("/echo") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send(msg.data)
+            }
+        }
+
+        app.listen(port = 8898, host = "127.0.0.1")
+        Thread.sleep(500)
+    }
+
+    @AfterAll
+    fun teardown() {
+        app.stop()
+    }
+
+    private class TestListener : WebSocket.Listener {
+        val messages = CopyOnWriteArrayList<String>()
+        val openLatch = CountDownLatch(1)
+        val closeLatch = CountDownLatch(1)
+        val closeCode = AtomicReference<Int>()
+        val errors = CopyOnWriteArrayList<Throwable>()
+        private val textBuffer = StringBuilder()
+
+        override fun onOpen(webSocket: WebSocket) {
+            openLatch.countDown()
+            webSocket.request(1)
+        }
+
+        override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*> {
+            textBuffer.append(data)
+            if (last) {
+                messages.add(textBuffer.toString())
+                textBuffer.setLength(0)
+            }
+            webSocket.request(1)
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*> {
+            closeCode.set(statusCode)
+            closeLatch.countDown()
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onError(webSocket: WebSocket, error: Throwable) {
+            errors.add(error)
+            closeLatch.countDown()
+        }
+    }
+
+    @Test
+    fun `should accept messages within size limit`() {
+        val listener = TestListener()
+        val ws = client.newWebSocketBuilder()
+            .buildAsync(URI.create("$baseUrl/echo"), listener)
+            .get(5, TimeUnit.SECONDS)
+        assertTrue(listener.openLatch.await(5, TimeUnit.SECONDS))
+
+        try {
+            // 500 bytes is within the 1024 limit
+            val smallMsg = "x".repeat(500)
+            ws.sendText(smallMsg, true).get(5, TimeUnit.SECONDS)
+            val deadline = System.currentTimeMillis() + 3000
+            while (System.currentTimeMillis() < deadline) {
+                if (listener.messages.size >= 1) break
+                Thread.sleep(50)
+            }
+            assertEquals(smallMsg, listener.messages[0])
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `should close connection with 1009 for oversized text message`() {
+        val listener = TestListener()
+        val ws = client.newWebSocketBuilder()
+            .buildAsync(URI.create("$baseUrl/echo"), listener)
+            .get(5, TimeUnit.SECONDS)
+        assertTrue(listener.openLatch.await(5, TimeUnit.SECONDS))
+
+        // Send a message exceeding the 1024 byte limit
+        val largeMsg = "x".repeat(2048)
+        ws.sendText(largeMsg, true).get(5, TimeUnit.SECONDS)
+
+        // Server should close with 1009 (Message Too Big)
+        assertTrue(listener.closeLatch.await(5, TimeUnit.SECONDS), "Should receive close frame")
+        assertEquals(1009, listener.closeCode.get())
+    }
+}
+
+/**
+ * E2E tests for WebSocket ping/pong configuration.
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class WebSocketPingPongE2ETest {
+
+    private lateinit var app: Colleen
+    private lateinit var client: HttpClient
+    private val baseUrl = "ws://127.0.0.1:8899"
+
+    @BeforeAll
+    fun setup() {
+        client = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5))
+            .build()
+
+        app = Colleen()
+        app.config {
+            ws {
+                pingIntervalMs = 1_000      // 1s ping
+                pingTimeoutMs = 1_000        // 1s pong timeout
+                idleTimeoutMs = 60_000       // 60s idle timeout (long enough)
+            }
+        }
+        app.ws("/echo") { conn ->
+            conn.onMessage { msg ->
+                if (msg is WsMessage.Text) conn.send(msg.data)
+            }
+        }
+
+        app.listen(port = 8899, host = "127.0.0.1")
+        Thread.sleep(500)
+    }
+
+    @AfterAll
+    fun teardown() {
+        app.stop()
+    }
+
+    private class TestListener : WebSocket.Listener {
+        val messages = CopyOnWriteArrayList<String>()
+        val openLatch = CountDownLatch(1)
+        val closeLatch = CountDownLatch(1)
+        val closeCode = AtomicReference<Int>()
+        val pingCount = AtomicInteger(0)
+        private val textBuffer = StringBuilder()
+
+        override fun onOpen(webSocket: WebSocket) {
+            openLatch.countDown()
+            webSocket.request(1)
+        }
+
+        override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*> {
+            textBuffer.append(data)
+            if (last) {
+                messages.add(textBuffer.toString())
+                textBuffer.setLength(0)
+            }
+            webSocket.request(1)
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onPing(webSocket: WebSocket, message: ByteBuffer): CompletionStage<*> {
+            pingCount.incrementAndGet()
+            webSocket.request(1)
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*> {
+            closeCode.set(statusCode)
+            closeLatch.countDown()
+            return CompletableFuture.completedFuture(null)
+        }
+
+        override fun onError(webSocket: WebSocket, error: Throwable) {
+            closeLatch.countDown()
+        }
+    }
+
+    @Test
+    fun `connection should stay alive with ping-pong`() {
+        val listener = TestListener()
+        val ws = client.newWebSocketBuilder()
+            .buildAsync(URI.create("$baseUrl/echo"), listener)
+            .get(5, TimeUnit.SECONDS)
+        assertTrue(listener.openLatch.await(5, TimeUnit.SECONDS))
+
+        try {
+            // Wait for at least 2 ping intervals (2+ seconds)
+            Thread.sleep(3000)
+
+            // Connection should still be alive
+            ws.sendText("alive", true).get(5, TimeUnit.SECONDS)
+            val deadline = System.currentTimeMillis() + 3000
+            while (System.currentTimeMillis() < deadline) {
+                if (listener.messages.size >= 1) break
+                Thread.sleep(50)
+            }
+            assertEquals("alive", listener.messages[0])
+
+            // We should have received at least 1 ping frame
+            assertTrue(listener.pingCount.get() >= 1, "Should have received ping frames")
+        } finally {
+            ws.sendClose(WebSocket.NORMAL_CLOSURE, "done").get(5, TimeUnit.SECONDS)
+        }
+    }
+}

@@ -1,6 +1,7 @@
 package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.ws.Ws
+import io.github.cymoo.colleen.ws.WsUse
 import java.lang.reflect.Method
 import kotlin.reflect.full.findAnnotation
 
@@ -8,6 +9,7 @@ import kotlin.reflect.full.findAnnotation
  * Data class representing controller metadata
  * @property basePath The base URL path for all routes in this controller
  * @property middlewares List of middleware methods to be applied
+ * @property wsMiddlewares List of WebSocket middleware methods to be applied
  * @property routes List of route definitions
  * @property wsRoutes List of WebSocket route definitions
  * @property obj The controller instance
@@ -15,6 +17,7 @@ import kotlin.reflect.full.findAnnotation
 internal data class ControllerInfo(
     val basePath: String,
     val middlewares: List<Method>,
+    val wsMiddlewares: List<Method>,
     val routes: List<RouteInfo>,
     val wsRoutes: List<WsRouteInfo>,
     val obj: Any
@@ -67,7 +70,16 @@ internal object ControllerScanner {
         val middlewares = allMethods
             .filter { it.getAnnotation(Use::class.java) != null }
             .onEach {
-                validateMiddleware(it)
+                validateMiddleware(it, "@Use")
+                it.isAccessible = true
+            }
+            .toList()
+
+        // Scan for WebSocket middleware methods annotated with @WsUse
+        val wsMiddlewares = allMethods
+            .filter { it.getAnnotation(WsUse::class.java) != null }
+            .onEach {
+                validateMiddleware(it, "@WsUse")
                 it.isAccessible = true
             }
             .toList()
@@ -92,7 +104,7 @@ internal object ControllerScanner {
             }
         }
 
-        return ControllerInfo(basePath, middlewares, routes, wsRoutes, obj)
+        return ControllerInfo(basePath, middlewares, wsMiddlewares, routes, wsRoutes, obj)
     }
 
     /**
@@ -102,23 +114,23 @@ internal object ControllerScanner {
      * - Second parameter is Next
      * - Return type is void/Unit
      */
-    private fun validateMiddleware(method: Method) {
+    private fun validateMiddleware(method: Method, annotationName: String = "@Use") {
         val params = method.parameterTypes
 
         require(params.size == 2) {
-            "@Use method '${method.name}' must have exactly 2 parameters, but got ${params.size}"
+            "$annotationName method '${method.name}' must have exactly 2 parameters, but got ${params.size}"
         }
 
         require(isContextType(params[0])) {
-            "@Use method '${method.name}': First parameter must be Context, but got ${params[0].name}"
+            "$annotationName method '${method.name}': First parameter must be Context, but got ${params[0].name}"
         }
 
         require(isNextType(params[1])) {
-            "@Use method '${method.name}': Second parameter must be Next, but got ${params[1].name}"
+            "$annotationName method '${method.name}': Second parameter must be Next, but got ${params[1].name}"
         }
 
         require(method.returnType == Void.TYPE || method.returnType.kotlin == Unit::class) {
-            "@Use method '${method.name}': Return type must be void/Unit, but got ${method.returnType.name}"
+            "$annotationName method '${method.name}': Return type must be void/Unit, but got ${method.returnType.name}"
         }
     }
 
