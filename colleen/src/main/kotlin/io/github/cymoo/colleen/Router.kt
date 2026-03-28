@@ -832,6 +832,13 @@ internal class Router {
             })
         }
 
+        // Register controller-level WebSocket middlewares (from @WsUse)
+        controllerMeta.wsMiddlewares.forEach {
+            addWsMiddleware(MiddlewareNode.Prefix.of(basePath) { ctx, next ->
+                it.invoke(obj, ctx, next)
+            })
+        }
+
         // Register all routes defined in the controller
         controllerMeta.routes.forEach {
             val path = UrlPath.join(basePath, it.path)
@@ -1062,22 +1069,35 @@ internal class Router {
         val matchedMounts = findMatchedMounts(ctx)
 
         if (matchedMounts.isNotEmpty()) {
-            for ((mount, matchResult) in matchedMounts) {
-                try {
-                    val subCtx = executeMount(ctx, mount, matchResult)
-                    val subPattern = subCtx.pattern
-                    ctx.response.merge(subCtx.response)
-                    if (subPattern != null) {
-                        ctx.pattern = UrlPath.join(mount.prefix, subPattern)
+            // Collect matching WS middlewares for the mount branch
+            val matchedMiddlewares = wsMiddlewares.mapNotNull { mw ->
+                val result = mw.match(ctx)
+                if (result.matched) mw to result else null
+            }
+
+            executeMiddlewareChain(ctx, matchedMiddlewares) {
+                var handled = false
+                for ((mount, matchResult) in matchedMounts) {
+                    try {
+                        val subCtx = executeMount(ctx, mount, matchResult)
+                        val subPattern = subCtx.pattern
+                        ctx.response.merge(subCtx.response)
+                        if (subPattern != null) {
+                            ctx.pattern = UrlPath.join(mount.prefix, subPattern)
+                        }
+                        handled = true
+                        break
+                    } catch (_: NotFound) {
+                        continue
                     }
-                    return
-                } catch (_: NotFound) {
-                    continue
+                }
+                if (!handled) {
+                    throw RouteNotFound(ctx.fullPath, ctx.method)
                 }
             }
+        } else {
+            throw RouteNotFound(ctx.fullPath, ctx.method)
         }
-
-        throw RouteNotFound(ctx.fullPath, ctx.method)
     }
 
     /**
