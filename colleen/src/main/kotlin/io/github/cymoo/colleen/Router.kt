@@ -2,8 +2,10 @@ package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.util.http.UrlPath
 import io.github.cymoo.colleen.util.isKotlinInstance
+import io.github.cymoo.colleen.ws.WsRouteNode
 import java.lang.reflect.Method
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.function.Consumer
 import kotlin.reflect.KFunction
 import kotlin.reflect.jvm.kotlinFunction
 import kotlin.time.measureTime
@@ -765,16 +767,29 @@ internal class Router {
     internal val routes = CopyOnWriteArrayList<RouteNode>()
     internal val mounts = CopyOnWriteArrayList<MountNode>()
 
+    /** WebSocket-specific routes (separate from HTTP routes). */
+    internal val wsRoutes = CopyOnWriteArrayList<WsRouteNode>()
+
+    /** WebSocket-specific middlewares (run during WS handshake only). */
+    internal val wsMiddlewares = CopyOnWriteArrayList<MiddlewareNode>()
+
     // ========================================================================
     // Registration
     // ========================================================================
 
     fun addMiddleware(node: MiddlewareNode) = middlewares.add(node)
 
+    fun addWsMiddleware(node: MiddlewareNode) = wsMiddlewares.add(node)
+
     /**
      * Registers a route handler.
      */
     fun addRoute(node: RouteNode) = routes.add(node)
+
+    /**
+     * Registers a WebSocket route.
+     */
+    fun addWsRoute(node: WsRouteNode) = wsRoutes.add(node)
 
     /**
      * Registers a mounted sub-application.
@@ -838,6 +853,14 @@ internal class Router {
                 )
             }
         }
+
+        // Register all WebSocket routes defined in the controller
+        controllerMeta.wsRoutes.forEach {
+            val path = UrlPath.join(basePath, it.path)
+            addWsRoute(WsRouteNode.of(path, Consumer { conn ->
+                it.handler.invoke(obj, conn)
+            }))
+        }
     }
 
     // ========================================================================
@@ -859,6 +882,12 @@ internal class Router {
      * @throws MethodNotAllowed if path matches but method doesn't
      */
     fun handleRequest(ctx: Context) {
+        // 0. Check for WebSocket upgrade
+        if (isWebSocketUpgrade(ctx)) {
+            handleWsUpgrade(ctx)
+            return
+        }
+
         // 1. Collect matching middlewares
         val matchedMiddlewares = findMatchedMiddlewares(ctx)
 
@@ -978,6 +1007,98 @@ internal class Router {
             .map { it.method }
             .filter { it != "*" }
             .toSet()
+    }
+
+    // ========================================================================
+    // WebSocket Handling
+    // ========================================================================
+
+    /**
+     * Checks if the request is a WebSocket upgrade request.
+     */
+    private fun isWebSocketUpgrade(ctx: Context): Boolean {
+        return ctx.method == "GET" &&
+                ctx.request.headers["Upgrade"]?.equals("websocket", ignoreCase = true) == true
+    }
+
+    /**
+     * Handles a WebSocket upgrade request.
+     *
+     * 1. Match against local WS routes
+     * 2. If matched, run WS middleware chain, then set WebSocket response body
+     * 3. If not matched locally, delegate to mounted sub-apps
+     * 4. If no sub-app handles it, throw 404
+     */
+    private fun handleWsUpgrade(ctx: Context) {
+        val matched = findBestMatchedWsRoute(ctx)
+
+        if (matched != null) {
+            val (wsRoute, matchResult) = matched
+            ctx.pattern = wsRoute.path
+
+            // Apply path parameters
+            matchResult.params.forEach { (key, value) ->
+                ctx.setPathParam(key, value)
+            }
+
+            // Collect matching WS middlewares
+            val matchedMiddlewares = wsMiddlewares.mapNotNull { mw ->
+                val result = mw.match(ctx)
+                if (result.matched) mw to result else null
+            }
+
+            executeMiddlewareChain(ctx, matchedMiddlewares) {
+                // Set the WebSocket response body with the handler, path params, query params,
+                // the owning app (for service resolution), middleware state, and request headers
+                ctx.response.body = ResponseBody.WebSocket(
+                    wsRoute.handler, ctx.pathParams, ctx.request.queries,
+                    ctx.app, ctx.collectStates(), ctx.request.headers
+                )
+            }
+            return
+        }
+
+        // No local WS route matched — try mounted sub-apps
+        val matchedMounts = findMatchedMounts(ctx)
+
+        if (matchedMounts.isNotEmpty()) {
+            for ((mount, matchResult) in matchedMounts) {
+                try {
+                    val subCtx = executeMount(ctx, mount, matchResult)
+                    val subPattern = subCtx.pattern
+                    ctx.response.merge(subCtx.response)
+                    if (subPattern != null) {
+                        ctx.pattern = UrlPath.join(mount.prefix, subPattern)
+                    }
+                    return
+                } catch (_: NotFound) {
+                    continue
+                }
+            }
+        }
+
+        throw RouteNotFound(ctx.fullPath, ctx.method)
+    }
+
+    /**
+     * Finds the best matching WebSocket route for the request path.
+     */
+    private fun findBestMatchedWsRoute(ctx: Context): Pair<WsRouteNode, MatchResult>? {
+        var best: Pair<WsRouteNode, MatchResult>? = null
+        var bestPriority = Long.MIN_VALUE
+
+        for (wsRoute in wsRoutes) {
+            val matchResult = PathMatcher.match(ctx.path, wsRoute.path, exactMatch = true)
+            if (!matchResult.matched) continue
+
+            val priority = PathSegment.priority(PathSegment.parseAll(wsRoute.path))
+            if (best == null || priority > bestPriority) {
+                best = wsRoute to matchResult
+                bestPriority = priority
+            }
+        }
+
+        return best
     }
 
     /**
@@ -1140,6 +1261,13 @@ class RouteBuilder internal constructor(
     fun options(path: String, handler: KFunction<*>) = app.options(UrlPath.join(prefix, path), handler)
     fun all(path: String, handler: Handler) = app.all(UrlPath.join(prefix, path), handler)
     fun all(path: String, handler: KFunction<*>) = app.all(UrlPath.join(prefix, path), handler)
+
+    fun ws(path: String, handler: Consumer<io.github.cymoo.colleen.ws.WsConnection>) =
+        app.ws(UrlPath.join(prefix, path), handler)
+
+    fun wsUse(middleware: Middleware) = app.wsUse(UrlPath.join(prefix, ""), middleware)
+    fun wsUse(prefix: String, middleware: Middleware) =
+        app.wsUse(UrlPath.join(this@RouteBuilder.prefix, prefix), middleware)
 
     /**
      * Route builder with per-route middleware support.

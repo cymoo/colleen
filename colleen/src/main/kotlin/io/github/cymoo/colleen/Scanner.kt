@@ -1,5 +1,6 @@
 package io.github.cymoo.colleen
 
+import io.github.cymoo.colleen.ws.Ws
 import java.lang.reflect.Method
 import kotlin.reflect.full.findAnnotation
 
@@ -8,12 +9,14 @@ import kotlin.reflect.full.findAnnotation
  * @property basePath The base URL path for all routes in this controller
  * @property middlewares List of middleware methods to be applied
  * @property routes List of route definitions
+ * @property wsRoutes List of WebSocket route definitions
  * @property obj The controller instance
  */
 internal data class ControllerInfo(
     val basePath: String,
     val middlewares: List<Method>,
     val routes: List<RouteInfo>,
+    val wsRoutes: List<WsRouteInfo>,
     val obj: Any
 )
 
@@ -26,6 +29,16 @@ internal data class ControllerInfo(
 internal data class RouteInfo(
     val path: String,
     val method: String,
+    val handler: Method
+)
+
+/**
+ * Data class representing a WebSocket route definition
+ * @property path The URL path pattern
+ * @property handler The method to handle this WebSocket endpoint
+ */
+internal data class WsRouteInfo(
+    val path: String,
     val handler: Method
 )
 
@@ -70,7 +83,16 @@ internal object ControllerScanner {
             }
         }
 
-        return ControllerInfo(basePath, middlewares, routes, obj)
+        // Scan for WebSocket methods annotated with @Ws
+        val wsRoutes = allMethods.flatMap { method ->
+            extractWsRoutes(method).also {
+                if (it.isNotEmpty()) {
+                    method.isAccessible = true
+                }
+            }
+        }
+
+        return ControllerInfo(basePath, middlewares, routes, wsRoutes, obj)
     }
 
     /**
@@ -148,6 +170,32 @@ internal object ControllerScanner {
         }
 
         return routes
+    }
+
+    /**
+     * Extracts WebSocket route annotations from a method.
+     *
+     * The annotated method must accept exactly one parameter of type WsConnection.
+     *
+     * @param method The method to extract WS routes from
+     * @return List of WsRouteInfo, empty if no @Ws annotation found
+     */
+    private fun extractWsRoutes(method: Method): List<WsRouteInfo> {
+        val annotation = method.getAnnotation(Ws::class.java) ?: return emptyList()
+
+        // Validate: must have exactly 1 parameter of type WsConnection
+        val params = method.parameterTypes
+        require(params.size == 1) {
+            "@Ws method '${method.name}' must have exactly 1 parameter (WsConnection), but got ${params.size}"
+        }
+        require(params[0] == io.github.cymoo.colleen.ws.WsConnection::class.java) {
+            "@Ws method '${method.name}': parameter must be WsConnection, but got ${params[0].name}"
+        }
+        require(method.returnType == Void.TYPE || method.returnType.kotlin == Unit::class) {
+            "@Ws method '${method.name}': return type must be void/Unit, but got ${method.returnType.name}"
+        }
+
+        return listOf(WsRouteInfo(annotation.value, method))
     }
 
     /**

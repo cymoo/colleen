@@ -10,17 +10,18 @@
 4. [路由](#路由)
 5. [参数提取](#参数提取)
 6. [请求处理](#请求处理)
-7. [数据验证](#数据验证)
-8. [中间件](#中间件)
-9. [依赖注入](#依赖注入)
-10. [错误处理](#错误处理)
-11. [事件系统](#事件系统)
-12. [子应用](#子应用)
-13. [OpenAPI 文档](#openapi-文档)
-14. [测试](#测试)
-15. [Java 支持](#java-支持)
-16. [应用配置](#应用配置)
-17. [生产建议](#生产建议)
+7. [WebSocket](#websocket)
+8. [数据验证](#数据验证)
+9. [中间件](#中间件)
+10. [依赖注入](#依赖注入)
+11. [错误处理](#错误处理)
+12. [事件系统](#事件系统)
+13. [子应用](#子应用)
+14. [OpenAPI 文档](#openapi-文档)
+15. [测试](#测试)
+16. [Java 支持](#java-支持)
+17. [应用配置](#应用配置)
+18. [生产建议](#生产建议)
 
 ---
 
@@ -277,6 +278,7 @@ Colleen 提供了一组完整示例，覆盖常见功能与集成方式：
 - **[redis](examples/redis/src/main/kotlin/Main.kt)** - Redis 集成示例，包含可配置 TTL 的响应缓存中间件
 - **[middleware-showcase](examples/middleware-showcase)** - 内置中间件使用示例
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events 实现实时推送，包含保活与连接生命周期管理
+- **[websocket](examples/websocket/src/main/kotlin/Main.kt)** - WebSocket 支持，包含 Echo、聊天室、中间件认证与控制器风格处理
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - 子应用架构示例，支持独立中间件、服务与错误处理
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient 使用示例
 - **[validator](examples/validator/src/main/kotlin/Main.kt)** - Validator 使用示例
@@ -1112,6 +1114,156 @@ app.get("/events") { ctx ->
 ```
 
 > SSE 连接会保持打开状态，直到 handler 执行完成或客户端主动断开连接。
+
+---
+
+## WebSocket
+
+Colleen 内置 WebSocket 支持，提供基于回调的 API 实现双向实时通信。
+
+### 基本 WebSocket 路由
+
+```kotlin
+app.ws("/echo") { conn ->
+    conn.onMessage { msg ->
+        when (msg) {
+            is WsMessage.Text -> conn.send(msg.data)
+            is WsMessage.Binary -> conn.send(msg.data)
+        }
+    }
+    conn.onClose { reason ->
+        println("连接关闭: $reason")
+    }
+    conn.onError { error ->
+        println("错误: ${error.message}")
+    }
+}
+```
+
+### 路径参数、查询参数与请求头
+
+WebSocket 路由支持与 HTTP 路由相同的路径模式。
+握手 URL 中的查询参数以及升级请求的 HTTP 头同样可以访问。
+
+```kotlin
+// ws://localhost:8000/chat/general?name=Alice
+// Headers: Authorization: Bearer token123
+app.ws("/chat/{room}") { conn ->
+    val room = conn.pathParam("room")     // "general"
+    val name = conn.query("name")         // "Alice"
+    val auth = conn.header("Authorization") // "Bearer token123"
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
+    }
+}
+```
+
+### WebSocket 中间件
+
+WebSocket 中间件在握手阶段运行，连接建立之前执行。
+签名与 HTTP 中间件相同，可检查 HTTP 头、Cookie 和查询参数。
+
+```kotlin
+// 全局 WS 中间件
+app.wsUse { ctx, next ->
+    val token = ctx.header("Authorization")
+    if (token != null) next()
+    else ctx.status(401).text("Unauthorized")
+}
+
+// 前缀作用域 WS 中间件
+app.wsUse("/admin") { ctx, next ->
+    if (isAdmin(ctx)) next()
+    else ctx.status(403).text("Forbidden")
+}
+```
+
+### 状态与服务访问
+
+WebSocket 连接可以访问通过 `provide()` 注册的应用服务，
+以及 WS 中间件在握手阶段设置的请求级状态。
+
+```kotlin
+app.provide(ChatService())
+
+app.wsUse { ctx, next ->
+    val userId = authenticate(ctx.header("Authorization"))
+    ctx.setState("userId", userId)
+    next()
+}
+
+app.ws("/chat/{room}") { conn ->
+    val chatService = conn.getService<ChatService>()
+    val userId = conn.getState<Int>("userId")
+    val room = conn.pathParam("room")
+
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) {
+            chatService.broadcast(room!!, userId, msg.data)
+        }
+    }
+}
+```
+
+`WsConnection` 上的可用方法：
+
+| 方法 | 说明 |
+|---|---|
+| `pathParam(key)` | 从路由模式中获取路径参数 |
+| `query(key)` | 获取查询参数的第一个值 |
+| `queryList(key)` | 获取查询参数的所有值 |
+| `header(key)` | 获取升级请求的 HTTP 头 |
+| `headerValues(key)` | 获取多值 HTTP 头的所有值 |
+| `getService<T>()` | 获取必需服务（未注册时抛异常） |
+| `getServiceOrNull<T>()` | 获取可选服务（未注册返回 null） |
+| `getServices<T>()` | 获取某类型的所有实例 |
+| `getState<T>(key)` | 获取必需状态（不存在时抛异常） |
+| `getStateOrNull<T>(key)` | 获取可选状态（不存在返回 null） |
+| `setState(key, value)` | 设置或更新状态 |
+| `hasState(key)` | 检查状态是否存在 |
+
+> 服务解析会沿父应用链向上查找，因此在父应用注册的服务可以在子应用的 WebSocket 路由中访问。
+
+### 子应用中的 WebSocket
+
+挂载在子应用中的 WebSocket 路由可以自动工作。
+升级请求会像普通 HTTP 请求一样委托给子应用。
+
+```kotlin
+val chatApp = Colleen()
+chatApp.ws("/room/{id}") { conn ->
+    conn.onMessage { msg -> /* ... */ }
+}
+
+app.mount("/chat", chatApp)
+// 连接地址: ws://localhost:8000/chat/room/42
+```
+
+### 控制器风格 WebSocket
+
+```kotlin
+@Controller("/notifications")
+class NotificationController {
+    @Ws("/live")
+    fun live(conn: WsConnection) {
+        conn.onMessage { msg -> /* ... */ }
+    }
+}
+```
+
+### WebSocket 配置
+
+```kotlin
+app.config {
+    ws {
+        idleTimeoutMs = 600_000           // 10 分钟（默认 5 分钟）
+        maxMessageSizeBytes = 128 * 1024  // 128 KB（默认 64 KB）
+    }
+}
+```
+
+> WebSocket 连接保持打开状态，直到任一端关闭。消息通过 `onMessage` 回调分发，
+> `onClose` / `onError` 处理生命周期事件。
 
 ---
 

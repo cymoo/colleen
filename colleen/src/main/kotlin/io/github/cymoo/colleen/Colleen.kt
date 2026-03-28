@@ -8,6 +8,8 @@ import io.github.cymoo.colleen.server.WebServer
 import io.github.cymoo.colleen.util.http.HtmlEscape
 import io.github.cymoo.colleen.util.http.HttpStatus
 import io.github.cymoo.colleen.util.http.UrlPath
+import io.github.cymoo.colleen.ws.WsConnection
+import io.github.cymoo.colleen.ws.WsRouteNode
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Consumer
 import kotlin.reflect.KClass
@@ -28,6 +30,7 @@ import kotlin.time.measureTime
  * - Lifecycle hooks for extending framework behavior via listeners
  * - Elegant Exception handling
  * - SSE (Server-Sent Events) support
+ * - WebSocket support
  * - Validation utilities
  *
  * ### Example
@@ -433,6 +436,71 @@ class Colleen {
     fun all(path: String, handler: KFunction<*>) = addRoute("*", path, handler)
 
     // ========================================================================
+    // WebSocket Route Registration
+    // ========================================================================
+
+    /**
+     * Registers a WebSocket route at the given path.
+     *
+     * The handler receives a [WsConnection] after a successful WebSocket handshake.
+     * Register callbacks on the connection to handle messages, errors, and close events.
+     *
+     * The connection provides access to:
+     * - **Path/query parameters** via `pathParam()`, `query()`, `queryList()`
+     * - **Application services** via `getService<T>()`, `getServiceOrNull<T>()`
+     * - **Request-scoped state** set by WS middleware during the handshake via
+     *   `getState<T>()`, `getStateOrNull<T>()`, `setState()`, `hasState()`
+     *
+     * ### Example
+     * ```kotlin
+     * app.ws("/chat/{room}") { conn ->
+     *     conn.onMessage { msg ->
+     *         when (msg) {
+     *             is WsMessage.Text -> conn.send("Echo: ${msg.data}")
+     *             is WsMessage.Binary -> conn.send(msg.data)
+     *         }
+     *     }
+     * }
+     * ```
+     *
+     * @param path the WebSocket path pattern
+     * @param handler the handler invoked when a client connects
+     */
+    fun ws(path: String, handler: Consumer<WsConnection>) {
+        router.addWsRoute(WsRouteNode.of(path, handler))
+    }
+
+    /**
+     * Registers a global WebSocket middleware.
+     *
+     * WS middlewares run during the WebSocket handshake phase only,
+     * before the connection is established. They can be used for
+     * authentication, authorization, or request validation.
+     *
+     * ### Example
+     * ```kotlin
+     * app.wsUse { ctx, next ->
+     *     val token = ctx.header("Authorization")
+     *     if (token == null) {
+     *         ctx.status(401).text("Unauthorized")
+     *     } else {
+     *         next()
+     *     }
+     * }
+     * ```
+     */
+    fun wsUse(middleware: Middleware) {
+        router.addWsMiddleware(MiddlewareNode.Global(middleware))
+    }
+
+    /**
+     * Registers a prefix-scoped WebSocket middleware.
+     */
+    fun wsUse(prefix: String, middleware: Middleware) {
+        router.addWsMiddleware(MiddlewareNode.Prefix.of(prefix, middleware))
+    }
+
+    // ========================================================================
     // Route Registration - Builder Pattern
     // ========================================================================
 
@@ -644,7 +712,7 @@ class Colleen {
         if (host != config.server.host) config.server.host = host
         if (port != config.server.port) config.server.port = port
 
-        val server = UndertowServer(config.server)
+        val server = UndertowServer(config.server, config.ws)
         webServer = server
 
         // Register event listener before starting server to handle all requests

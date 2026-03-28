@@ -35,6 +35,7 @@
         <module>openapi</module>
         <module>auto-reload</module>
         <module>middleware-showcase</module>
+        <module>websocket</module>
     </modules>
 
     <properties>

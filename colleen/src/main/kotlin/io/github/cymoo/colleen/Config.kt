@@ -2,6 +2,7 @@ package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.json.JacksonMapper
 import io.github.cymoo.colleen.json.JsonMapper
+import io.github.cymoo.colleen.ws.WsConfig
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -120,6 +121,9 @@ data class Config(
 
     @JvmField
     var json: JsonConfig = JsonConfig(),
+
+    @JvmField
+    var ws: WsConfig = WsConfig(),
 ) {
     internal var jsonMapperInstance: JsonMapper? = null
 
@@ -165,6 +169,23 @@ data class Config(
 
     fun server(block: ServerConfig.() -> Unit) {
         server.apply(block)
+    }
+
+    /**
+     * Configure WebSocket settings.
+     *
+     * Example:
+     * ```kotlin
+     * app.config {
+     *     ws {
+     *         idleTimeoutMs = 600_000
+     *         maxMessageSizeBytes = 128 * 1024
+     *     }
+     * }
+     * ```
+     */
+    fun ws(block: WsConfig.() -> Unit) {
+        ws.apply(block)
     }
 
     internal fun createDefaultJsonMapper(): JacksonMapper {

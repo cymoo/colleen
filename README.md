@@ -10,17 +10,18 @@
 4. [Routing](#routing)
 5. [Parameter Extraction](#parameter-extraction)
 6. [Request Handling](#request-handling)
-7. [Validation](#validation)
-8. [Middleware](#middleware)
-9. [Dependency Injection](#dependency-injection)
-10. [Error Handling](#error-handling)
-11. [Events System](#events-system)
-12. [Sub-Applications](#sub-applications)
-13. [OpenAPI Documentation](#openapi-documentation)
-14. [Testing](#testing)
-15. [Java Support](#java-support)
-16. [Configuration](#configuration)
-17. [Production Notes](#production-notes)
+7. [WebSocket](#websocket)
+8. [Validation](#validation)
+9. [Middleware](#middleware)
+10. [Dependency Injection](#dependency-injection)
+11. [Error Handling](#error-handling)
+12. [Events System](#events-system)
+13. [Sub-Applications](#sub-applications)
+14. [OpenAPI Documentation](#openapi-documentation)
+15. [Testing](#testing)
+16. [Java Support](#java-support)
+17. [Configuration](#configuration)
+18. [Production Notes](#production-notes)
 
 ---
 
@@ -289,6 +290,8 @@ Colleen comes with comprehensive examples demonstrating various features and int
 - **[middleware-showcase](examples/middleware-showcase)** - Usage examples of various built-in middleware
 - **[sse](examples/sse/src/main/kotlin/Main.kt)** - Server-Sent Events for real-time server push with keep-alive and
   connection lifecycle handling
+- **[websocket](examples/websocket/src/main/kotlin/Main.kt)** - WebSocket support with echo, chat rooms, middleware
+  authentication, and controller-style handlers
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - Modular application architecture with independent
   middleware, error handling, and service
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient usage for application testing
@@ -1143,6 +1146,159 @@ app.get("/events") { ctx ->
 ```
 
 > The SSE connection remains open until the handler completes or the client disconnects.
+
+---
+
+## WebSocket
+
+Colleen provides built-in WebSocket support with a callback-based API for bidirectional
+real-time communication.
+
+### Basic WebSocket Route
+
+```kotlin
+app.ws("/echo") { conn ->
+    conn.onMessage { msg ->
+        when (msg) {
+            is WsMessage.Text -> conn.send(msg.data)
+            is WsMessage.Binary -> conn.send(msg.data)
+        }
+    }
+    conn.onClose { reason ->
+        println("Closed: $reason")
+    }
+    conn.onError { error ->
+        println("Error: ${error.message}")
+    }
+}
+```
+
+### Path Parameters, Query Parameters, and Headers
+
+WebSocket routes support the same path patterns as HTTP routes.
+Query parameters from the handshake URL and HTTP headers from the upgrade request
+are also accessible.
+
+```kotlin
+// ws://localhost:8000/chat/general?name=Alice
+// Headers: Authorization: Bearer token123
+app.ws("/chat/{room}") { conn ->
+    val room = conn.pathParam("room")     // "general"
+    val name = conn.query("name")         // "Alice"
+    val auth = conn.header("Authorization") // "Bearer token123"
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
+    }
+}
+```
+
+### WebSocket Middleware
+
+WebSocket middleware runs during the handshake phase, before the connection is established.
+It uses the same `Middleware` signature and can inspect HTTP headers, cookies, and query parameters.
+
+```kotlin
+// Global WS middleware
+app.wsUse { ctx, next ->
+    val token = ctx.header("Authorization")
+    if (token != null) next()
+    else ctx.status(401).text("Unauthorized")
+}
+
+// Prefix-scoped WS middleware
+app.wsUse("/admin") { ctx, next ->
+    if (isAdmin(ctx)) next()
+    else ctx.status(403).text("Forbidden")
+}
+```
+
+### State and Service Access
+
+WebSocket connections can access application services registered via `provide()` and
+request-scoped state set by WS middleware during the handshake phase.
+
+```kotlin
+app.provide(ChatService())
+
+app.wsUse { ctx, next ->
+    val userId = authenticate(ctx.header("Authorization"))
+    ctx.setState("userId", userId)
+    next()
+}
+
+app.ws("/chat/{room}") { conn ->
+    val chatService = conn.getService<ChatService>()
+    val userId = conn.getState<Int>("userId")
+    val room = conn.pathParam("room")
+
+    conn.onMessage { msg ->
+        if (msg is WsMessage.Text) {
+            chatService.broadcast(room!!, userId, msg.data)
+        }
+    }
+}
+```
+
+Available methods on `WsConnection`:
+
+| Method | Description |
+|---|---|
+| `pathParam(key)` | Path parameter from the route pattern |
+| `query(key)` | First query parameter value |
+| `queryList(key)` | All query parameter values |
+| `header(key)` | HTTP header from the upgrade request |
+| `headerValues(key)` | All values of a multi-valued header |
+| `getService<T>()` | Required service (throws if not found) |
+| `getServiceOrNull<T>()` | Optional service (returns null) |
+| `getServices<T>()` | All instances of a type |
+| `getState<T>(key)` | Required state (throws if not found) |
+| `getStateOrNull<T>(key)` | Optional state (returns null) |
+| `setState(key, value)` | Set or update state |
+| `hasState(key)` | Check if state exists |
+
+> Service resolution walks up the parent app chain, so services registered
+> on a parent app are accessible from WebSocket routes in mounted sub-apps.
+
+### WebSocket in Sub-Applications
+
+WebSocket routes in mounted sub-applications work automatically.
+The upgrade request is delegated to the sub-app just like normal HTTP requests.
+
+```kotlin
+val chatApp = Colleen()
+chatApp.ws("/room/{id}") { conn ->
+    conn.onMessage { msg -> /* ... */ }
+}
+
+app.mount("/chat", chatApp)
+// Connect to: ws://localhost:8000/chat/room/42
+```
+
+### Controller-Style WebSocket
+
+```kotlin
+@Controller("/notifications")
+class NotificationController {
+    @Ws("/live")
+    fun live(conn: WsConnection) {
+        conn.onMessage { msg -> /* ... */ }
+    }
+}
+```
+
+### WebSocket Configuration
+
+```kotlin
+app.config {
+    ws {
+        idleTimeoutMs = 600_000           // 10 minutes (default: 5 min)
+        maxMessageSizeBytes = 128 * 1024  // 128 KB (default: 64 KB)
+    }
+}
+```
+
+> The WebSocket connection stays open until either side closes it. Messages are dispatched via
+> `onMessage` callbacks, and `onClose` / `onError` handle lifecycle events.
 
 ---
 
