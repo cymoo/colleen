@@ -744,6 +744,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
                                     task.run()
                                 } catch (_: Exception) {
                                     // Task-level errors are handled by the task itself
+                                    // (WsConnection.dispatchMessage uses runCatching internally)
                                 }
                             }
                         } finally {
@@ -755,7 +756,8 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: io.
                         }
                     }
                 } catch (_: RejectedExecutionException) {
-                    // Executor shut down; release lock so tasks can be drained later if possible
+                    // Expected during shutdown — executor has been shut down.
+                    // Release lock so pending tasks can be drained if executor resumes.
                     running.set(false)
                 }
             }
