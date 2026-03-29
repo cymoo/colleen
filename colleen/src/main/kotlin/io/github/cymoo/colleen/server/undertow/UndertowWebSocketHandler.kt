@@ -4,17 +4,18 @@ import io.github.cymoo.colleen.Colleen
 import io.github.cymoo.colleen.ServerConfig
 import io.github.cymoo.colleen.logger
 import io.github.cymoo.colleen.util.http.Headers
-import io.github.cymoo.colleen.ws.*
+import io.github.cymoo.colleen.ws.WsCloseReason
+import io.github.cymoo.colleen.ws.WsConfig
+import io.github.cymoo.colleen.ws.WsConnection
+import io.github.cymoo.colleen.ws.WsMessage
 import io.undertow.server.HttpServerExchange
 import io.undertow.websockets.WebSocketConnectionCallback
 import io.undertow.websockets.WebSocketProtocolHandshakeHandler
 import io.undertow.websockets.core.*
 import io.undertow.websockets.spi.WebSocketHttpExchange
-import org.xnio.ChannelListener
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.*
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.function.Consumer
@@ -138,7 +139,7 @@ internal class UndertowWebSocketHandler(
                         }
                         WebSockets.sendPing(ByteBuffer.allocate(0), wsChannel, null)
                     } catch (_: Exception) {
-                        // Connection already closed; task will be cancelled by onClose
+                        // Connection already closed; task will be canceled by onClose
                     }
                 }, wsConfig.pingIntervalMs, wsConfig.pingIntervalMs, TimeUnit.MILLISECONDS)
 
@@ -158,14 +159,9 @@ internal class UndertowWebSocketHandler(
                 }
 
                 override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                    val data = message.data
-                    try {
-                        val bytes = extractBinaryData(data)
-                        val msg = WsMessage.Binary(bytes)
-                        orderedDispatcher.execute { connection.dispatchMessage(msg) }
-                    } finally {
-                        data.free()
-                    }
+                    val bytes = extractBinaryData(message)
+                    val msg = WsMessage.Binary(bytes)
+                    orderedDispatcher.execute { connection.dispatchMessage(msg) }
                 }
 
                 override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
@@ -215,9 +211,9 @@ internal class UndertowWebSocketHandler(
                 wsConnectionCount.decrementAndGet()
             }
 
-            wsChannel.addCloseTask(ChannelListener {
+            wsChannel.addCloseTask {
                 connection.close(WsCloseReason.ClientDisconnected)
-            })
+            }
 
             // Start receiving messages
             wsChannel.resumeReceives()
@@ -283,17 +279,19 @@ internal class UndertowWebSocketHandler(
     /**
      * Extracts binary data from a pooled buffer message into a byte array.
      */
-    private fun extractBinaryData(data: org.xnio.Pooled<Array<ByteBuffer>>): ByteArray {
-        val pooled = data.resource
-        val totalSize = pooled.sumOf { it.remaining() }
-        val bytes = ByteArray(totalSize)
-        var offset = 0
-        for (buf in pooled) {
-            val len = buf.remaining()
-            buf.get(bytes, offset, len)
-            offset += len
+    @Suppress("DEPRECATION")
+    private fun extractBinaryData(message: BufferedBinaryMessage): ByteArray {
+        val data = message.data
+        return try {
+            val merged = WebSockets.mergeBuffers(*data.resource)
+            if (merged.hasArray() && merged.arrayOffset() == 0 && merged.remaining() == merged.array().size) {
+                merged.array()
+            } else {
+                ByteArray(merged.remaining()).also { merged.get(it) }
+            }
+        } finally {
+            data.free()
         }
-        return bytes
     }
 
     /**

@@ -864,9 +864,9 @@ internal class Router {
         // Register all WebSocket routes defined in the controller
         controllerMeta.wsRoutes.forEach {
             val path = UrlPath.join(basePath, it.path)
-            addWsRoute(WsRouteNode.of(path, Consumer { conn ->
+            addWsRoute(WsRouteNode.of(path) { conn ->
                 it.handler.invoke(obj, conn)
-            }))
+            })
         }
     }
 
