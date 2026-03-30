@@ -87,6 +87,7 @@ interface WsChannel : AutoCloseable {
     @Throws(IOException::class)
     fun sendBinary(data: ByteBuffer)
 
+    @Throws(IOException::class)
     fun close(code: Int, reason: String)
 }
 
@@ -166,6 +167,7 @@ class WsConnection internal constructor(
      * this flag, a concurrent [onClose] call could observe [isClosed] == true but
      * read [closeReason] before it has been assigned its final value.
      */
+    @Volatile
     private var closeCallbacksDrained = false
 
     // ========================================================================

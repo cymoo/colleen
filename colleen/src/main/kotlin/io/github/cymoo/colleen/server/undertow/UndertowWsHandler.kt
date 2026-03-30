@@ -101,140 +101,22 @@ internal class UndertowWsHandler(
         exchange: HttpServerExchange,
     ) {
         val callback = WebSocketConnectionCallback { _: WebSocketHttpExchange, wsChannel: WebSocketChannel ->
-            // Apply WS configuration
             wsChannel.idleTimeout = wsConfig.idleTimeoutMs
 
-            // Create the Colleen WsChannel adapter
-            val channel = UndertowWsChannel(wsChannel)
-            val connection = WsConnection(channel, pathParams, queryParams, app, states.toMutableMap(), headers)
-
-            // Track connection for graceful shutdown
-            activeWsConnections.add(connection)
-
-            // Increment count only when connection is truly established
-            if (wsConfig.maxConnections > 0) {
-                wsConnectionCount.incrementAndGet()
-            }
-
-            // Create per-connection ordered executor for message dispatch
+            val connection = createConnection(wsChannel, pathParams, queryParams, app, states, headers)
             val orderedDispatcher = OrderedExecutor(wsExecutor)
 
-            // Invoke user handler to set up callbacks
-            try {
-                handler.accept(connection)
-            } catch (e: Exception) {
-                logger.error("WebSocket handler setup failed: ${e.message}", e)
-                connection.close(WsCloseReason.Error(e))
-                return@WebSocketConnectionCallback
-            }
+            // Abort if the user-supplied handler throws during setup.
+            if (!invokeUserHandler(handler, connection)) return@WebSocketConnectionCallback
 
-            // Schedule ping/pong heartbeat
-            var pingFuture: ScheduledFuture<*>? = null
-            val lastPong: AtomicLong? = if (wsConfig.pingIntervalMs > 0) {
-                val pongTracker = AtomicLong(System.currentTimeMillis())
+            val (pingFuture, lastPong) = setupHeartbeat(wsChannel, connection)
+            setupReceiveListener(wsChannel, connection, orderedDispatcher, lastPong)
+            registerCloseHandlers(wsChannel, connection, pingFuture)
 
-                pingFuture = pingScheduler.scheduleAtFixedRate({
-                    try {
-                        if (connection.isClosed) return@scheduleAtFixedRate
-                        val sinceLastPong = System.currentTimeMillis() - pongTracker.get()
-                        if (sinceLastPong > wsConfig.pingIntervalMs + wsConfig.pingTimeoutMs) {
-                            // Pong timeout — close the dead connection
-                            connection.close(WsCloseReason.GoingAway)
-                            return@scheduleAtFixedRate
-                        }
-                        WebSockets.sendPing(ByteBuffer.allocate(0), wsChannel, null)
-                    } catch (_: Exception) {
-                        // Connection already closed; task will be canceled by onClose
-                    }
-                }, wsConfig.pingIntervalMs, wsConfig.pingIntervalMs, TimeUnit.MILLISECONDS)
-
-                pongTracker
-            } else {
-                null
-            }
-
-            // Unified receive listener for all cases (ping enabled or disabled)
-            wsChannel.receiveSetter.set(object : AbstractReceiveListener() {
-                override fun getMaxTextBufferSize(): Long = wsConfig.maxMessageSizeBytes
-                override fun getMaxBinaryBufferSize(): Long = wsConfig.maxMessageSizeBytes
-
-                override fun onFullTextMessage(channel: WebSocketChannel, message: BufferedTextMessage) {
-                    val msg = WsMessage.Text(message.data)
-                    orderedDispatcher.execute { connection.dispatchMessage(msg) }
-                }
-
-                override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                    val bytes = extractBinaryData(message)
-                    val msg = WsMessage.Binary(bytes)
-                    orderedDispatcher.execute { connection.dispatchMessage(msg) }
-                }
-
-                override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
-                    val reason = if (cm.code == CloseMessage.NORMAL_CLOSURE) {
-                        WsCloseReason.Normal
-                    } else {
-                        WsCloseReason.Protocol(cm.code, cm.reason ?: "")
-                    }
-                    orderedDispatcher.execute { connection.close(reason) }
-                }
-
-                override fun onError(channel: WebSocketChannel, error: Throwable) {
-                    orderedDispatcher.execute {
-                        if (isMessageTooLarge(error)) {
-                            connection.close(WsCloseReason.MessageTooBig)
-                        } else if (error is IOException) {
-                            connection.close(WsCloseReason.ClientDisconnected)
-                        } else {
-                            connection.dispatchError(error)
-                            connection.close(WsCloseReason.Error(error))
-                        }
-                    }
-                }
-
-                override fun onFullPongMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                    lastPong?.set(System.currentTimeMillis())
-                    message.data.free()
-                }
-            })
-
-            // Register close listener for cleanup
-            val capturedPingFuture = pingFuture
-            connection.onClose {
-                capturedPingFuture?.cancel(false)
-                activeWsConnections.remove(connection)
-                if (wsConfig.maxConnections > 0) {
-                    wsConnectionCount.decrementAndGet()
-                }
-            }
-
-            wsChannel.addCloseTask {
-                connection.close(WsCloseReason.ClientDisconnected)
-            }
-
-            // Start receiving messages
             wsChannel.resumeReceives()
         }
 
-        // Subclass to enforce connection limits before the WebSocket handshake.
-        // This rejects excess connections at the HTTP level (503) instead of
-        // completing the upgrade and then sending a WS close frame.
-        val handshakeHandler = object : WebSocketProtocolHandshakeHandler(callback) {
-            override fun handleRequest(exchange: HttpServerExchange) {
-                if (wsConfig.maxConnections > 0) {
-                    // Optimistic check — exact enforcement happens in the callback via the
-                    // activeWsConnections size, but this prevents unnecessary handshake work.
-                    if (wsConnectionCount.get() >= wsConfig.maxConnections) {
-                        exchange.statusCode = 503
-                        exchange.responseSender.send("Try Again Later")
-                        return
-                    }
-                }
-                super.handleRequest(exchange)
-            }
-        }
-
-        // Perform the upgrade handshake
-        handshakeHandler.handleRequest(exchange)
+        createHandshakeHandler(callback).handleRequest(exchange)
     }
 
     /**
@@ -268,6 +150,190 @@ internal class UndertowWsHandler(
             if (!wsExecutor.awaitTermination(timeout, TimeUnit.MILLISECONDS)) {
                 logger.warn("WebSocket executor did not terminate, forcing shutdown")
                 wsExecutor.shutdownNow()
+            }
+        }
+    }
+
+
+    /**
+     * Creates a [WsConnection] for the newly upgraded channel and registers it
+     * for connection-limit accounting and graceful shutdown tracking.
+     */
+    private fun createConnection(
+        wsChannel: WebSocketChannel,
+        pathParams: Map<String, String>,
+        queryParams: Map<String, List<String>>,
+        app: Colleen?,
+        states: Map<String, Any?>,
+        headers: Headers,
+    ): WsConnection {
+        val channel = UndertowWsChannel(wsChannel)
+        val connection = WsConnection(channel, pathParams, queryParams, app, states.toMutableMap(), headers)
+        activeWsConnections.add(connection)
+        if (wsConfig.maxConnections > 0) wsConnectionCount.incrementAndGet()
+        return connection
+    }
+
+    /**
+     * Invokes the user-supplied handler to register message/error/close callbacks.
+     *
+     * Returns `false` if the handler throws, in which case the connection is
+     * closed immediately and the caller should abort further setup.
+     */
+    private fun invokeUserHandler(handler: Consumer<WsConnection>, connection: WsConnection): Boolean {
+        return try {
+            handler.accept(connection)
+            true
+        } catch (e: Exception) {
+            logger.error("WebSocket handler setup failed: ${e.message}", e)
+            connection.close(WsCloseReason.Error(e))
+            false
+        }
+    }
+
+    /**
+     * Holds the scheduled ping task and the timestamp of the last received pong.
+     * Both are `null` when heartbeats are disabled ([WsConfig.pingIntervalMs] <= 0).
+     */
+    private data class HeartbeatResult(
+        val pingFuture: ScheduledFuture<*>?,
+        val lastPong: AtomicLong?,
+    )
+
+    /**
+     * Starts the ping/pong heartbeat for the given connection.
+     *
+     * Every [WsConfig.pingIntervalMs] ms a ping frame is sent. If no pong is
+     * received within [WsConfig.pingTimeoutMs] ms after the last ping, the
+     * connection is treated as dead and closed with [WsCloseReason.GoingAway].
+     *
+     * Returns [HeartbeatResult] with nulls if heartbeats are disabled.
+     */
+    private fun setupHeartbeat(wsChannel: WebSocketChannel, connection: WsConnection): HeartbeatResult {
+        if (wsConfig.pingIntervalMs <= 0) return HeartbeatResult(null, null)
+
+        val lastPong = AtomicLong(System.currentTimeMillis())
+
+        val pingFuture = pingScheduler.scheduleAtFixedRate({
+            try {
+                if (connection.isClosed) return@scheduleAtFixedRate
+
+                val sinceLastPong = System.currentTimeMillis() - lastPong.get()
+                if (sinceLastPong > wsConfig.pingIntervalMs + wsConfig.pingTimeoutMs) {
+                    // No pong received within the allowed window — treat as dead.
+                    connection.close(WsCloseReason.GoingAway)
+                    return@scheduleAtFixedRate
+                }
+                WebSockets.sendPing(ByteBuffer.allocate(0), wsChannel, null)
+            } catch (_: Exception) {
+                // Connection already closed; the task will be canceled by onClose.
+            }
+        }, wsConfig.pingIntervalMs, wsConfig.pingIntervalMs, TimeUnit.MILLISECONDS)
+
+        return HeartbeatResult(pingFuture, lastPong)
+    }
+
+    /**
+     * Attaches an [AbstractReceiveListener] to [wsChannel] that bridges Undertow
+     * WebSocket events to Colleen's [WsConnection] abstraction.
+     *
+     * All callbacks are dispatched through [dispatcher] to ensure ordered,
+     * sequential processing per connection off the IO thread.
+     *
+     * [lastPong] is updated on every received pong frame; pass `null` to skip
+     * pong tracking when heartbeats are disabled.
+     */
+    private fun setupReceiveListener(
+        wsChannel: WebSocketChannel,
+        connection: WsConnection,
+        dispatcher: OrderedExecutor,
+        lastPong: AtomicLong?,
+    ) {
+        wsChannel.receiveSetter.set(object : AbstractReceiveListener() {
+            override fun getMaxTextBufferSize(): Long = wsConfig.maxMessageSizeBytes
+            override fun getMaxBinaryBufferSize(): Long = wsConfig.maxMessageSizeBytes
+
+            override fun onFullTextMessage(channel: WebSocketChannel, message: BufferedTextMessage) {
+                dispatcher.execute { connection.dispatchMessage(WsMessage.Text(message.data)) }
+            }
+
+            override fun onFullBinaryMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
+                dispatcher.execute { connection.dispatchMessage(WsMessage.Binary(extractBinaryData(message))) }
+            }
+
+            override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
+                // Map Undertow close codes to Colleen's close reason hierarchy.
+                val reason = if (cm.code == CloseMessage.NORMAL_CLOSURE) {
+                    WsCloseReason.Normal
+                } else {
+                    WsCloseReason.Protocol(cm.code, cm.reason ?: "")
+                }
+                dispatcher.execute { connection.close(reason) }
+            }
+
+            override fun onError(channel: WebSocketChannel, error: Throwable) {
+                dispatcher.execute {
+                    when {
+                        // Undertow signals oversized messages as errors rather than close frames.
+                        isMessageTooLarge(error) -> connection.close(WsCloseReason.MessageTooBig)
+                        // Broken pipe, connection reset, etc.
+                        error is IOException -> connection.close(WsCloseReason.ClientDisconnected)
+                        else -> {
+                            connection.dispatchError(error)
+                            connection.close(WsCloseReason.Error(error))
+                        }
+                    }
+                }
+            }
+
+            override fun onFullPongMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
+                lastPong?.set(System.currentTimeMillis())
+                message.data.free()
+            }
+        })
+    }
+
+    /**
+     * Registers two complementary close hooks:
+     *
+     * 1. **[WsConnection.onClose]** — application-level cleanup: cancels the ping
+     *    task and removes the connection from tracking / accounting structures.
+     * 2. **[WebSocketChannel.addCloseTask]** — transport-level fallback: ensures
+     *    the connection is closed if the underlying channel is torn down without a
+     *    proper WebSocket close handshake (e.g. abrupt TCP disconnect).
+     */
+    private fun registerCloseHandlers(
+        wsChannel: WebSocketChannel,
+        connection: WsConnection,
+        pingFuture: ScheduledFuture<*>?,
+    ) {
+        connection.onClose {
+            pingFuture?.cancel(false)
+            activeWsConnections.remove(connection)
+            if (wsConfig.maxConnections > 0) wsConnectionCount.decrementAndGet()
+        }
+        wsChannel.addCloseTask {
+            connection.close(WsCloseReason.ClientDisconnected)
+        }
+    }
+
+    /**
+     * Returns a [WebSocketProtocolHandshakeHandler] that rejects upgrade requests
+     * with HTTP 503 when the connection limit is reached, avoiding the cost of
+     * completing a handshake only to immediately send a WS close frame.
+     *
+     * Note: the pre-handshake check on [wsConnectionCount] is optimistic (no lock).
+     * The authoritative enforcement happens inside the callback via [activeWsConnections].
+     */
+    private fun createHandshakeHandler(callback: WebSocketConnectionCallback): WebSocketProtocolHandshakeHandler {
+        return object : WebSocketProtocolHandshakeHandler(callback) {
+            override fun handleRequest(exchange: HttpServerExchange) {
+                if (wsConfig.maxConnections > 0 && wsConnectionCount.get() >= wsConfig.maxConnections) {
+                    exchange.statusCode = 503
+                    exchange.responseSender.send("Try Again Later")
+                    return
+                }
+                super.handleRequest(exchange)
             }
         }
     }
