@@ -21,7 +21,7 @@ internal class UndertowWsChannel(private val channel: WebSocketChannel) : WsChan
     }
 
     override fun close(code: Int, reason: String) {
-        runCatching { WebSockets.sendCloseBlocking(code, reason, channel) }
+        WebSockets.sendCloseBlocking(code, reason, channel)
     }
 
     override fun close() {
