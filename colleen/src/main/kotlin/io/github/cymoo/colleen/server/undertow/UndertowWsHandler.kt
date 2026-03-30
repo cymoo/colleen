@@ -31,7 +31,7 @@ import java.util.function.Consumer
  * - RFC 6455 compliant ping response
  * - Proper 1009 close code for oversized messages
  */
-internal class UndertowWebSocketHandler(
+internal class UndertowWsHandler(
     private val config: ServerConfig,
     private val wsConfig: WsConfig,
 ) {

@@ -1,11 +1,11 @@
 package io.github.cymoo.colleen.ws
 
 import io.github.cymoo.colleen.Colleen
+import io.github.cymoo.colleen.logger
 import io.github.cymoo.colleen.util.http.Headers
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import java.util.function.Consumer
 import kotlin.concurrent.withLock
@@ -19,10 +19,8 @@ import kotlin.reflect.KClass
  * Represents an incoming WebSocket message.
  */
 sealed class WsMessage {
-    /** Text message. */
     data class Text(val data: String) : WsMessage()
 
-    /** Binary message. */
     data class Binary(val data: ByteArray) : WsMessage() {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -42,20 +40,16 @@ sealed class WsMessage {
  * Describes why a WebSocket connection was closed.
  */
 sealed class WsCloseReason {
-    /** Normal closure (code 1000). */
     object Normal : WsCloseReason() {
         override fun toString() = "Normal"
     }
 
-    /** Client disconnected (IO error, broken pipe, etc.). */
     object ClientDisconnected : WsCloseReason() {
         override fun toString() = "ClientDisconnected"
     }
 
-    /** Connection closed due to a server-side error. */
     data class Error(val cause: Throwable) : WsCloseReason()
 
-    /** Connection closed with a specific WebSocket close code and reason. */
     data class Protocol(val code: Int, val reason: String) : WsCloseReason()
 }
 
@@ -73,24 +67,12 @@ sealed class WsCloseReason {
  * All concurrency control is handled by [WsConnection].
  */
 interface WsChannel : AutoCloseable {
-    /**
-     * Sends a text message.
-     */
     @Throws(IOException::class)
     fun sendText(text: String)
 
-    /**
-     * Sends a binary message.
-     */
     @Throws(IOException::class)
     fun sendBinary(data: ByteBuffer)
 
-    /**
-     * Closes the WebSocket connection with a close frame.
-     *
-     * @param code WebSocket close code (e.g. 1000 for normal closure)
-     * @param reason human-readable close reason
-     */
     fun close(code: Int, reason: String)
 }
 
@@ -111,11 +93,15 @@ interface WsChannel : AutoCloseable {
  *   Messages for the same connection are processed sequentially in order.
  *
  * ## Lifecycle
- * 1. Connection is established by the framework after successful WebSocket handshake.
+ * 1. Connection is established after a successful WebSocket handshake.
  * 2. User handler receives the connection and registers callbacks.
  * 3. Messages arrive via [onMessage] callbacks.
  * 4. Connection closes via [close] or when the remote peer disconnects.
  * 5. [onClose] callbacks are invoked exactly once.
+ *
+ * ## Virtual-thread compatibility (JDK 21+)
+ * All internal locks use [ReentrantLock] instead of `synchronized` to prevent
+ * carrier-thread pinning when running on virtual threads.
  */
 class WsConnection internal constructor(
     private val channel: WsChannel,
@@ -125,232 +111,188 @@ class WsConnection internal constructor(
     val queryParams: Map<String, List<String>> = emptyMap(),
     /**
      * The Colleen application that owns this connection.
-     *
-     * Used for service resolution. Walks up the parent chain when the
-     * owning app is a mounted sub-application.
+     * Used for service resolution; walks up the parent chain for mounted sub-apps.
      */
     private val app: Colleen? = null,
     /**
      * Request-scoped state carried over from the WS handshake phase.
-     *
-     * State set by WS middleware during the upgrade handshake is captured here
-     * and remains accessible for the lifetime of the connection.
+     * State set by WS middleware during upgrade is captured here and remains
+     * accessible for the lifetime of the connection.
      */
     private val states: MutableMap<String, Any?> = mutableMapOf(),
     /**
      * HTTP headers from the WebSocket upgrade (handshake) request.
-     *
-     * These are the headers sent by the client during the initial HTTP
-     * request that triggers the WebSocket upgrade. Useful for authentication,
-     * session tracking, or any other header-based logic.
      */
     private val requestHeaders: Headers = Headers(),
 ) : AutoCloseable {
 
+    // ========================================================================
+    // Internal state
+    // ========================================================================
+
     private val closed = AtomicBoolean(false)
-    private val closeReason = AtomicReference<WsCloseReason>(WsCloseReason.Normal)
+
+    /**
+     * The reason this connection was closed.
+     *
+     * Written exactly once, inside [closeCallbacksLock], before [closeCallbacksDrained]
+     * is set to true. @Volatile provides a visibility guarantee for any future reader
+     * outside the lock — all current reads are inside the lock, but this is kept as
+     * a defensive measure.
+     */
+    @Volatile
+    private var closeReason: WsCloseReason = WsCloseReason.Normal
+
+    /**
+     * Set to true once [close] has drained and cleared [closeCallbacks].
+     * Guarded by [closeCallbacksLock].
+     *
+     * Bridges the gap between [closed] (set atomically via CAS) and the critical
+     * section where [closeReason] is recorded and callbacks are collected. Without
+     * this flag, a concurrent [onClose] call could observe [isClosed] == true but
+     * read [closeReason] before it has been assigned its final value.
+     */
+    private var closeCallbacksDrained = false
+
+    // ========================================================================
+    // Locks
+    // ========================================================================
+
+    private val sendLock = ReentrantLock()
+    private val statesLock = ReentrantLock()
+    private val messageCallbacksLock = ReentrantLock()
+    private val closeCallbacksLock = ReentrantLock()
+    private val errorCallbacksLock = ReentrantLock()
+
+    // ========================================================================
+    // Callback lists (each guarded by its corresponding lock)
+    // ========================================================================
+
     private val messageCallbacks = ArrayList<Consumer<WsMessage>>()
     private val closeCallbacks = ArrayList<Consumer<WsCloseReason>>()
     private val errorCallbacks = ArrayList<Consumer<Throwable>>()
 
-    /**
-     * Lock for [states] access. Required because [setState] and [getState] may be
-     * called from multiple threads (e.g. onMessage worker thread and user code).
-     */
-    private val statesLock = Any()
-
-    /**
-     * Set to true once close() has collected the close callbacks.
-     * Guarded by [closeCallbacks] lock.
-     *
-     * This flag bridges the gap between [closed] (set via CAS) and the synchronized
-     * block where [closeReason] is set and callbacks are drained. Without it, a
-     * concurrent [onClose] call could observe [isClosed] == true but read [closeReason]
-     * before it has been set to its final value.
-     */
-    private var closeCallbacksCollected = false
+    // ========================================================================
+    // Public state
+    // ========================================================================
 
     /** Whether the connection has been closed. */
     val isClosed: Boolean get() = closed.get()
 
-    private val sendLock = ReentrantLock()
-
     // ========================================================================
-    // Path Parameters
+    // Path parameters
     // ========================================================================
 
-    /**
-     * Returns a path parameter value by name, or null if not found.
-     */
+    /** Returns a path parameter value by name, or null if not found. */
     fun pathParam(key: String): String? = pathParams[key]
 
     // ========================================================================
-    // Query Parameters
+    // Query parameters
     // ========================================================================
 
-    /**
-     * Returns the first query parameter value by name, or null if not found.
-     */
+    /** Returns the first query parameter value by name, or null if not found. */
     fun query(key: String): String? = queryParams[key]?.firstOrNull()
 
-    /**
-     * Returns all query parameter values for the given name.
-     */
+    /** Returns all query parameter values for the given name. */
     fun queryList(key: String): List<String> = queryParams[key] ?: emptyList()
 
     // ========================================================================
-    // Headers
+    // Request headers
     // ========================================================================
 
     /**
      * Returns the first value of the specified HTTP header from the upgrade request,
-     * or null if the header is not present.
-     *
-     * Header names are case-insensitive.
-     *
-     * ```kotlin
-     * val auth = conn.header("Authorization")
-     * val origin = conn.header("Origin")
-     * ```
+     * or null if absent. Header names are case-insensitive.
      */
     fun header(key: String): String? = requestHeaders[key]
 
     /**
      * Returns all values of the specified HTTP header from the upgrade request.
-     *
-     * Returns an empty list if the header is not present.
-     * Header names are case-insensitive.
-     *
-     * ```kotlin
-     * val cookies = conn.headerValues("Cookie")
-     * ```
+     * Returns an empty list if absent. Header names are case-insensitive.
      */
     fun headerValues(key: String): List<String> = requestHeaders.getAll(key)
 
     // ========================================================================
-    // State Management
+    // Connection-scoped state
     // ========================================================================
 
-    /**
-     * Returns true if the state exists, regardless of whether the value is null.
-     */
-    fun hasState(key: String): Boolean = synchronized(statesLock) { states.containsKey(key) }
+    /** Returns true if the state key exists, regardless of whether its value is null. */
+    fun hasState(key: String): Boolean = statesLock.withLock { states.containsKey(key) }
 
     /**
      * Returns the state value for the given key.
      *
-     * @param key the state key
-     * @return the non-null state value
-     * @throws NoSuchElementException if the state key does not exist
-     * @throws NullPointerException if the value is null
+     * @throws NoSuchElementException if the key does not exist.
+     * @throws NullPointerException if the value is null.
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T : Any> getState(key: String): T = synchronized(statesLock) {
-        if (!states.containsKey(key)) {
-            throw NoSuchElementException("State '$key' not found")
-        }
+    fun <T : Any> getState(key: String): T = statesLock.withLock {
+        if (!states.containsKey(key)) throw NoSuchElementException("State '$key' not found")
         states[key] as T
     }
 
     /**
-     * Returns the state value for the given key, or null if the key does not exist.
-     *
-     * @param key the state key
-     * @return the state value if the key exists (may be null), or null if the key doesn't exist
+     * Returns the state value for the given key,
+     * or null if the key does not exist or its value is null.
      */
     @Suppress("UNCHECKED_CAST")
-    fun <T> getStateOrNull(key: String): T? = synchronized(statesLock) {
+    fun <T> getStateOrNull(key: String): T? = statesLock.withLock {
         if (!states.containsKey(key)) return null
         states[key] as T?
     }
 
-    /**
-     * Sets a state value for the given key.
-     *
-     * @param key the state key
-     * @param value the state value (may be null)
-     */
-    fun setState(key: String, value: Any?) = synchronized(statesLock) {
+    /** Sets a state value. The value may be null. */
+    fun setState(key: String, value: Any?) = statesLock.withLock {
         states[key] = value
     }
 
     // ========================================================================
-    // Service Injection
+    // Service injection (Kotlin)
     // ========================================================================
 
     /**
      * Retrieves a required service instance.
+     * Resolution walks up the app parent chain for mounted sub-apps.
      *
-     * Resolution walks up the app parent chain (for mounted sub-apps).
-     *
-     * ```kotlin
-     * val db = conn.getService<Database>()
-     * ```
-     *
-     * @param qualifier optional qualifier to distinguish instances of the same type.
-     * @throws IllegalStateException if the service is not registered or app is not available.
-     * @see getServiceOrNull
+     * @throws IllegalStateException if the service is not registered.
      */
     inline fun <reified T : Any> getService(qualifier: Any? = null): T =
         resolveService(T::class, qualifier)
             ?: error("Service ${T::class.simpleName}(qualifier=$qualifier) not registered")
 
-    /**
-     * Retrieves an optional service instance, or `null` if not registered.
-     *
-     * ```kotlin
-     * val db = conn.getServiceOrNull<Database>()
-     * ```
-     *
-     * @param qualifier optional qualifier to distinguish instances of the same type.
-     * @see getService
-     */
+    /** Retrieves an optional service instance, or null if not registered. */
     inline fun <reified T : Any> getServiceOrNull(qualifier: Any? = null): T? =
         resolveService(T::class, qualifier)
 
-    /**
-     * Retrieves all registered instances of type [T] from the current app,
-     * regardless of qualifier.
-     *
-     * ```kotlin
-     * val handlers = conn.getServices<EventHandler>()
-     * ```
-     */
+    /** Retrieves all registered instances of type [T], regardless of qualifier. */
     inline fun <reified T : Any> getServices(): List<T> =
         resolveAllServices(T::class)
 
-    /**
-     * Internal resolver for getServices.
-     */
     @PublishedApi
     internal fun <T : Any> resolveAllServices(kClass: KClass<T>): List<T> =
         app?.serviceContainer?.getAll(kClass) ?: emptyList()
 
-    /**
-     * Internal recursive resolver shared by all public retrieval methods.
-     */
     @PublishedApi
     internal fun <T : Any> resolveService(kClass: KClass<T>, qualifier: Any? = null): T? =
         resolveServiceFromApp(app, kClass, qualifier)
 
-    /**
-     * Walks up the app parent chain to resolve a service.
-     */
-    private fun <T : Any> resolveServiceFromApp(current: Colleen?, kClass: KClass<T>, qualifier: Any?): T? {
+    private tailrec fun <T : Any> resolveServiceFromApp(
+        current: Colleen?,
+        kClass: KClass<T>,
+        qualifier: Any?,
+    ): T? {
         if (current == null) return null
         return current.serviceContainer.getOrNull(kClass, qualifier)
             ?: resolveServiceFromApp(current.parent, kClass, qualifier)
     }
 
     // ========================================================================
-    // Java-compatible Service Injection
+    // Service injection (Java-compatible)
     // ========================================================================
 
     /**
      * Retrieves a required service instance (Java-compatible).
      *
-     * @param clazz     the service class.
-     * @param qualifier optional qualifier to distinguish instances of the same type.
      * @throws IllegalStateException if the service is not registered.
      */
     @JvmOverloads
@@ -358,12 +300,7 @@ class WsConnection internal constructor(
         resolveService(clazz.kotlin, qualifier)
             ?: error("Service ${clazz.simpleName}(qualifier=$qualifier) not registered")
 
-    /**
-     * Retrieves an optional service instance (Java-compatible), or `null` if not registered.
-     *
-     * @param clazz     the service class.
-     * @param qualifier optional qualifier to distinguish instances of the same type.
-     */
+    /** Retrieves an optional service instance (Java-compatible), or null if not registered. */
     @JvmOverloads
     fun <T : Any> getServiceOrNull(clazz: Class<T>, qualifier: Any? = null): T? =
         resolveService(clazz.kotlin, qualifier)
@@ -374,124 +311,105 @@ class WsConnection internal constructor(
 
     /**
      * Sends a text message to the remote peer.
+     * Thread-safe; blocks until the message is written.
      *
-     * This method is thread-safe and blocks until the message is sent.
-     *
-     * @throws IOException if the connection is closed or the write fails
+     * @throws IOException if the connection is closed or the write fails.
      */
     @Throws(IOException::class)
-    fun send(text: String) {
-        sendLock.withLock {
-            ensureOpen()
-            try {
-                channel.sendText(text)
-            } catch (e: IOException) {
-                close(WsCloseReason.ClientDisconnected)
-                throw e
-            }
+    fun send(text: String): Unit = sendLock.withLock {
+        ensureOpen()
+        try {
+            channel.sendText(text)
+        } catch (e: IOException) {
+            close(WsCloseReason.ClientDisconnected)
+            throw e
         }
     }
 
     /**
      * Sends a binary message to the remote peer.
+     * Thread-safe; blocks until the message is written.
      *
-     * This method is thread-safe and blocks until the message is sent.
-     *
-     * @throws IOException if the connection is closed or the write fails
+     * @throws IOException if the connection is closed or the write fails.
      */
     @Throws(IOException::class)
-    fun send(data: ByteArray) {
-        sendLock.withLock {
-            ensureOpen()
-            try {
-                channel.sendBinary(ByteBuffer.wrap(data))
-            } catch (e: IOException) {
-                close(WsCloseReason.ClientDisconnected)
-                throw e
-            }
+    fun send(data: ByteArray): Unit = sendLock.withLock {
+        ensureOpen()
+        try {
+            channel.sendBinary(ByteBuffer.wrap(data))
+        } catch (e: IOException) {
+            close(WsCloseReason.ClientDisconnected)
+            throw e
         }
     }
 
     // ========================================================================
-    // Callbacks
+    // Callback registration
     // ========================================================================
 
     /**
      * Registers a callback for incoming messages.
-     *
-     * Multiple callbacks may be registered.
-     * Callbacks are invoked in registration order.
+     * Multiple callbacks may be registered; they are invoked in registration order.
      */
     fun onMessage(callback: Consumer<WsMessage>) {
-        synchronized(messageCallbacks) {
-            messageCallbacks.add(callback)
+        messageCallbacksLock.withLock { messageCallbacks.add(callback) }
+    }
+
+    fun onTextMessage(callback: Consumer<String>) {
+        onMessage { msg ->
+            if (msg is WsMessage.Text) callback.accept(msg.data)
+        }
+    }
+
+    fun onBinaryMessage(callback: Consumer<ByteArray>) {
+        onMessage { msg ->
+            if (msg is WsMessage.Binary) callback.accept(msg.data)
         }
     }
 
     /**
-     * Registers a callback invoked when the connection is closed.
+     * Registers a callback invoked when the connection closes.
      *
-     * If the connection is already closed AND the close procedure has finished
-     * collecting callbacks, the callback is invoked immediately with the close reason.
-     * Otherwise, the callback is added to the pending list for close() to invoke.
-     *
-     * Multiple callbacks may be registered.
+     * If [close] has already drained the callback list, the callback is invoked
+     * immediately with the final [WsCloseReason]. Otherwise, it is queued and
+     * invoked by [close]. Either way, the callback is invoked exactly once.
      */
     fun onClose(callback: Consumer<WsCloseReason>) {
-        synchronized(closeCallbacks) {
-            if (closeCallbacksCollected) {
-                // close() has already collected and cleared the list;
-                // invoke immediately with the final reason.
-                runCatching { callback.accept(closeReason.get()) }
+        closeCallbacksLock.withLock {
+            if (closeCallbacksDrained) {
+                runCatching { callback.accept(closeReason) }
             } else {
-                // Either not yet closed, or close() is in progress but hasn't
-                // collected the callbacks yet. Either way, add to the list.
                 closeCallbacks.add(callback)
             }
         }
     }
 
-    /**
-     * Registers a callback for errors.
-     *
-     * Errors from message processing or the transport layer
-     * are delivered to registered error callbacks.
-     */
+    /** Registers a callback for transport or message-processing errors. */
     fun onError(callback: Consumer<Throwable>) {
-        synchronized(errorCallbacks) {
-            errorCallbacks.add(callback)
-        }
+        errorCallbacksLock.withLock { errorCallbacks.add(callback) }
     }
 
     // ========================================================================
-    // Internal — called by the server adapter
+    // Internal dispatch — called by the server adapter
     // ========================================================================
 
-    /**
-     * Dispatches an incoming message to registered callbacks.
-     */
     internal fun dispatchMessage(message: WsMessage) {
         if (isClosed) return
-        val callbacks: List<Consumer<WsMessage>>
-        synchronized(messageCallbacks) {
-            callbacks = ArrayList(messageCallbacks)
-        }
-        callbacks.forEach { cb ->
-            runCatching { cb.accept(message) }.onFailure { dispatchError(it) }
-        }
+        val snapshot = messageCallbacksLock.withLock { ArrayList(messageCallbacks) }
+        snapshot.forEach { cb -> runCatching { cb.accept(message) }.onFailure { dispatchError(it) } }
     }
 
-    /**
-     * Dispatches an error to registered callbacks.
-     */
     internal fun dispatchError(error: Throwable) {
         if (isClosed) return
-        val callbacks: List<Consumer<Throwable>>
-        synchronized(errorCallbacks) {
-            callbacks = ArrayList(errorCallbacks)
+        val snapshot = errorCallbacksLock.withLock { ArrayList(errorCallbacks) }
+        if (snapshot.isEmpty()) {
+            logger.warn("Unhandled WebSocket error (no onError handler registered)", error)
+            return
         }
-        callbacks.forEach { cb ->
-            runCatching { cb.accept(error) }
+        snapshot.forEach { cb ->
+            runCatching { cb.accept(error) }.onFailure { callbackEx ->
+                logger.error("onError callback threw an exception", callbackEx)
+            }
         }
     }
 
@@ -499,55 +417,57 @@ class WsConnection internal constructor(
     // Lifecycle
     // ========================================================================
 
-    override fun close() {
-        close(WsCloseReason.Normal)
-    }
+    override fun close() = close(WsCloseReason.Normal)
 
     /**
      * Closes the connection with the given reason.
      *
-     * This method is idempotent — only the first call takes effect.
-     * Close callbacks are invoked exactly once.
+     * Idempotent — only the first call takes effect.
+     * Close callbacks are invoked exactly once, in registration order.
      */
     fun close(reason: WsCloseReason) {
         if (!closed.compareAndSet(false, true)) return
 
-        // Send close frame BEFORE acquiring the closeCallbacks lock
-        // to avoid holding the lock during potentially blocking network I/O.
-        val code = when (reason) {
-            is WsCloseReason.Normal -> 1000
-            is WsCloseReason.Protocol -> reason.code
-            else -> 1001
-        }
-        val msg = when (reason) {
-            is WsCloseReason.Normal -> ""
-            is WsCloseReason.Protocol -> reason.reason
-            is WsCloseReason.ClientDisconnected -> "Client disconnected"
-            is WsCloseReason.Error -> reason.cause.message ?: "Error"
-        }
-        runCatching { channel.close(code, msg) }
+        // Send the close frame outside the lock to avoid holding it
+        // during potentially blocking network I/O.
+        runCatching { channel.close(closeCode(reason), closeMessage(reason)) }
 
-        // Set reason and collect callbacks atomically under the closeCallbacks lock.
-        // This ensures that a concurrent onClose() call always sees the correct reason.
-        val callbacks: List<Consumer<WsCloseReason>>
-        synchronized(closeCallbacks) {
-            closeReason.compareAndSet(WsCloseReason.Normal, reason)
-            callbacks = ArrayList(closeCallbacks)
+        // Inside the lock: record the reason, snapshot and drain the callback list,
+        // then raise the drained flag. This ensures a concurrent onClose() call either:
+        //   (a) sees closeCallbacksDrained == false → adds to the list → we invoke it, or
+        //   (b) sees closeCallbacksDrained == true  → invokes immediately with correct reason.
+        val callbacks = closeCallbacksLock.withLock {
+            closeReason = reason
+            val snapshot = ArrayList(closeCallbacks)
             closeCallbacks.clear()
-            closeCallbacksCollected = true
+            closeCallbacksDrained = true
+            snapshot
         }
-        synchronized(messageCallbacks) { messageCallbacks.clear() }
-        synchronized(errorCallbacks) { errorCallbacks.clear() }
 
-        val finalReason = closeReason.get()
-        callbacks.forEach { cb ->
-            runCatching { cb.accept(finalReason) }
-        }
+        callbacks.forEach { cb -> runCatching { cb.accept(reason) } }
+
+        messageCallbacksLock.withLock { messageCallbacks.clear() }
+        errorCallbacksLock.withLock { errorCallbacks.clear() }
     }
 
+    // ========================================================================
+    // Helpers
+    // ========================================================================
+
     private fun ensureOpen() {
-        if (isClosed) {
-            throw IOException("WebSocket connection closed")
-        }
+        if (isClosed) throw IOException("WebSocket connection closed")
+    }
+
+    private fun closeCode(reason: WsCloseReason): Int = when (reason) {
+        is WsCloseReason.Normal -> 1000
+        is WsCloseReason.Protocol -> reason.code
+        else -> 1001
+    }
+
+    private fun closeMessage(reason: WsCloseReason): String = when (reason) {
+        is WsCloseReason.Normal -> ""
+        is WsCloseReason.Protocol -> reason.reason
+        is WsCloseReason.ClientDisconnected -> "Client disconnected"
+        is WsCloseReason.Error -> reason.cause.message ?: "Error"
     }
 }

@@ -96,7 +96,7 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
     /**
      * WebSocket handler responsible for all WS lifecycle management.
      */
-    private val wsHandler = UndertowWebSocketHandler(config, wsConfig)
+    private val wsHandler = UndertowWsHandler(config, wsConfig)
 
     /**
      * Starts the HTTP server.
