@@ -40,16 +40,30 @@ sealed class WsMessage {
  * Describes why a WebSocket connection was closed.
  */
 sealed class WsCloseReason {
+    /** Normal closure (RFC 6455 code 1000). */
     object Normal : WsCloseReason() {
         override fun toString() = "Normal"
     }
 
+    /** Endpoint going away, e.g. server shutdown or navigation (RFC 6455 code 1001). */
+    object GoingAway : WsCloseReason() {
+        override fun toString() = "GoingAway"
+    }
+
+    /** Message too big (RFC 6455 code 1009). */
+    object MessageTooBig : WsCloseReason() {
+        override fun toString() = "MessageTooBig"
+    }
+
+    /** Transport-level disconnection (IO error, no close frame received). */
     object ClientDisconnected : WsCloseReason() {
         override fun toString() = "ClientDisconnected"
     }
 
+    /** An unexpected error occurred (RFC 6455 code 1011). */
     data class Error(val cause: Throwable) : WsCloseReason()
 
+    /** Any other protocol-level close with explicit code and reason. */
     data class Protocol(val code: Int, val reason: String) : WsCloseReason()
 }
 
@@ -323,6 +337,9 @@ class WsConnection internal constructor(
         } catch (e: IOException) {
             close(WsCloseReason.ClientDisconnected)
             throw e
+        } catch (e: Exception) {
+            close(WsCloseReason.Error(e))
+            throw IOException("WebSocket send failed", e)
         }
     }
 
@@ -340,6 +357,9 @@ class WsConnection internal constructor(
         } catch (e: IOException) {
             close(WsCloseReason.ClientDisconnected)
             throw e
+        } catch (e: Exception) {
+            close(WsCloseReason.Error(e))
+            throw IOException("WebSocket send failed", e)
         }
     }
 
@@ -377,7 +397,9 @@ class WsConnection internal constructor(
     fun onClose(callback: Consumer<WsCloseReason>) {
         closeCallbacksLock.withLock {
             if (closeCallbacksDrained) {
-                runCatching { callback.accept(closeReason) }
+                runCatching { callback.accept(closeReason) }.onFailure { e ->
+                    logger.error("onClose callback threw an exception", e)
+                }
             } else {
                 closeCallbacks.add(callback)
             }
@@ -400,8 +422,13 @@ class WsConnection internal constructor(
     }
 
     internal fun dispatchError(error: Throwable) {
-        if (isClosed) return
         val snapshot = errorCallbacksLock.withLock { ArrayList(errorCallbacks) }
+        if (isClosed) {
+            // Connection already closed — callbacks may have been cleared,
+            // but still log so the error is not silently lost.
+            logger.warn("WebSocket error after connection closed", error)
+            return
+        }
         if (snapshot.isEmpty()) {
             logger.warn("Unhandled WebSocket error (no onError handler registered)", error)
             return
@@ -430,7 +457,13 @@ class WsConnection internal constructor(
 
         // Send the close frame outside the lock to avoid holding it
         // during potentially blocking network I/O.
-        runCatching { channel.close(closeCode(reason), closeMessage(reason)) }
+        try {
+            channel.close(closeCode(reason), closeMessage(reason))
+        } catch (_: IOException) {
+            // Expected — remote peer may have already disconnected
+        } catch (e: Exception) {
+            logger.debug("Unexpected error sending WebSocket close frame", e)
+        }
 
         // Inside the lock: record the reason, snapshot and drain the callback list,
         // then raise the drained flag. This ensures a concurrent onClose() call either:
@@ -444,7 +477,11 @@ class WsConnection internal constructor(
             snapshot
         }
 
-        callbacks.forEach { cb -> runCatching { cb.accept(reason) } }
+        callbacks.forEach { cb ->
+            runCatching { cb.accept(reason) }.onFailure { e ->
+                logger.error("onClose callback threw an exception", e)
+            }
+        }
 
         messageCallbacksLock.withLock { messageCallbacks.clear() }
         errorCallbacksLock.withLock { errorCallbacks.clear() }
@@ -460,14 +497,19 @@ class WsConnection internal constructor(
 
     private fun closeCode(reason: WsCloseReason): Int = when (reason) {
         is WsCloseReason.Normal -> 1000
+        is WsCloseReason.GoingAway -> 1001
+        is WsCloseReason.MessageTooBig -> 1009
+        is WsCloseReason.ClientDisconnected -> 1001
+        is WsCloseReason.Error -> 1011
         is WsCloseReason.Protocol -> reason.code
-        else -> 1001
     }
 
     private fun closeMessage(reason: WsCloseReason): String = when (reason) {
         is WsCloseReason.Normal -> ""
-        is WsCloseReason.Protocol -> reason.reason
+        is WsCloseReason.GoingAway -> "Going away"
+        is WsCloseReason.MessageTooBig -> "Message too big"
         is WsCloseReason.ClientDisconnected -> "Client disconnected"
-        is WsCloseReason.Error -> reason.cause.message ?: "Error"
+        is WsCloseReason.Error -> reason.cause.message ?: "Unexpected error"
+        is WsCloseReason.Protocol -> reason.reason
     }
 }

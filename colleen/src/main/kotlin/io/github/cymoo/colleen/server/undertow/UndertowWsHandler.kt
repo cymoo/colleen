@@ -111,6 +111,11 @@ internal class UndertowWsHandler(
             // Track connection for graceful shutdown
             activeWsConnections.add(connection)
 
+            // Increment count only when connection is truly established
+            if (wsConfig.maxConnections > 0) {
+                wsConnectionCount.incrementAndGet()
+            }
+
             // Create per-connection ordered executor for message dispatch
             val orderedDispatcher = OrderedExecutor(wsExecutor)
 
@@ -134,7 +139,7 @@ internal class UndertowWsHandler(
                         val sinceLastPong = System.currentTimeMillis() - pongTracker.get()
                         if (sinceLastPong > wsConfig.pingIntervalMs + wsConfig.pingTimeoutMs) {
                             // Pong timeout — close the dead connection
-                            connection.close(WsCloseReason.Protocol(1001, "Ping timeout"))
+                            connection.close(WsCloseReason.GoingAway)
                             return@scheduleAtFixedRate
                         }
                         WebSockets.sendPing(ByteBuffer.allocate(0), wsChannel, null)
@@ -170,36 +175,25 @@ internal class UndertowWsHandler(
                     } else {
                         WsCloseReason.Protocol(cm.code, cm.reason ?: "")
                     }
-                    connection.close(reason)
+                    orderedDispatcher.execute { connection.close(reason) }
                 }
 
                 override fun onError(channel: WebSocketChannel, error: Throwable) {
-                    if (isMessageTooLarge(error)) {
-                        runCatching { WebSockets.sendCloseBlocking(1009, "Message Too Big", channel) }
-                        connection.close(WsCloseReason.Protocol(1009, "Message Too Big"))
-                    } else if (error is IOException) {
-                        connection.close(WsCloseReason.ClientDisconnected)
-                    } else {
-                        connection.dispatchError(error)
-                        connection.close(WsCloseReason.Error(error))
+                    orderedDispatcher.execute {
+                        if (isMessageTooLarge(error)) {
+                            connection.close(WsCloseReason.MessageTooBig)
+                        } else if (error is IOException) {
+                            connection.close(WsCloseReason.ClientDisconnected)
+                        } else {
+                            connection.dispatchError(error)
+                            connection.close(WsCloseReason.Error(error))
+                        }
                     }
                 }
 
                 override fun onFullPongMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
                     lastPong?.set(System.currentTimeMillis())
                     message.data.free()
-                }
-
-                override fun onFullPingMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                    val data = message.data
-                    try {
-                        WebSockets.sendPongBlocking(
-                            data.resource.firstOrNull() ?: ByteBuffer.allocate(0),
-                            channel
-                        )
-                    } finally {
-                        data.free()
-                    }
                 }
             })
 
@@ -208,7 +202,9 @@ internal class UndertowWsHandler(
             connection.onClose {
                 capturedPingFuture?.cancel(false)
                 activeWsConnections.remove(connection)
-                wsConnectionCount.decrementAndGet()
+                if (wsConfig.maxConnections > 0) {
+                    wsConnectionCount.decrementAndGet()
+                }
             }
 
             wsChannel.addCloseTask {
@@ -225,9 +221,9 @@ internal class UndertowWsHandler(
         val handshakeHandler = object : WebSocketProtocolHandshakeHandler(callback) {
             override fun handleRequest(exchange: HttpServerExchange) {
                 if (wsConfig.maxConnections > 0) {
-                    val current = wsConnectionCount.incrementAndGet()
-                    if (current > wsConfig.maxConnections) {
-                        wsConnectionCount.decrementAndGet()
+                    // Optimistic check — exact enforcement happens in the callback via the
+                    // activeWsConnections size, but this prevents unnecessary handshake work.
+                    if (wsConnectionCount.get() >= wsConfig.maxConnections) {
                         exchange.statusCode = 503
                         exchange.responseSender.send("Try Again Later")
                         return
@@ -247,7 +243,7 @@ internal class UndertowWsHandler(
     fun closeAllConnections() {
         val snapshot = ArrayList(activeWsConnections)
         snapshot.forEach { conn ->
-            runCatching { conn.close(WsCloseReason.Normal) }
+            runCatching { conn.close(WsCloseReason.GoingAway) }
         }
         activeWsConnections.clear()
     }

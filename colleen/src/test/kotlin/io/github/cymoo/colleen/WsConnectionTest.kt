@@ -577,23 +577,43 @@ class WsConnectionTest {
         }
 
         @Test
-        fun `Error sends code 1001`() {
+        fun `Error sends code 1011`() {
             val channel = createTestChannel()
             val conn = createConnection(channel)
 
             conn.close(WsCloseReason.Error(RuntimeException("test")))
-            assertEquals(1001, channel.closedCode)
+            assertEquals(1011, channel.closedCode)
             assertEquals("test", channel.closedReason)
         }
 
         @Test
-        fun `Error with null message sends Error`() {
+        fun `Error with null message sends Unexpected error`() {
             val channel = createTestChannel()
             val conn = createConnection(channel)
 
             conn.close(WsCloseReason.Error(RuntimeException()))
+            assertEquals(1011, channel.closedCode)
+            assertEquals("Unexpected error", channel.closedReason)
+        }
+
+        @Test
+        fun `GoingAway sends code 1001`() {
+            val channel = createTestChannel()
+            val conn = createConnection(channel)
+
+            conn.close(WsCloseReason.GoingAway)
             assertEquals(1001, channel.closedCode)
-            assertEquals("Error", channel.closedReason)
+            assertEquals("Going away", channel.closedReason)
+        }
+
+        @Test
+        fun `MessageTooBig sends code 1009`() {
+            val channel = createTestChannel()
+            val conn = createConnection(channel)
+
+            conn.close(WsCloseReason.MessageTooBig)
+            assertEquals(1009, channel.closedCode)
+            assertEquals("Message too big", channel.closedReason)
         }
     }
 

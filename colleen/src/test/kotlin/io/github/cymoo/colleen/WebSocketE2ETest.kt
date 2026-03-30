@@ -1471,8 +1471,8 @@ class WebSocketGracefulShutdownE2ETest {
 
             // The client should receive a close frame
             assertTrue(listener.closeLatch.await(5, TimeUnit.SECONDS), "Should receive close after shutdown")
-            // Close code should be 1000 (Normal) since server closes gracefully
-            assertEquals(1000, listener.closeCode.get())
+            // Close code should be 1001 (GoingAway) since server closes gracefully on shutdown
+            assertEquals(1001, listener.closeCode.get())
         } catch (_: Exception) {
             app.stop()
         }
