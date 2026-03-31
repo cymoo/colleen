@@ -68,11 +68,8 @@ fun main() {
     // ========================================================================
 
     app.ws("/echo") { conn ->
-        conn.onMessage { msg ->
-            when (msg) {
-                is WsMessage.Text -> conn.send(msg.data)
-                is WsMessage.Binary -> conn.send(msg.data)
-            }
+        conn.onTextMessage { msg ->
+            conn.send(msg)
         }
 
         conn.onClose { reason ->
@@ -98,10 +95,8 @@ fun main() {
         // Announce join — broadcast is async, returns immediately
         broadcast(broadcastExecutor, connections, "[$room] $username joined (${connections.size} online)")
 
-        conn.onMessage { msg ->
-            if (msg is WsMessage.Text) {
-                broadcast(broadcastExecutor, connections, "[$room] $username: ${msg.data}")
-            }
+        conn.onTextMessage { msg ->
+            broadcast(broadcastExecutor, connections, "[$room] $username: $msg")
         }
 
         conn.onClose {
@@ -138,10 +133,8 @@ fun main() {
         val origin = conn.header("Origin") ?: "unknown"
         conn.send("Welcome, $user! (Origin: $origin)")
 
-        conn.onMessage { msg ->
-            if (msg is WsMessage.Text) {
-                conn.send("Secure echo: ${msg.data}")
-            }
+        conn.onTextMessage { msg ->
+            conn.send("Secure echo: $msg")
         }
     }
 
@@ -172,10 +165,8 @@ fun main() {
 
     adminApp.ws("/console") { conn ->
         conn.send("Welcome to admin console")
-        conn.onMessage { msg ->
-            if (msg is WsMessage.Text) {
-                conn.send("admin> ${msg.data}")
-            }
+        conn.onTextMessage { msg ->
+            conn.send("admin> $msg")
         }
     }
 
@@ -217,10 +208,8 @@ class NotificationController {
         val subscriber = conn.getStateOrNull<String>("subscriber") ?: "unknown"
         conn.send("Connected to notification stream (subscriber=$subscriber)")
 
-        conn.onMessage { msg ->
-            if (msg is WsMessage.Text) {
-                conn.send("Notification acknowledged: ${msg.data}")
-            }
+        conn.onTextMessage { msg ->
+            conn.send("Notification acknowledged: $msg")
         }
 
         conn.onClose { reason ->

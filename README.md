@@ -1158,11 +1158,8 @@ real-time communication.
 
 ```kotlin
 app.ws("/echo") { conn ->
-    conn.onMessage { msg ->
-        when (msg) {
-            is WsMessage.Text -> conn.send(msg.data)
-            is WsMessage.Binary -> conn.send(msg.data)
-        }
+    conn.onTextMessage { msg ->
+        conn.send(msg)
     }
     conn.onClose { reason ->
         println("Closed: $reason")
@@ -1186,8 +1183,8 @@ app.ws("/chat/{room}") { conn ->
     val room = conn.pathParam("room")     // "general"
     val name = conn.query("name")         // "Alice"
     val auth = conn.header("Authorization") // "Bearer token123"
-    conn.onMessage { msg ->
-        if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
+    conn.onTextMessage { msg ->
+        conn.send("[$room] $name: $msg")
     }
 }
 ```
@@ -1231,10 +1228,8 @@ app.ws("/chat/{room}") { conn ->
     val userId = conn.getState<Int>("userId")
     val room = conn.pathParam("room")
 
-    conn.onMessage { msg ->
-        if (msg is WsMessage.Text) {
-            chatService.broadcast(room!!, userId, msg.data)
-        }
+    conn.onTextMessage { msg ->
+        chatService.broadcast(room!!, userId, msg)
     }
 }
 ```
@@ -1282,17 +1277,6 @@ class NotificationController {
     @Ws("/live")
     fun live(conn: WsConnection) {
         conn.onMessage { msg -> /* ... */ }
-    }
-}
-```
-
-### WebSocket Configuration
-
-```kotlin
-app.config {
-    ws {
-        idleTimeoutMs = 600_000           // 10 minutes (default: 5 min)
-        maxMessageSizeBytes = 128 * 1024  // 128 KB (default: 64 KB)
     }
 }
 ```
@@ -2839,11 +2823,25 @@ app.config {
         // Request limits
         maxRequestSize = 30 * 1024 * 1024  // 30MB
         maxFileSize = 10 * 1024 * 1024     // 10MB per file
-        fileSizeThreshold = 256 * 1024      // 256KB before buffering to disk
+        fileSizeThreshold = 256 * 1024     // 256KB before buffering to disk
 
         // Timeouts (milliseconds)
         shutdownTimeout = 30_000
         idleTimeout = 30_000
+    }
+}
+```
+
+### WebSocket Configuration
+
+```kotlin
+app.config {
+    ws {
+        idleTimeoutMs = 300_000           // 5 min, set to 0 for no timeout
+        maxMessageSizeBytes = 64 * 1024   // 64 KB
+        pingIntervalMs = 30_000           // 30 seconds, set to 0 to disable ping/pong heartbeat
+        pingTimeoutMs = 10_000            // 10 seconds, only effective when pingIntervalMs > 0
+        maxConnections = 0                // 0 = unlimited (set an explicit cap in production)
     }
 }
 ```

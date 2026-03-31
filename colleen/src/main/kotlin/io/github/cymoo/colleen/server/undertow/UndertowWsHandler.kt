@@ -59,14 +59,12 @@ internal class UndertowWsHandler(
     private val threadCounter = AtomicInteger(0)
 
     /**
-     * Tracks all active WebSocket connections for graceful shutdown.
+     * Tracks all active WebSocket connections for graceful shutdown and connection limiting.
+     *
+     * This is the single source of truth for the active connection count.
+     * [ConcurrentHashMap.newKeySet] is used for O(1) add/remove/contains with safe concurrent access.
      */
     private val activeWsConnections: MutableSet<WsConnection> = ConcurrentHashMap.newKeySet()
-
-    /**
-     * Tracks the number of active WebSocket connections for connection limiting.
-     */
-    private val wsConnectionCount = AtomicInteger(0)
 
     /**
      * Scheduler for WebSocket ping/pong heartbeat.
@@ -157,7 +155,7 @@ internal class UndertowWsHandler(
 
     /**
      * Creates a [WsConnection] for the newly upgraded channel and registers it
-     * for connection-limit accounting and graceful shutdown tracking.
+     * for graceful shutdown tracking.
      */
     private fun createConnection(
         wsChannel: WebSocketChannel,
@@ -170,7 +168,6 @@ internal class UndertowWsHandler(
         val channel = UndertowWsChannel(wsChannel)
         val connection = WsConnection(channel, pathParams, queryParams, app, states.toMutableMap(), headers)
         activeWsConnections.add(connection)
-        if (wsConfig.maxConnections > 0) wsConnectionCount.incrementAndGet()
         return connection
     }
 
@@ -262,11 +259,12 @@ internal class UndertowWsHandler(
             }
 
             override fun onCloseMessage(cm: CloseMessage, channel: WebSocketChannel) {
-                // Map Undertow close codes to Colleen's close reason hierarchy.
-                val reason = if (cm.code == CloseMessage.NORMAL_CLOSURE) {
-                    WsCloseReason.Normal
-                } else {
-                    WsCloseReason.Protocol(cm.code, cm.reason ?: "")
+                // Map Undertow close codes to Colleen's close reason hierarchy per RFC 6455.
+                val reason = when (cm.code) {
+                    CloseMessage.NORMAL_CLOSURE -> WsCloseReason.Normal
+                    CloseMessage.GOING_AWAY -> WsCloseReason.GoingAway
+                    CloseMessage.MSG_TOO_BIG -> WsCloseReason.MessageTooBig
+                    else -> WsCloseReason.Protocol(cm.code, cm.reason ?: "")
                 }
                 dispatcher.execute { connection.close(reason) }
             }
@@ -297,7 +295,7 @@ internal class UndertowWsHandler(
      * Registers two complementary close hooks:
      *
      * 1. **[WsConnection.onClose]** — application-level cleanup: cancels the ping
-     *    task and removes the connection from tracking / accounting structures.
+     *    task and removes the connection from tracking structures.
      * 2. **[WebSocketChannel.addCloseTask]** — transport-level fallback: ensures
      *    the connection is closed if the underlying channel is torn down without a
      *    proper WebSocket close handshake (e.g. abrupt TCP disconnect).
@@ -310,7 +308,6 @@ internal class UndertowWsHandler(
         connection.onClose {
             pingFuture?.cancel(false)
             activeWsConnections.remove(connection)
-            if (wsConfig.maxConnections > 0) wsConnectionCount.decrementAndGet()
         }
         wsChannel.addCloseTask {
             connection.close(WsCloseReason.ClientDisconnected)
@@ -322,13 +319,17 @@ internal class UndertowWsHandler(
      * with HTTP 503 when the connection limit is reached, avoiding the cost of
      * completing a handshake only to immediately send a WS close frame.
      *
-     * Note: the pre-handshake check on [wsConnectionCount] is optimistic (no lock).
-     * The authoritative enforcement happens inside the callback via [activeWsConnections].
+     * [activeWsConnections].size is the authoritative connection count — no separate
+     * atomic counter is maintained, eliminating the risk of the two diverging.
+     *
+     * Note: the pre-handshake size check is optimistic (no lock). In a burst, slightly
+     * more connections than [WsConfig.maxConnections] may be admitted; the tradeoff
+     * avoids contention on the hot upgrade path.
      */
     private fun createHandshakeHandler(callback: WebSocketConnectionCallback): WebSocketProtocolHandshakeHandler {
         return object : WebSocketProtocolHandshakeHandler(callback) {
             override fun handleRequest(exchange: HttpServerExchange) {
-                if (wsConfig.maxConnections > 0 && wsConnectionCount.get() >= wsConfig.maxConnections) {
+                if (wsConfig.maxConnections > 0 && activeWsConnections.size >= wsConfig.maxConnections) {
                     exchange.statusCode = 503
                     exchange.responseSender.send("Try Again Later")
                     return
@@ -340,17 +341,25 @@ internal class UndertowWsHandler(
 
     /**
      * Extracts binary data from a pooled buffer message into a byte array.
+     *
+     * Avoids the double-copy that arises from [WebSockets.mergeBuffers] followed by
+     * a conditional array copy: instead, the total size is computed upfront and all
+     * source buffers are drained directly into a single pre-allocated [ByteArray].
      */
     @Suppress("DEPRECATION")
     private fun extractBinaryData(message: BufferedBinaryMessage): ByteArray {
         val data = message.data
         return try {
-            val merged = WebSockets.mergeBuffers(*data.resource)
-            if (merged.hasArray() && merged.arrayOffset() == 0 && merged.remaining() == merged.array().size) {
-                merged.array()
-            } else {
-                ByteArray(merged.remaining()).also { merged.get(it) }
+            val buffers = data.resource
+            val totalSize = buffers.sumOf { it.remaining() }
+            val result = ByteArray(totalSize)
+            var offset = 0
+            for (buf in buffers) {
+                val len = buf.remaining()
+                buf.get(result, offset, len)
+                offset += len
             }
+            result
         } finally {
             data.free()
         }

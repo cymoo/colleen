@@ -392,18 +392,33 @@ class WsConnection internal constructor(
     /**
      * Registers a callback invoked when the connection closes.
      *
-     * If [close] has already drained the callback list, the callback is invoked
-     * immediately with the final [WsCloseReason]. Otherwise, it is queued and
-     * invoked by [close]. Either way, the callback is invoked exactly once.
+     * To avoid holding [closeCallbacksLock] while executing user code (which could
+     * deadlock if the callback itself calls [onClose]), the implementation reads the
+     * drained state and close reason inside the lock, then invokes the callback outside:
+     *
+     * - If [close] has already drained the callback list ([closeCallbacksDrained] == true),
+     *   the callback is invoked immediately — but outside the lock — with the final
+     *   [WsCloseReason]. Both [closeCallbacksDrained] and [closeReason] are written inside
+     *   [closeCallbacksLock] before the lock is released, so reading them together inside
+     *   the lock guarantees a consistent view.
+     * - Otherwise, the callback is queued and invoked by [close].
+     *
+     * Either way, the callback is invoked exactly once.
      */
     fun onClose(callback: Consumer<WsCloseReason>) {
-        closeCallbacksLock.withLock {
+        val immediateReason: WsCloseReason? = closeCallbacksLock.withLock {
             if (closeCallbacksDrained) {
-                runCatching { callback.accept(closeReason) }.onFailure { e ->
-                    logger.error("onClose callback threw an exception", e)
-                }
+                closeReason  // captured inside lock; invoked below outside lock
             } else {
                 closeCallbacks.add(callback)
+                null
+            }
+        }
+        // Invoke outside the lock to prevent deadlock when the callback itself
+        // calls onClose (a legitimate use-case for chaining cleanup logic).
+        if (immediateReason != null) {
+            runCatching { callback.accept(immediateReason) }.onFailure { e ->
+                logger.error("onClose callback threw an exception", e)
             }
         }
     }
@@ -424,13 +439,13 @@ class WsConnection internal constructor(
     }
 
     internal fun dispatchError(error: Throwable) {
-        val snapshot = errorCallbacksLock.withLock { ArrayList(errorCallbacks) }
+        // Short-circuit early: if already closed, callbacks have been cleared.
+        // Log and return rather than acquiring the lock unnecessarily.
         if (isClosed) {
-            // Connection already closed — callbacks may have been cleared,
-            // but still log so the error is not silently lost.
             logger.warn("WebSocket error after connection closed", error)
             return
         }
+        val snapshot = errorCallbacksLock.withLock { ArrayList(errorCallbacks) }
         if (snapshot.isEmpty()) {
             logger.warn("Unhandled WebSocket error (no onError handler registered)", error)
             return

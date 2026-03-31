@@ -1125,11 +1125,8 @@ Colleen 内置 WebSocket 支持，提供基于回调的 API 实现双向实时�
 
 ```kotlin
 app.ws("/echo") { conn ->
-    conn.onMessage { msg ->
-        when (msg) {
-            is WsMessage.Text -> conn.send(msg.data)
-            is WsMessage.Binary -> conn.send(msg.data)
-        }
+    conn.onTextMessage { msg ->
+        conn.send(msg)
     }
     conn.onClose { reason ->
         println("连接关闭: $reason")
@@ -1152,8 +1149,8 @@ app.ws("/chat/{room}") { conn ->
     val room = conn.pathParam("room")     // "general"
     val name = conn.query("name")         // "Alice"
     val auth = conn.header("Authorization") // "Bearer token123"
-    conn.onMessage { msg ->
-        if (msg is WsMessage.Text) conn.send("[$room] $name: ${msg.data}")
+    conn.onTextMessage { msg ->
+        conn.send("[$room] $name: $msg")
     }
 }
 ```
@@ -1197,10 +1194,8 @@ app.ws("/chat/{room}") { conn ->
     val userId = conn.getState<Int>("userId")
     val room = conn.pathParam("room")
 
-    conn.onMessage { msg ->
-        if (msg is WsMessage.Text) {
-            chatService.broadcast(room!!, userId, msg.data)
-        }
+    conn.onTextMessage { msg ->
+        chatService.broadcast(room!!, userId, msg)
     }
 }
 ```
@@ -1247,17 +1242,6 @@ class NotificationController {
     @Ws("/live")
     fun live(conn: WsConnection) {
         conn.onMessage { msg -> /* ... */ }
-    }
-}
-```
-
-### WebSocket 配置
-
-```kotlin
-app.config {
-    ws {
-        idleTimeoutMs = 600_000           // 10 分钟（默认 5 分钟）
-        maxMessageSizeBytes = 128 * 1024  // 128 KB（默认 64 KB）
     }
 }
 ```
@@ -2862,6 +2846,20 @@ app.config {
         shutdownTimeout = 30_000
         idleTimeout = 30_000
     }
+}
+```
+
+### WebSocket 配置
+
+```kotlin
+app.config {
+  ws {
+    idleTimeoutMs = 300_000           // 5 分钟，0 = 无超时
+    maxMessageSizeBytes = 64 * 1024   // 64 KB
+    pingIntervalMs = 30_000           // 30 seconds, 0 = 禁用 ping/pong 心跳
+    pingTimeoutMs = 10_000            // 10 seconds, 仅当 pingIntervalMs > 0 时生效
+    maxConnections = 0                // 0 = 无限制（生产环境建议设置明确上限）
+  }
 }
 ```
 
