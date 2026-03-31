@@ -1,50 +1,111 @@
-# Colleen Web 框架
+<div align="center">
+
+# Colleen
+
+**轻量级、类型安全的 Kotlin / Java Web 框架**
+
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.cymoo/colleen?color=blue)](https://central.sonatype.com/artifact/io.github.cymoo/colleen)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Java 21+](https://img.shields.io/badge/Java-21%2B-orange)](https://openjdk.org/projects/jdk/21/)
+
+*三行代码启动，零魔法，完全掌控。*
 
 [English Documentation](README.md)
 
-## 目录
+</div>
 
-1. [简介](#简介)
-2. [快速开始](#快速开始)
-3. [示例](#示例)
-4. [路由](#路由)
-5. [参数提取](#参数提取)
-6. [请求处理](#请求处理)
-7. [WebSocket](#websocket)
-8. [数据验证](#数据验证)
-9. [中间件](#中间件)
-10. [依赖注入](#依赖注入)
-11. [错误处理](#错误处理)
-12. [事件系统](#事件系统)
-13. [子应用](#子应用)
-14. [OpenAPI 文档](#openapi-文档)
-15. [测试](#测试)
-16. [Java 支持](#java-支持)
-17. [应用配置](#应用配置)
-18. [生产建议](#生产建议)
+```kotlin
+fun main() {
+    val app = Colleen()
+    app.get("/") { "hello world" }
+    app.listen(8000)
+}
+```
+
+## 为什么选择 Colleen？
+
+多数 Web 框架让你在 **简单但受限** 和 **强大但复杂** 之间二选一。
+
+Colleen 两者兼得 —— 简洁的 API，齐全的功能，运行在 Java 21+ 虚拟线程上。
+
+- 🎯 **类型安全的参数提取** — Path、Query、Form、JSON、Header、Cookie 自动提取并转换类型
+- 🧅 **对称执行的中间件** — 即使发生异常，after 逻辑仍保证执行，无需 `try/finally`
+- 🔌 **内置 WebSocket & SSE** — 支持回调、中间件、路径参数的实时通信
+- 📖 **自动生成 OpenAPI 文档** — 一行代码即可启用 Swagger UI，无需额外注解
+- ✅ **声明式数据验证** — 流式 DSL，支持字段级错误聚合
+- 💉 **显式依赖注入** — 无反射、无类路径扫描，只需 `app.provide { ... }`
+- 🛡️ **11 个内置中间件** — CORS、限流、认证、安全头、签名 Cookie 等开箱即用
+- ☕ **完整的 Java 支持** — 兼容 Java Record、Lambda 与方法引用
+- 🧩 **子应用架构** — 独立挂载应用，隔离中间件、服务与错误处理
+- 🧪 **进程内测试** — TestClient 无需网络即可测试
+
+### 快速一览
+
+**类型安全的参数** — 从请求中自动提取：
+
+```kotlin
+fun getUser(id: Path<Int>, active: Query<Boolean?>): User = ...
+app.get("/users/{id}", ::getUser)
+// 缺少必需参数 → 400；可空参数缺失 → null
+```
+
+**有保障的中间件** — 即使 handler 抛异常，after 逻辑仍会执行：
+
+```kotlin
+val timing: Middleware = { ctx, next ->
+    val start = System.nanoTime()
+    next()  // after 逻辑始终执行
+    ctx.header("X-Response-Time", "${(System.nanoTime() - start) / 1_000_000}ms")
+}
+```
+
+**WebSocket** — 支持路径参数、查询参数和中间件：
+
+```kotlin
+app.ws("/chat/{room}") { conn ->
+    val room = conn.pathParam("room")
+    conn.onTextMessage { msg -> conn.send("[$room] $msg") }
+}
+```
+
+**数据验证** — 声明式，支持完整的错误聚合：
+
+```kotlin
+expect {
+    field("email", user.email).required().email()
+    field("age", user.age).between(18, 120)
+    field("password", user.password).required().minSize(8)
+        .matches(Regex(".*[A-Z].*")).message("密码必须包含大写字母")
+}
+```
+
+**OpenAPI** — 一行代码启用 Swagger UI：
+
+```kotlin
+app.openApi()  // → Swagger UI: http://localhost:8000/docs
+```
+
+### 设计理念
+
+| | 原则 | 具体实践 |
+|---|------|---------|
+| 💡 | **显式优于隐式** | 无隐藏配置，无类路径魔法 |
+| 🔄 | **同步优于异步** | 虚拟线程提供并发能力，无需回调 |
+| 🔒 | **类型安全不可或缺** | 编译期捕获错误，而非半夜线上报警 |
+| 📖 | **清晰本身就是 feature** | 半年后回看代码，依然一目了然 |
+| 🚫 | **魔法是负债** | 每个行为都可追溯到你写的代码 |
 
 ---
 
-## 简介
+## 目录
 
-Colleen 是一个轻量级、类型安全的 Kotlin / Java Web 框架。
+**快速上手** — [快速开始](#快速开始) · [示例](#示例)
 
-主要特点：
+**核心功能** — [路由](#路由) · [参数提取](#参数提取) · [请求处理](#请求处理)
 
-- 显式配置
-- 可组合的中间件
-- 自动参数提取
-- 清晰直接的依赖注入
-- 自动生成 OpenAPI 文档
-- 基于虚拟线程的同步请求处理模型
+**进阶特性** — [WebSocket](#websocket) · [数据验证](#数据验证) · [中间件](#中间件) · [依赖注入](#依赖注入) · [错误处理](#错误处理) · [事件系统](#事件系统) · [子应用](#子应用) · [OpenAPI 文档](#openapi-文档)
 
-设计理念：
-
-- 显式优于隐式
-- 同步优于异步
-- 类型安全不可或缺
-- 清晰本身就是 feature
-- 魔法是负债
+**更多** — [测试](#测试) · [Java 支持](#java-支持) · [应用配置](#应用配置) · [生产建议](#生产建议)
 
 ---
 
@@ -282,6 +343,7 @@ Colleen 提供了一组完整示例，覆盖常见功能与集成方式：
 - **[sub-app](examples/sub-app/src/main/kotlin/Main.kt)** - 子应用架构示例，支持独立中间件、服务与错误处理
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient 使用示例
 - **[validator](examples/validator/src/main/kotlin/Main.kt)** - Validator 使用示例
+
 
 ---
 

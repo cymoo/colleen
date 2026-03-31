@@ -1,52 +1,111 @@
-# Colleen Web Framework
+<div align="center">
+
+# Colleen
+
+**A lightweight, type-safe web framework for Kotlin and Java**
+
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.cymoo/colleen?color=blue)](https://central.sonatype.com/artifact/io.github.cymoo/colleen)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Java 21+](https://img.shields.io/badge/Java-21%2B-orange)](https://openjdk.org/projects/jdk/21/)
+
+*Three lines to start. Zero magic. Full control.*
 
 [中文文档](README-zh.md)
 
-## Table of Contents
+</div>
 
-1. [Introduction](#introduction)
-2. [Quick Start](#quick-start)
-3. [Examples](#examples)
-4. [Routing](#routing)
-5. [Parameter Extraction](#parameter-extraction)
-6. [Request Handling](#request-handling)
-7. [WebSocket](#websocket)
-8. [Validation](#validation)
-9. [Middleware](#middleware)
-10. [Dependency Injection](#dependency-injection)
-11. [Error Handling](#error-handling)
-12. [Events System](#events-system)
-13. [Sub-Applications](#sub-applications)
-14. [OpenAPI Documentation](#openapi-documentation)
-15. [Testing](#testing)
-16. [Java Support](#java-support)
-17. [Configuration](#configuration)
-18. [Production Notes](#production-notes)
+```kotlin
+fun main() {
+    val app = Colleen()
+    app.get("/") { "hello world" }
+    app.listen(8000)
+}
+```
+
+## Why Colleen?
+
+Most web frameworks ask you to choose: **simple but limited**, or **powerful but complex**.
+
+Colleen gives you both — a clean, minimal API with the features you actually need, running on Java 21+ virtual threads.
+
+- 🎯 **Type-safe parameter extraction** — Path, query, form, JSON, headers, and cookies are automatically extracted and typed
+- 🧅 **Symmetric middleware** — After-logic always runs, even when exceptions occur. No `try/finally` needed
+- 🔌 **WebSocket & SSE built-in** — Real-time support with callbacks, middleware, and path parameters
+- 📖 **Auto-generated OpenAPI docs** — Swagger UI from your route definitions, no extra annotations
+- ✅ **Declarative validation** — Fluent DSL with field-level error aggregation
+- 💉 **Explicit dependency injection** — No reflection, no classpath scanning, just `app.provide { ... }`
+- 🛡️ **11 built-in middleware** — CORS, rate limiting, auth, security headers, signed cookies, and more
+- ☕ **Full Java support** — Works with Java records, lambdas, and method references
+- 🧩 **Sub-applications** — Mount independent apps with isolated middleware, services, and error handling
+- 🧪 **In-process testing** — TestClient for fast, networkless testing
+
+### At a Glance
+
+**Type-safe parameters** — automatically extracted from the request:
+
+```kotlin
+fun getUser(id: Path<Int>, active: Query<Boolean?>): User = ...
+app.get("/users/{id}", ::getUser)
+// Missing required param → 400 Bad Request; nullable param → null if absent
+```
+
+**Middleware with guarantees** — after-logic runs even if the handler throws:
+
+```kotlin
+val timing: Middleware = { ctx, next ->
+    val start = System.nanoTime()
+    next()  // after-logic always runs
+    ctx.header("X-Response-Time", "${(System.nanoTime() - start) / 1_000_000}ms")
+}
+```
+
+**WebSocket** — with path params, query params, and middleware:
+
+```kotlin
+app.ws("/chat/{room}") { conn ->
+    val room = conn.pathParam("room")
+    conn.onTextMessage { msg -> conn.send("[$room] $msg") }
+}
+```
+
+**Validation** — declarative, with full error aggregation:
+
+```kotlin
+expect {
+    field("email", user.email).required().email()
+    field("age", user.age).between(18, 120)
+    field("password", user.password).required().minSize(8)
+        .matches(Regex(".*[A-Z].*")).message("Must contain uppercase")
+}
+```
+
+**OpenAPI** — one line for Swagger UI:
+
+```kotlin
+app.openApi()  // → Swagger UI at http://localhost:8000/docs
+```
+
+### Design Principles
+
+| | Principle | In practice |
+|---|-----------|-------------|
+| 💡 | **Explicit > Implicit** | No hidden config, no classpath magic |
+| 🔄 | **Synchronous > Asynchronous** | Virtual threads give concurrency without callbacks |
+| 🔒 | **Type safety is not optional** | Catch errors at compile time, not at midnight |
+| 📖 | **Clarity is a feature** | Read your code six months later and still understand it |
+| 🚫 | **Magic is a liability** | Every behavior is traceable to code you wrote |
 
 ---
 
-## Introduction
+## Table of Contents
 
-Colleen is a lightweight, type-safe web framework for Kotlin and Java.
+**Getting Started** — [Quick Start](#quick-start) · [Examples](#examples)
 
-It emphasizes:
+**Core** — [Routing](#routing) · [Parameter Extraction](#parameter-extraction) · [Request Handling](#request-handling)
 
-- Explicit configuration
-- Composable middleware
-- Automatic parameter extraction
-- Clear dependency injection
-- Automatic OpenAPI schema generation
-- Synchronous request handling on virtual threads
+**Features** — [WebSocket](#websocket) · [Validation](#validation) · [Middleware](#middleware) · [Dependency Injection](#dependency-injection) · [Error Handling](#error-handling) · [Events System](#events-system) · [Sub-Applications](#sub-applications) · [OpenAPI Documentation](#openapi-documentation)
 
-Design principles:
-
-- Explicit is better than implicit
-- Synchronous is better than asynchronous
-- Type safety is not optional
-- Clarity is a feature
-- Magic is a liability
-
-The goal is not to maximize features, but to maximize understandability and control.
+**More** — [Testing](#testing) · [Java Support](#java-support) · [Configuration](#configuration) · [Production Notes](#production-notes)
 
 ---
 
@@ -296,6 +355,7 @@ Colleen comes with comprehensive examples demonstrating various features and int
   middleware, error handling, and service
 - **[testing](examples/testing/src/main/kotlin/Main.kt)** - TestClient usage for application testing
 - **[validator](examples/validator/src/main/kotlin/Main.kt)** - Validator usage 
+
 
 ---
 
