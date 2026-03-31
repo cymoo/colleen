@@ -46,7 +46,7 @@ Colleen 两者兼得 —— 简洁的 API，齐全的功能，运行在 Java 21+
 ```kotlin
 fun getUser(id: Path<Int>, active: Query<Boolean?>): User = ...
 app.get("/users/{id}", ::getUser)
-// 缺少必需参数 → 400；可空参数缺失 → null
+// 缺少必需参数 → 400 Bad Request；可空参数缺失 → null
 ```
 
 **有保障的中间件** — 即使 handler 抛异常，after 逻辑仍会执行：

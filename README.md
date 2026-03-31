@@ -46,10 +46,10 @@ Colleen gives you both — a clean, minimal API with the features you actually n
 ```kotlin
 fun getUser(id: Path<Int>, active: Query<Boolean?>): User = ...
 app.get("/users/{id}", ::getUser)
-// Missing required param → 400 Bad Request; nullable param → null if absent
+// Missing required parameter → 400 Bad Request; nullable parameter → null if absent
 ```
 
-**Middleware with guarantees** — after-logic runs even if the handler throws:
+**Middleware with guarantees** — cleanup logic runs even if the handler throws:
 
 ```kotlin
 val timing: Middleware = { ctx, next ->
