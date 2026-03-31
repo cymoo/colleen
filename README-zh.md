@@ -1,18 +1,12 @@
-<div align="center">
-
 # Colleen
 
-**轻量级、类型安全的 Kotlin / Java Web 框架**
+轻量级、类型安全的 Kotlin / Java Web 框架。
 
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.cymoo/colleen?color=blue)](https://central.sonatype.com/artifact/io.github.cymoo/colleen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Java 21+](https://img.shields.io/badge/Java-21%2B-orange)](https://openjdk.org/projects/jdk/21/)
 
-*三行代码启动，零魔法，完全掌控。*
-
 [English Documentation](README.md)
-
-</div>
 
 ```kotlin
 fun main() {
@@ -22,24 +16,22 @@ fun main() {
 }
 ```
 
-## 为什么选择 Colleen？
+## 概览
 
-多数 Web 框架让你在 **简单但受限** 和 **强大但复杂** 之间二选一。
+Colleen 面向 Java 21+，提供可预测的编程模型，用于构建 HTTP API 与实时服务。
 
-Colleen 两者兼得 —— 简洁的 API，齐全的功能，运行在 Java 21+ 虚拟线程上。
+- **类型安全的参数提取** — Path、Query、Form、JSON、Header、Cookie 可直接按类型注入
+- **中间件对称执行** — 即使发生异常，after 逻辑仍会执行，减少手写 `try/finally`
+- **内置 WebSocket 与 SSE** — 统一支持实时回调、中间件与路径参数
+- **OpenAPI 自动生成** — 基于路由定义生成 Swagger UI，无需额外注解
+- **声明式数据验证** — 流式 DSL，支持字段级错误聚合
+- **显式依赖注入** — 通过 `app.provide(...)` 直接注册服务
+- **内置常用中间件** — 包括 CORS、限流、认证、安全头、签名 Cookie 等
+- **完整 Java 兼容性** — 支持 Java Record、Lambda 与方法引用
+- **子应用架构** — 可挂载独立子应用，隔离中间件、服务与错误处理
+- **进程内测试能力** — 通过 TestClient 进行无网络测试
 
-- 🎯 **类型安全的参数提取** — Path、Query、Form、JSON、Header、Cookie 自动提取并转换类型
-- 🧅 **对称执行的中间件** — 即使发生异常，after 逻辑仍保证执行，无需 `try/finally`
-- 🔌 **内置 WebSocket & SSE** — 支持回调、中间件、路径参数的实时通信
-- 📖 **自动生成 OpenAPI 文档** — 一行代码即可启用 Swagger UI，无需额外注解
-- ✅ **声明式数据验证** — 流式 DSL，支持字段级错误聚合
-- 💉 **显式依赖注入** — 无反射、无类路径扫描，只需 `app.provide { ... }`
-- 🛡️ **11 个内置中间件** — CORS、限流、认证、安全头、签名 Cookie 等开箱即用
-- ☕ **完整的 Java 支持** — 兼容 Java Record、Lambda 与方法引用
-- 🧩 **子应用架构** — 独立挂载应用，隔离中间件、服务与错误处理
-- 🧪 **进程内测试** — TestClient 无需网络即可测试
-
-### 快速一览
+### 核心 API 示例
 
 **类型安全的参数** — 从请求中自动提取：
 
@@ -49,7 +41,7 @@ app.get("/users/{id}", ::getUser)
 // 缺少必需参数 → 400 Bad Request；可空参数缺失 → null
 ```
 
-**有保障的中间件** — 即使 handler 抛异常，after 逻辑仍会执行：
+**中间件执行保障** — 即使 handler 抛异常，after 逻辑仍会执行：
 
 ```kotlin
 val timing: Middleware = { ctx, next ->
@@ -85,15 +77,15 @@ expect {
 app.openApi()  // → Swagger UI: http://localhost:8000/docs
 ```
 
-### 设计理念
+### 设计原则
 
 | | 原则 | 具体实践 |
 |---|------|---------|
-| 💡 | **显式优于隐式** | 无隐藏配置，无类路径魔法 |
-| 🔄 | **同步优于异步** | 虚拟线程提供并发能力，无需回调 |
-| 🔒 | **类型安全不可或缺** | 编译期捕获错误，而非半夜线上报警 |
-| 📖 | **清晰本身就是 feature** | 半年后回看代码，依然一目了然 |
-| 🚫 | **魔法是负债** | 每个行为都可追溯到你写的代码 |
+| 1 | **显式优于隐式** | 不依赖隐藏配置或类路径扫描 |
+| 2 | **同步优于异步** | 借助虚拟线程并发处理，减少回调链 |
+| 3 | **默认类型安全** | 在编译期尽早发现问题 |
+| 4 | **代码路径可读** | 运行行为可在业务代码中直接追踪 |
+| 5 | **减少框架魔法** | 便于调试、测试与排障 |
 
 ---
 

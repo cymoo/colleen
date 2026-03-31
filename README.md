@@ -1,18 +1,12 @@
-<div align="center">
-
 # Colleen
 
-**A lightweight, type-safe web framework for Kotlin and Java**
+A lightweight, type-safe web framework for Kotlin and Java.
 
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.cymoo/colleen?color=blue)](https://central.sonatype.com/artifact/io.github.cymoo/colleen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Java 21+](https://img.shields.io/badge/Java-21%2B-orange)](https://openjdk.org/projects/jdk/21/)
 
-*Three lines to start. Zero magic. Full control.*
-
 [中文文档](README-zh.md)
-
-</div>
 
 ```kotlin
 fun main() {
@@ -22,24 +16,22 @@ fun main() {
 }
 ```
 
-## Why Colleen?
+## Overview
 
-Most web frameworks ask you to choose: **simple but limited**, or **powerful but complex**.
+Colleen focuses on a predictable programming model for HTTP APIs and real-time services on Java 21+.
 
-Colleen gives you both — a clean, minimal API with the features you actually need, running on Java 21+ virtual threads.
+- **Type-safe parameter extraction** — Path, query, form, JSON, headers, and cookies are extracted as typed parameters
+- **Symmetric middleware execution** — Post-processing still runs when exceptions occur, without manual `try/finally`
+- **Built-in WebSocket and SSE** — Unified support for real-time handlers, middleware, and route parameters
+- **OpenAPI generation** — Serve Swagger UI from route definitions, without extra annotations
+- **Declarative validation** — Fluent DSL with field-level error aggregation
+- **Explicit dependency injection** — Register services directly with `app.provide(...)`
+- **Built-in middleware** — CORS, rate limiting, auth, security headers, signed cookies, and more
+- **Java compatibility** — Works with Java records, lambdas, and method references
+- **Sub-app architecture** — Mount independent apps with isolated middleware, services, and error handling
+- **In-process testing** — TestClient for fast, network-free tests
 
-- 🎯 **Type-safe parameter extraction** — Path, query, form, JSON, headers, and cookies are automatically extracted and typed
-- 🧅 **Symmetric middleware** — After-logic always runs, even when exceptions occur. No `try/finally` needed
-- 🔌 **WebSocket & SSE built-in** — Real-time support with callbacks, middleware, and path parameters
-- 📖 **Auto-generated OpenAPI docs** — Swagger UI from your route definitions, no extra annotations
-- ✅ **Declarative validation** — Fluent DSL with field-level error aggregation
-- 💉 **Explicit dependency injection** — No reflection, no classpath scanning, just `app.provide { ... }`
-- 🛡️ **11 built-in middleware** — CORS, rate limiting, auth, security headers, signed cookies, and more
-- ☕ **Full Java support** — Works with Java records, lambdas, and method references
-- 🧩 **Sub-applications** — Mount independent apps with isolated middleware, services, and error handling
-- 🧪 **In-process testing** — TestClient for fast, networkless testing
-
-### At a Glance
+### Core API Examples
 
 **Type-safe parameters** — automatically extracted from the request:
 
@@ -49,7 +41,7 @@ app.get("/users/{id}", ::getUser)
 // Missing required parameter → 400 Bad Request; nullable parameter → null if absent
 ```
 
-**Middleware with guarantees** — cleanup logic runs even if the handler throws:
+**Middleware execution guarantees** — cleanup logic runs even if the handler throws:
 
 ```kotlin
 val timing: Middleware = { ctx, next ->
@@ -89,11 +81,11 @@ app.openApi()  // → Swagger UI at http://localhost:8000/docs
 
 | | Principle | In practice |
 |---|-----------|-------------|
-| 💡 | **Explicit > Implicit** | No hidden config, no classpath magic |
-| 🔄 | **Synchronous > Asynchronous** | Virtual threads give concurrency without callbacks |
-| 🔒 | **Type safety is not optional** | Catch errors at compile time, not at midnight |
-| 📖 | **Clarity is a feature** | Read your code six months later and still understand it |
-| 🚫 | **Magic is a liability** | Every behavior is traceable to code you wrote |
+| 1 | **Explicit > Implicit** | No hidden config or classpath scanning |
+| 2 | **Synchronous > Asynchronous** | Virtual threads provide concurrency without callback chains |
+| 3 | **Type safety by default** | Catch issues at compile time |
+| 4 | **Readable code paths** | Behavior stays traceable in application code |
+| 5 | **Minimal framework magic** | Operational behavior is easier to debug and test |
 
 ---
 
