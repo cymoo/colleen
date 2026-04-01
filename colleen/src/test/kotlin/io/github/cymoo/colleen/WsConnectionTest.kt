@@ -1,7 +1,10 @@
 package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.util.http.Headers
-import io.github.cymoo.colleen.ws.*
+import io.github.cymoo.colleen.ws.WsChannel
+import io.github.cymoo.colleen.ws.WsCloseReason
+import io.github.cymoo.colleen.ws.WsConnection
+import io.github.cymoo.colleen.ws.WsMessage
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -11,11 +14,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import kotlin.test.*
 
 class WsConnectionTest {
 
@@ -359,7 +358,7 @@ class WsConnectionTest {
         fun `should dispatch text message to callbacks`() {
             val conn = createConnection()
             val received = mutableListOf<WsMessage>()
-            conn.onMessage { received.add(it) }
+            conn.onWsMessage { received.add(it) }
 
             conn.dispatchMessage(WsMessage.Text("hello"))
             assertEquals(1, received.size)
@@ -370,7 +369,7 @@ class WsConnectionTest {
         fun `should dispatch binary message to callbacks`() {
             val conn = createConnection()
             val received = mutableListOf<WsMessage>()
-            conn.onMessage { received.add(it) }
+            conn.onWsMessage { received.add(it) }
 
             val data = byteArrayOf(1, 2, 3)
             conn.dispatchMessage(WsMessage.Binary(data))
@@ -383,8 +382,8 @@ class WsConnectionTest {
         fun `should invoke multiple message callbacks`() {
             val conn = createConnection()
             val count = AtomicInteger(0)
-            conn.onMessage { count.incrementAndGet() }
-            conn.onMessage { count.incrementAndGet() }
+            conn.onWsMessage { count.incrementAndGet() }
+            conn.onWsMessage { count.incrementAndGet() }
 
             conn.dispatchMessage(WsMessage.Text("test"))
             assertEquals(2, count.get())
@@ -394,9 +393,9 @@ class WsConnectionTest {
         fun `should invoke callbacks in registration order`() {
             val conn = createConnection()
             val order = mutableListOf<Int>()
-            conn.onMessage { order.add(1) }
-            conn.onMessage { order.add(2) }
-            conn.onMessage { order.add(3) }
+            conn.onWsMessage { order.add(1) }
+            conn.onWsMessage { order.add(2) }
+            conn.onWsMessage { order.add(3) }
 
             conn.dispatchMessage(WsMessage.Text("test"))
             assertEquals(listOf(1, 2, 3), order)
@@ -407,7 +406,7 @@ class WsConnectionTest {
             val conn = createConnection()
             val error = AtomicReference<Throwable>()
             conn.onError { error.set(it) }
-            conn.onMessage { throw RuntimeException("boom") }
+            conn.onWsMessage { throw RuntimeException("boom") }
 
             conn.dispatchMessage(WsMessage.Text("trigger"))
             assertTrue(error.get() is RuntimeException)
@@ -418,8 +417,8 @@ class WsConnectionTest {
         fun `message callback exception does not stop other callbacks`() {
             val conn = createConnection()
             val count = AtomicInteger(0)
-            conn.onMessage { throw RuntimeException("boom") }
-            conn.onMessage { count.incrementAndGet() }
+            conn.onWsMessage { throw RuntimeException("boom") }
+            conn.onWsMessage { count.incrementAndGet() }
             conn.onError { } // suppress error
 
             conn.dispatchMessage(WsMessage.Text("test"))
@@ -437,7 +436,7 @@ class WsConnectionTest {
         fun `dispatch after close does not invoke callbacks`() {
             val conn = createConnection()
             val count = AtomicInteger(0)
-            conn.onMessage { count.incrementAndGet() }
+            conn.onWsMessage { count.incrementAndGet() }
             conn.close()
 
             conn.dispatchMessage(WsMessage.Text("after-close"))
@@ -864,7 +863,7 @@ class WsConnectionTest {
 
             repeat(10) {
                 Thread {
-                    conn.onMessage { count.incrementAndGet() }
+                    conn.onWsMessage { count.incrementAndGet() }
                     latch.countDown()
                 }.start()
             }

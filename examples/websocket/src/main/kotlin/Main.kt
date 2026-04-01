@@ -5,7 +5,6 @@ import io.github.cymoo.colleen.Next
 import io.github.cymoo.colleen.middleware.RequestLogger
 import io.github.cymoo.colleen.ws.Ws
 import io.github.cymoo.colleen.ws.WsConnection
-import io.github.cymoo.colleen.ws.WsMessage
 import io.github.cymoo.colleen.ws.WsUse
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
@@ -68,7 +67,7 @@ fun main() {
     // ========================================================================
 
     app.ws("/echo") { conn ->
-        conn.onTextMessage { msg ->
+        conn.onMessage { msg ->
             conn.send(msg)
         }
 
@@ -95,7 +94,7 @@ fun main() {
         // Announce join — broadcast is async, returns immediately
         broadcast(broadcastExecutor, connections, "[$room] $username joined (${connections.size} online)")
 
-        conn.onTextMessage { msg ->
+        conn.onMessage { msg ->
             broadcast(broadcastExecutor, connections, "[$room] $username: $msg")
         }
 
@@ -133,7 +132,7 @@ fun main() {
         val origin = conn.header("Origin") ?: "unknown"
         conn.send("Welcome, $user! (Origin: $origin)")
 
-        conn.onTextMessage { msg ->
+        conn.onMessage { msg ->
             conn.send("Secure echo: $msg")
         }
     }
@@ -165,7 +164,7 @@ fun main() {
 
     adminApp.ws("/console") { conn ->
         conn.send("Welcome to admin console")
-        conn.onTextMessage { msg ->
+        conn.onMessage { msg ->
             conn.send("admin> $msg")
         }
     }
@@ -208,7 +207,7 @@ class NotificationController {
         val subscriber = conn.getStateOrNull<String>("subscriber") ?: "unknown"
         conn.send("Connected to notification stream (subscriber=$subscriber)")
 
-        conn.onTextMessage { msg ->
+        conn.onMessage { msg ->
             conn.send("Notification acknowledged: $msg")
         }
 

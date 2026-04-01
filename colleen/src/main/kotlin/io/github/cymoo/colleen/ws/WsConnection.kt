@@ -103,14 +103,14 @@ interface WsChannel : AutoCloseable {
  * ## Threading model
  * - [send] methods are serialized internally and may be called from multiple threads.
  * - [close] may be called at any time from any thread.
- * - Event callbacks ([onMessage], [onClose], [onError]) are dispatched to a worker
+ * - Event callbacks ([onWsMessage], [onClose], [onError]) are dispatched to a worker
  *   thread by the server adapter to avoid blocking IO threads.
  *   Messages for the same connection are processed sequentially in order.
  *
  * ## Lifecycle
  * 1. Connection is established after a successful WebSocket handshake.
  * 2. User handler receives the connection and registers callbacks.
- * 3. Messages arrive via [onMessage] callbacks.
+ * 3. Messages arrive via [onWsMessage] callbacks.
  * 4. Connection closes via [close] or when the remote peer disconnects.
  * 5. [onClose] callbacks are invoked exactly once.
  *
@@ -373,18 +373,18 @@ class WsConnection internal constructor(
      * Registers a callback for incoming messages.
      * Multiple callbacks may be registered; they are invoked in registration order.
      */
-    fun onMessage(callback: Consumer<WsMessage>) {
+    internal fun onWsMessage(callback: Consumer<WsMessage>) {
         messageCallbacksLock.withLock { messageCallbacks.add(callback) }
     }
 
-    fun onTextMessage(callback: Consumer<String>) {
-        onMessage { msg ->
+    fun onMessage(callback: Consumer<String>) {
+        onWsMessage { msg ->
             if (msg is WsMessage.Text) callback.accept(msg.data)
         }
     }
 
-    fun onBinaryMessage(callback: Consumer<ByteArray>) {
-        onMessage { msg ->
+    fun onBinary(callback: Consumer<ByteArray>) {
+        onWsMessage { msg ->
             if (msg is WsMessage.Binary) callback.accept(msg.data)
         }
     }

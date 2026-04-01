@@ -9,15 +9,10 @@ import java.net.http.HttpResponse
 import java.net.http.WebSocket
 import java.nio.ByteBuffer
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionStage
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -56,7 +51,7 @@ class WebSocketE2ETest {
     private fun setupRoutes() {
         // Echo text/binary messages
         app.ws("/echo") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 when (msg) {
                     is WsMessage.Text -> conn.send(msg.data)
                     is WsMessage.Binary -> conn.send(msg.data)
@@ -66,7 +61,7 @@ class WebSocketE2ETest {
 
         // Echo with path params
         app.ws("/chat/{room}") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val room = conn.pathParam("room")
                     conn.send("[$room] ${msg.data}")
@@ -76,7 +71,7 @@ class WebSocketE2ETest {
 
         // Multiple path params
         app.ws("/ns/{namespace}/room/{room}") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val ns = conn.pathParam("namespace")
                     val room = conn.pathParam("room")
@@ -87,7 +82,7 @@ class WebSocketE2ETest {
 
         // Query params endpoint
         app.ws("/with-query") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val name = conn.query("name") ?: "anonymous"
                     val tags = conn.queryList("tag").joinToString(",")
@@ -98,7 +93,7 @@ class WebSocketE2ETest {
 
         // Endpoint that closes with normal close
         app.ws("/close-me") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text && msg.data == "close") {
                     conn.close(WsCloseReason.Normal)
                 }
@@ -107,7 +102,7 @@ class WebSocketE2ETest {
 
         // Endpoint with onClose callback
         app.ws("/on-close") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     conn.send("received: ${msg.data}")
                 }
@@ -120,7 +115,7 @@ class WebSocketE2ETest {
 
         // Endpoint with onError callback
         app.ws("/on-error") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text && msg.data == "trigger-error") {
                     throw RuntimeException("Intentional error")
                 }
@@ -148,7 +143,7 @@ class WebSocketE2ETest {
         }
 
         app.ws("/auth-ws") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     conn.send("Authenticated: ${msg.data}")
                 }
@@ -166,7 +161,7 @@ class WebSocketE2ETest {
 
         // ---- Message ordering test endpoint ----
         app.ws("/ordering") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     // Simulate some work to make ordering issues more visible
                     Thread.sleep(10)
@@ -177,7 +172,7 @@ class WebSocketE2ETest {
 
         // ---- Concurrent state access test endpoint ----
         app.ws("/concurrent-state") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     when {
                         msg.data.startsWith("set:") -> {
@@ -213,7 +208,7 @@ class WebSocketE2ETest {
 
         // WS route that reads state set by middleware
         app.ws("/state-ws") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val userId = conn.getState<Int>("userId")
                     val role = conn.getState<String>("role")
@@ -224,7 +219,7 @@ class WebSocketE2ETest {
 
         // WS route that reads service from app
         app.ws("/service-ws") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val svc = conn.getService<GreetingService>()
                     conn.send("${svc.greet(msg.data)}")
@@ -234,7 +229,7 @@ class WebSocketE2ETest {
 
         // WS route that uses both state and service
         app.ws("/both-ws") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val hasUser = conn.hasState("userId")
                     val svc = conn.getServiceOrNull<GreetingService>()
@@ -245,7 +240,7 @@ class WebSocketE2ETest {
 
         // WS route that mutates state
         app.ws("/state-mutate-ws") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     if (msg.data.startsWith("set:")) {
                         val parts = msg.data.substringAfter("set:").split("=", limit = 2)
@@ -262,7 +257,7 @@ class WebSocketE2ETest {
 
         // WS route that echoes back request headers
         app.ws("/header-ws") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val headerName = msg.data
                     val value = conn.header(headerName)
@@ -280,7 +275,7 @@ class WebSocketE2ETest {
     class WsChatController {
         @Ws("/ws-chat")
         fun chat(conn: WsConnection) {
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     conn.send("controller: ${msg.data}")
                 }
@@ -303,7 +298,7 @@ class WebSocketE2ETest {
 
         @Ws("/endpoint")
         fun endpoint(conn: WsConnection) {
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val guard = conn.getStateOrNull<String>("guard") ?: "none"
                     conn.send("guard=$guard ${msg.data}")
@@ -987,12 +982,12 @@ class WebSocketSubAppE2ETest {
         // Sub-app with WS routes
         val chatApp = Colleen()
         chatApp.ws("/echo") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send("sub: ${msg.data}")
             }
         }
         chatApp.ws("/room/{name}") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     conn.send("room=${conn.pathParam("name")}: ${msg.data}")
                 }
@@ -1010,7 +1005,7 @@ class WebSocketSubAppE2ETest {
             }
         }
         chatApp.ws("/protected/data") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send("protected: ${msg.data}")
             }
         }
@@ -1021,7 +1016,7 @@ class WebSocketSubAppE2ETest {
         val apiApp = Colleen()
         val v1App = Colleen()
         v1App.ws("/stream") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send("v1: ${msg.data}")
             }
         }
@@ -1030,7 +1025,7 @@ class WebSocketSubAppE2ETest {
 
         // Root-level WS route (should still work alongside mounts)
         app.ws("/root-echo") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send("root: ${msg.data}")
             }
         }
@@ -1044,7 +1039,7 @@ class WebSocketSubAppE2ETest {
 
         // Sub-app route that checks parent middleware state
         chatApp.ws("/with-parent-mw") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) {
                     val parentMw = conn.getStateOrNull<String>("parentMw") ?: "false"
                     conn.send("parentMw=$parentMw ${msg.data}")
@@ -1241,7 +1236,7 @@ class WebSocketConnectionLimitE2ETest {
             }
         }
         app.ws("/echo") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send(msg.data)
             }
         }
@@ -1442,7 +1437,7 @@ class WebSocketGracefulShutdownE2ETest {
             }
         }
         app.ws("/echo") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send(msg.data)
             }
         }
@@ -1503,7 +1498,7 @@ class WebSocketOversizedMessageE2ETest {
             }
         }
         app.ws("/echo") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send(msg.data)
             }
         }
@@ -1618,7 +1613,7 @@ class WebSocketPingPongE2ETest {
             }
         }
         app.ws("/echo") { conn ->
-            conn.onMessage { msg ->
+            conn.onWsMessage { msg ->
                 if (msg is WsMessage.Text) conn.send(msg.data)
             }
         }

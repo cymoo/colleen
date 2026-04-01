@@ -60,14 +60,14 @@ The goal is not to maximize features, but to maximize understandability and cont
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.4.2</version>
+    <version>0.4.3</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.4.2")
+implementation("io.github.cymoo:colleen:0.4.3")
 ```
 
 ### Hello World
@@ -1158,7 +1158,7 @@ real-time communication.
 
 ```kotlin
 app.ws("/echo") { conn ->
-    conn.onTextMessage { msg ->
+    conn.onMessage { msg ->
         conn.send(msg)
     }
     conn.onClose { reason ->
@@ -1183,7 +1183,7 @@ app.ws("/chat/{room}") { conn ->
     val room = conn.pathParam("room")     // "general"
     val name = conn.query("name")         // "Alice"
     val auth = conn.header("Authorization") // "Bearer token123"
-    conn.onTextMessage { msg ->
+    conn.onMessage { msg ->
         conn.send("[$room] $name: $msg")
     }
 }
@@ -1228,7 +1228,7 @@ app.ws("/chat/{room}") { conn ->
     val userId = conn.getState<Int>("userId")
     val room = conn.pathParam("room")
 
-    conn.onTextMessage { msg ->
+    conn.onMessage { msg ->
         chatService.broadcast(room!!, userId, msg)
     }
 }
