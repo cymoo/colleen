@@ -1,0 +1,71 @@
+package repository
+
+import chatroom.jooq.generated.Tables.ROOMS
+import chatroom.jooq.generated.Tables.ROOM_MEMBERS
+import chatroom.jooq.generated.tables.records.RoomsRecord
+import model.Room
+import org.jooq.DSLContext
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+
+class RoomRepository(private val dsl: DSLContext) {
+
+    fun findAll(): List<Room> {
+        return dsl.selectFrom(ROOMS)
+            .fetch()
+            .map { it.toModel() }
+    }
+
+    fun findById(id: Int): Room? {
+        return dsl.selectFrom(ROOMS)
+            .where(ROOMS.ID.eq(id))
+            .fetchOne()
+            ?.toModel()
+    }
+
+    fun findByName(name: String): Room? {
+        return dsl.selectFrom(ROOMS)
+            .where(ROOMS.NAME.eq(name))
+            .fetchOne()
+            ?.toModel()
+    }
+
+    fun create(name: String, description: String?): Room {
+        val record = dsl.insertInto(ROOMS)
+            .set(ROOMS.NAME, name)
+            .set(ROOMS.DESCRIPTION, description)
+            .returningResult(ROOMS.fields().toList())
+            .fetchOne()!!
+
+        return Room(
+            id = record.get(ROOMS.ID)!!,
+            name = record.get(ROOMS.NAME)!!,
+            description = record.get(ROOMS.DESCRIPTION),
+            createdAt = parseTimestamp(record.get(ROOMS.CREATED_AT)),
+            maxUsers = record.get(ROOMS.MAX_USERS) ?: 100
+        )
+    }
+
+    fun getOnlineUserCount(roomId: Int): Int {
+        return dsl.selectCount()
+            .from(ROOM_MEMBERS)
+            .where(ROOM_MEMBERS.ROOM_ID.eq(roomId))
+            .fetchOne(0, Int::class.java) ?: 0
+    }
+
+    private fun RoomsRecord.toModel(): Room {
+        return Room(
+            id = this.id!!,
+            name = this.name!!,
+            description = this.description,
+            createdAt = parseTimestamp(this.createdAt),
+            maxUsers = this.maxUsers ?: 100
+        )
+    }
+
+    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
+        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
+            ?: Instant.now().toEpochMilli()
+    }
+}

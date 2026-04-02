@@ -1,132 +1,12 @@
 package repository
 
-import chatroom.jooq.generated.Tables.*
-import chatroom.jooq.generated.tables.records.UsersRecord
-import chatroom.jooq.generated.tables.records.RoomsRecord
-import model.*
+import chatroom.jooq.generated.Tables.MESSAGES
+import chatroom.jooq.generated.Tables.USERS
+import model.ChatMessage
 import org.jooq.DSLContext
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
-
-class UserRepository(private val dsl: DSLContext) {
-
-    fun findByUsername(username: String): User? {
-        return dsl.selectFrom(USERS)
-            .where(USERS.USERNAME.eq(username))
-            .fetchOne()
-            ?.toModel()
-    }
-
-    fun findById(id: Int): User? {
-        return dsl.selectFrom(USERS)
-            .where(USERS.ID.eq(id))
-            .fetchOne()
-            ?.toModel()
-    }
-
-    fun createUser(username: String, displayName: String, avatarUrl: String? = null): User {
-        val record = dsl.insertInto(USERS)
-            .set(USERS.USERNAME, username)
-            .set(USERS.DISPLAY_NAME, displayName)
-            .set(USERS.AVATAR_URL, avatarUrl)
-            .returningResult(USERS.fields().toList())
-            .fetchOne()!!
-
-        return User(
-            id = record.get(USERS.ID)!!,
-            username = record.get(USERS.USERNAME)!!,
-            displayName = record.get(USERS.DISPLAY_NAME)!!,
-            avatarUrl = record.get(USERS.AVATAR_URL),
-            createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
-            lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
-        )
-    }
-
-    fun updateLastSeen(userId: Int) {
-        dsl.update(USERS)
-            .set(USERS.LAST_SEEN, LocalDateTime.now(ZoneOffset.UTC))
-            .where(USERS.ID.eq(userId))
-            .execute()
-    }
-
-    private fun UsersRecord.toModel(): User {
-        return User(
-            id = this.id!!,
-            username = this.username!!,
-            displayName = this.displayName!!,
-            avatarUrl = this.avatarUrl,
-            createdAt = parseTimestamp(this.createdAt),
-            lastSeen = parseTimestamp(this.lastSeen)
-        )
-    }
-
-    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
-        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
-            ?: Instant.now().toEpochMilli()
-    }
-}
-
-class RoomRepository(private val dsl: DSLContext) {
-
-    fun findAll(): List<Room> {
-        return dsl.selectFrom(ROOMS)
-            .fetch()
-            .map { it.toModel() }
-    }
-
-    fun findById(id: Int): Room? {
-        return dsl.selectFrom(ROOMS)
-            .where(ROOMS.ID.eq(id))
-            .fetchOne()
-            ?.toModel()
-    }
-
-    fun findByName(name: String): Room? {
-        return dsl.selectFrom(ROOMS)
-            .where(ROOMS.NAME.eq(name))
-            .fetchOne()
-            ?.toModel()
-    }
-
-    fun create(name: String, description: String?): Room {
-        val record = dsl.insertInto(ROOMS)
-            .set(ROOMS.NAME, name)
-            .set(ROOMS.DESCRIPTION, description)
-            .returningResult(ROOMS.fields().toList())
-            .fetchOne()!!
-
-        return Room(
-            id = record.get(ROOMS.ID)!!,
-            name = record.get(ROOMS.NAME)!!,
-            description = record.get(ROOMS.DESCRIPTION),
-            createdAt = parseTimestamp(record.get(ROOMS.CREATED_AT)),
-            maxUsers = record.get(ROOMS.MAX_USERS) ?: 100
-        )
-    }
-
-    fun getOnlineUserCount(roomId: Int): Int {
-        return dsl.selectCount()
-            .from(ROOM_MEMBERS)
-            .where(ROOM_MEMBERS.ROOM_ID.eq(roomId))
-            .fetchOne(0, Int::class.java) ?: 0
-    }
-
-    private fun RoomsRecord.toModel(): Room {
-        return Room(
-            id = this.id!!,
-            name = this.name!!,
-            description = this.description,
-            createdAt = parseTimestamp(this.createdAt),
-            maxUsers = this.maxUsers ?: 100
-        )
-    }
-
-    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
-        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
-            ?: Instant.now().toEpochMilli()
-    }
-}
 
 class MessageRepository(private val dsl: DSLContext) {
 
@@ -259,47 +139,6 @@ class MessageRepository(private val dsl: DSLContext) {
                 else -> throw IllegalStateException("Unknown message type: $messageType")
             }
         }
-    }
-
-    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
-        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
-            ?: Instant.now().toEpochMilli()
-    }
-}
-
-class RoomMemberRepository(private val dsl: DSLContext) {
-
-    fun addMember(roomId: Int, userId: Int) {
-        dsl.insertInto(ROOM_MEMBERS)
-            .set(ROOM_MEMBERS.ROOM_ID, roomId)
-            .set(ROOM_MEMBERS.USER_ID, userId)
-            .onDuplicateKeyIgnore()
-            .execute()
-    }
-
-    fun removeMember(roomId: Int, userId: Int) {
-        dsl.deleteFrom(ROOM_MEMBERS)
-            .where(ROOM_MEMBERS.ROOM_ID.eq(roomId))
-            .and(ROOM_MEMBERS.USER_ID.eq(userId))
-            .execute()
-    }
-
-    fun getRoomMembers(roomId: Int): List<User> {
-        return dsl.select(USERS.fields().toList())
-            .from(ROOM_MEMBERS)
-            .join(USERS).on(ROOM_MEMBERS.USER_ID.eq(USERS.ID))
-            .where(ROOM_MEMBERS.ROOM_ID.eq(roomId))
-            .fetch()
-            .map { record ->
-                User(
-                    id = record.get(USERS.ID)!!,
-                    username = record.get(USERS.USERNAME)!!,
-                    displayName = record.get(USERS.DISPLAY_NAME)!!,
-                    avatarUrl = record.get(USERS.AVATAR_URL),
-                    createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
-                    lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
-                )
-            }
     }
 
     private fun parseTimestamp(timestamp: LocalDateTime?): Long {

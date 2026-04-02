@@ -12,9 +12,9 @@ object DatabaseConfig {
     private const val DB_PATH = "chat.db"
     private const val JDBC_URL = "jdbc:sqlite:$DB_PATH"
 
-    fun createDataSource(): DataSource {
+    fun createDataSource(dbUrl: String): DataSource {
         val config = HikariConfig().apply {
-            jdbcUrl = JDBC_URL
+            jdbcUrl = dbUrl
             driverClassName = "org.sqlite.JDBC"
             maximumPoolSize = 10
             isAutoCommit = true
