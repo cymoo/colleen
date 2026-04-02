@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TERMINAL.CHAT — Real-time Communication</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="noise-overlay"></div>
+    
+    <!-- Login Screen -->
+    <div id="login-screen" class="screen active">
+        <div class="login-container">
+            <div class="glitch-wrapper">
+                <h1 class="title glitch" data-text="TERMINAL.CHAT">TERMINAL.CHAT</h1>
+            </div>
+            <div class="subtitle">/// ENTER THE VOID</div>
+            
+            <form id="login-form" class="login-form">
+                <div class="input-group">
+                    <label class="input-label">&gt; USERNAME</label>
+                    <input type="text" id="username-input" class="terminal-input" placeholder="anonymous" autocomplete="off" required>
+                </div>
+                
+                <div class="input-group">
+                    <label class="input-label">&gt; DISPLAY NAME</label>
+                    <input type="text" id="displayname-input" class="terminal-input" placeholder="Guest User" autocomplete="off">
+                </div>
+                
+                <div class="input-group">
+                    <label class="input-label">&gt; SELECT ROOM</label>
+                    <select id="room-select" class="terminal-select">
+                        <option value="">Loading rooms...</option>
+                    </select>
+                </div>
+                
+                <button type="submit" class="connect-btn">
+                    <span class="btn-text">CONNECT &gt;&gt;</span>
+                    <span class="btn-scan"></span>
+                </button>
+            </form>
+            
+            <div class="login-footer">
+                <div class="status-bar">
+                    <span class="status-indicator"></span>
+                    <span class="status-text">SYSTEM READY</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Chat Screen -->
+    <div id="chat-screen" class="screen">
+        <div class="chat-layout">
+            <!-- Header -->
+            <div class="chat-header">
+                <div class="header-left">
+                    <div class="room-name" id="current-room-name">LOADING...</div>
+                    <div class="room-status">
+                        <span class="pulse-dot"></span>
+                        <span id="online-count">0</span> ONLINE
+                    </div>
+                </div>
+                <div class="header-right">
+                    <div class="user-info">
+                        <span class="user-label">LOGGED AS:</span>
+                        <span class="user-name" id="current-username">USER</span>
+                    </div>
+                    <button id="disconnect-btn" class="icon-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Main Content -->
+            <div class="chat-content">
+                <!-- Messages Area -->
+                <div class="messages-panel">
+                    <div class="messages-container" id="messages-container">
+                        <!-- Messages will be inserted here -->
+                    </div>
+                </div>
+                
+                <!-- Users Sidebar -->
+                <div class="users-sidebar">
+                    <div class="sidebar-header">
+                        <div class="sidebar-title">USERS ONLINE</div>
+                        <div class="sidebar-count" id="users-count">0</div>
+                    </div>
+                    <div class="users-list" id="users-list">
+                        <!-- Users will be inserted here -->
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Input Area -->
+            <div class="input-panel">
+                <div class="input-wrapper">
+                    <input type="text" id="message-input" class="message-input" placeholder="Type message..." autocomplete="off">
+                    <div class="input-actions">
+                        <label for="image-upload" class="icon-btn" title="Upload Image">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                        </label>
+                        <input type="file" id="image-upload" accept="image/*" style="display: none">
+                        
+                        <label for="file-upload" class="icon-btn" title="Upload File">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                                <polyline points="13 2 13 9 20 9"></polyline>
+                            </svg>
+                        </label>
+                        <input type="file" id="file-upload" style="display: none">
+                        
+                        <button id="send-btn" class="icon-btn send-btn">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="input-hint">
+                    Press <kbd>Enter</kbd> to send • <kbd>Shift+Enter</kbd> for new line
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Image Modal -->
+    <div id="image-modal" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <button class="modal-close" id="modal-close-btn">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <img id="modal-image" src="" alt="Full size">
+        </div>
+    </div>
+    
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+    
+    <script src="/static/chat.js"></script>
+</body>
+</html>
