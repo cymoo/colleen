@@ -218,62 +218,71 @@ class ChatClient {
             this.scrollToBottom();
         }
     }
-    
+
     createMessageElement(message) {
         const div = document.createElement('div');
-        
-        if (message.messageType === 'system') {
+        const displayName = message.displayName || message.username || 'Unknown';
+
+        // messageType 缺失时根据字段推断，兜底为 system
+        let messageType = message.messageType;
+        if (!messageType) {
+            if (message.imageUrl) messageType = 'image';
+            else if (message.fileUrl) messageType = 'file';
+            else if (message.userId) messageType = 'text';
+            else messageType = 'system';
+        }
+
+        if (messageType === 'system') {
             div.className = 'message system';
             div.innerHTML = `
-                <div class="message-content">
-                    <div class="message-text">${this.escapeHtml(message.content)}</div>
-                </div>
-            `;
+            <div class="message-content">
+                <div class="message-text">${this.escapeHtml(message.content || '')}</div>
+            </div>
+        `;
         } else {
             div.className = 'message';
-            const avatar = this.getAvatar(message.displayName);
+            const avatar = this.getAvatar(displayName);
             const time = this.formatTime(message.timestamp);
-            
+
             let contentHtml = '';
-            
-            if (message.messageType === 'text') {
-                contentHtml = `<div class="message-text">${this.escapeHtml(message.content)}</div>`;
-            } else if (message.messageType === 'image') {
+            if (messageType === 'text') {
+                contentHtml = `<div class="message-text">${this.escapeHtml(message.content || '')}</div>`;
+            } else if (messageType === 'image') {
                 contentHtml = `
-                    <div class="message-text">shared an image</div>
-                    <img src="${message.imageUrl}" class="message-image" onclick="chatClient.openImageModal('${message.imageUrl}')">
-                `;
-            } else if (message.messageType === 'file') {
+                <div class="message-text">shared an image</div>
+                <img src="${message.imageUrl}" class="message-image" onclick="chatClient.openImageModal('${message.imageUrl}')">
+            `;
+            } else if (messageType === 'file') {
                 contentHtml = `
-                    <div class="message-text">shared a file</div>
-                    <div class="message-file">
-                        <div class="file-icon">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
-                                <polyline points="13 2 13 9 20 9"></polyline>
-                            </svg>
-                        </div>
-                        <div class="file-info">
-                            <div class="file-name">${this.escapeHtml(message.fileName)}</div>
-                            <div class="file-size">${this.formatFileSize(message.fileSize)}</div>
-                        </div>
-                        <a href="${message.fileUrl}" download class="file-download">DOWNLOAD</a>
+                <div class="message-text">shared a file</div>
+                <div class="message-file">
+                    <div class="file-icon">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                            <polyline points="13 2 13 9 20 9"></polyline>
+                        </svg>
                     </div>
-                `;
-            }
-            
-            div.innerHTML = `
-                <div class="message-avatar">${avatar}</div>
-                <div class="message-content">
-                    <div class="message-header">
-                        <div class="message-author">${this.escapeHtml(message.displayName)}</div>
-                        <div class="message-time">${time}</div>
+                    <div class="file-info">
+                        <div class="file-name">${this.escapeHtml(message.fileName || '')}</div>
+                        <div class="file-size">${this.formatFileSize(message.fileSize || 0)}</div>
                     </div>
-                    ${contentHtml}
+                    <a href="${message.fileUrl}" download class="file-download">DOWNLOAD</a>
                 </div>
             `;
+            }
+
+            div.innerHTML = `
+            <div class="message-avatar">${avatar}</div>
+            <div class="message-content">
+                <div class="message-header">
+                    <div class="message-author">${this.escapeHtml(displayName)}</div>
+                    <div class="message-time">${time}</div>
+                </div>
+                ${contentHtml}
+            </div>
+        `;
         }
-        
+
         return div;
     }
     

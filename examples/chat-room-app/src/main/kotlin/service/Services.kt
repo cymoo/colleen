@@ -9,7 +9,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.nio.file.StandardCopyOption
+import com.fasterxml.jackson.databind.JsonNode
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
@@ -178,12 +178,12 @@ class ChatService(private val dsl: DSLContext, private val objectMapper: ObjectM
             }
         }
     }
-    
+
     private fun serializeEvent(event: WsEvent): String {
         val payload = when (event) {
             is WsEvent.History -> mapOf(
                 "type" to "history",
-                "messages" to event.messages
+                "messages" to event.messages.map { objectMapper.valueToTree<JsonNode>(it) }
             )
             is WsEvent.Users -> mapOf(
                 "type" to "users",
@@ -191,7 +191,7 @@ class ChatService(private val dsl: DSLContext, private val objectMapper: ObjectM
             )
             is WsEvent.Message -> mapOf(
                 "type" to "message",
-                "message" to event.message
+                "message" to objectMapper.valueToTree<JsonNode>(event.message)  // ← 关键修复
             )
             is WsEvent.UserJoined -> mapOf(
                 "type" to "user_joined",

@@ -5,9 +5,9 @@ import io.github.cymoo.colleen.middleware.Cors
 import io.github.cymoo.colleen.middleware.RequestLogger
 import middleware.WsAuthMiddleware
 import service.*
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.SerializationFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import io.github.cymoo.colleen.middleware.ServeStatic
 
 fun main() {
     val app = Colleen()
@@ -54,6 +54,7 @@ fun main() {
     // Middleware
     app.use(RequestLogger())
     app.use(Cors.permissive())
+    app.use(ServeStatic("classpath:static"))
 
     // WebSocket authentication middleware
     app.wsUse("/chat", WsAuthMiddleware(userService))
@@ -63,21 +64,8 @@ fun main() {
     app.addController(FileController(fileService))
     app.addController(ChatController(chatService, roomService, objectMapper))
 
-    // Serve static frontend
-    app.get("/") { ctx ->
+    app.get("/") {ctx ->
         ctx.html(loadFrontendHtml())
-    }
-
-    // Serve CSS
-    app.get("/static/style.css") { ctx ->
-        ctx.header("Content-Type", "text/css")
-        ctx.text(loadCss())
-    }
-
-    // Serve JavaScript
-    app.get("/static/chat.js") { ctx ->
-        ctx.header("Content-Type", "application/javascript")
-        ctx.text(loadJavaScript())
     }
 
     app.listen(8000)
@@ -92,20 +80,4 @@ private fun loadFrontendHtml(): String {
         ?.bufferedReader()
         ?.use { it.readText() }
         ?: "<h1>Error: Frontend not found</h1>"
-}
-
-private fun loadCss(): String {
-    return Thread.currentThread().contextClassLoader
-        .getResourceAsStream("static/css/style.css")
-        ?.bufferedReader()
-        ?.use { it.readText() }
-        ?: "/* CSS not found */"
-}
-
-private fun loadJavaScript(): String {
-    return Thread.currentThread().contextClassLoader
-        .getResourceAsStream("static/js/chat.js")
-        ?.bufferedReader()
-        ?.use { it.readText() }
-        ?: "console.error('JavaScript not found');"
 }

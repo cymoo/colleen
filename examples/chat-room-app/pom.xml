@@ -135,4 +135,49 @@
         </plugins>
     </build>
 
+    <profiles>
+        <profile>
+            <id>init-sqlite-db</id>
+            <activation>
+                <file>
+                    <missing>${db.url}</missing>
+                </file>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>sql-maven-plugin</artifactId>
+                        <version>1.5</version>
+                        <dependencies>
+                            <dependency>
+                                <groupId>org.xerial</groupId>
+                                <artifactId>sqlite-jdbc</artifactId>
+                                <version>${sqlite.version}</version>
+                            </dependency>
+                        </dependencies>
+                        <configuration>
+                            <driver>org.sqlite.JDBC</driver>
+                            <url>${db.url}</url>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>create-database</id>
+                                <phase>initialize</phase>
+                                <goals>
+                                    <goal>execute</goal>
+                                </goals>
+                                <configuration>
+                                    <srcFiles>
+                                        <srcFile>src/main/resources/db/migration/V1__Create_initial_schema.sql</srcFile>
+                                    </srcFiles>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>

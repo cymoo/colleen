@@ -2,6 +2,7 @@ package middleware
 
 import io.github.cymoo.colleen.BadRequest
 import io.github.cymoo.colleen.Context
+import io.github.cymoo.colleen.Middleware
 import io.github.cymoo.colleen.Next
 import service.UserService
 
@@ -9,9 +10,9 @@ import service.UserService
  * WebSocket authentication middleware
  * Validates username and creates/retrieves user
  */
-class WsAuthMiddleware(private val userService: UserService) {
+class WsAuthMiddleware(private val userService: UserService): Middleware {
     
-    operator fun invoke(ctx: Context, next: Next) {
+    override operator fun invoke(ctx: Context, next: Next) {
         val username = ctx.query("username")
         val displayName = ctx.query("displayName")
         

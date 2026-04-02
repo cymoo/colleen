@@ -3,10 +3,11 @@ package repository
 import chatroom.jooq.generated.Tables.*
 import chatroom.jooq.generated.tables.records.UsersRecord
 import chatroom.jooq.generated.tables.records.RoomsRecord
-import chatroom.jooq.generated.tables.records.MessagesRecord
 import model.*
 import org.jooq.DSLContext
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 
 class UserRepository(private val dsl: DSLContext) {
 
@@ -25,8 +26,6 @@ class UserRepository(private val dsl: DSLContext) {
     }
 
     fun createUser(username: String, displayName: String, avatarUrl: String? = null): User {
-        val now = Instant.now().toEpochMilli()
-        
         val record = dsl.insertInto(USERS)
             .set(USERS.USERNAME, username)
             .set(USERS.DISPLAY_NAME, displayName)
@@ -46,7 +45,7 @@ class UserRepository(private val dsl: DSLContext) {
 
     fun updateLastSeen(userId: Int) {
         dsl.update(USERS)
-            .set(USERS.LAST_SEEN, Instant.now().toString())
+            .set(USERS.LAST_SEEN, LocalDateTime.now(ZoneOffset.UTC))
             .where(USERS.ID.eq(userId))
             .execute()
     }
@@ -62,8 +61,9 @@ class UserRepository(private val dsl: DSLContext) {
         )
     }
 
-    private fun parseTimestamp(timestamp: String?): Long {
-        return timestamp?.let { Instant.parse(it).toEpochMilli() } ?: Instant.now().toEpochMilli()
+    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
+        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
+            ?: Instant.now().toEpochMilli()
     }
 }
 
@@ -96,7 +96,13 @@ class RoomRepository(private val dsl: DSLContext) {
             .returningResult(ROOMS.fields().toList())
             .fetchOne()!!
 
-        return record.toModel()
+        return Room(
+            id = record.get(ROOMS.ID)!!,
+            name = record.get(ROOMS.NAME)!!,
+            description = record.get(ROOMS.DESCRIPTION),
+            createdAt = parseTimestamp(record.get(ROOMS.CREATED_AT)),
+            maxUsers = record.get(ROOMS.MAX_USERS) ?: 100
+        )
     }
 
     fun getOnlineUserCount(roomId: Int): Int {
@@ -116,8 +122,9 @@ class RoomRepository(private val dsl: DSLContext) {
         )
     }
 
-    private fun parseTimestamp(timestamp: String?): Long {
-        return timestamp?.let { Instant.parse(it).toEpochMilli() } ?: Instant.now().toEpochMilli()
+    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
+        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
+            ?: Instant.now().toEpochMilli()
     }
 }
 
@@ -170,7 +177,7 @@ class MessageRepository(private val dsl: DSLContext) {
     fun saveSystemMessage(roomId: Int, content: String): Int {
         return dsl.insertInto(MESSAGES)
             .set(MESSAGES.ROOM_ID, roomId)
-            .set(MESSAGES.USER_ID, 0) // System user
+            .set(MESSAGES.USER_ID, 0)
             .set(MESSAGES.MESSAGE_TYPE, "system")
             .set(MESSAGES.CONTENT, content)
             .returningResult(MESSAGES.ID)
@@ -198,6 +205,7 @@ class MessageRepository(private val dsl: DSLContext) {
             .from(MESSAGES)
             .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
             .where(MESSAGES.ROOM_ID.eq(roomId))
+            .and(MESSAGES.MESSAGE_TYPE.ne("system"))
             .orderBy(MESSAGES.CREATED_AT.desc())
             .limit(limit)
             .fetch()
@@ -253,8 +261,9 @@ class MessageRepository(private val dsl: DSLContext) {
         }
     }
 
-    private fun parseTimestamp(timestamp: String?): Long {
-        return timestamp?.let { Instant.parse(it).toEpochMilli() } ?: Instant.now().toEpochMilli()
+    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
+        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
+            ?: Instant.now().toEpochMilli()
     }
 }
 
@@ -293,7 +302,8 @@ class RoomMemberRepository(private val dsl: DSLContext) {
             }
     }
 
-    private fun parseTimestamp(timestamp: String?): Long {
-        return timestamp?.let { Instant.parse(it).toEpochMilli() } ?: Instant.now().toEpochMilli()
+    private fun parseTimestamp(timestamp: LocalDateTime?): Long {
+        return timestamp?.toInstant(ZoneOffset.UTC)?.toEpochMilli()
+            ?: Instant.now().toEpochMilli()
     }
 }
