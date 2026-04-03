@@ -59,7 +59,7 @@ fun main() {
     app.use(ServeStatic("classpath:static"))
 
     // Controllers
-    app.addController(ApiController(roomService, fileService))
+    app.addController(ApiController(roomService, fileService, userService))
     app.addController(FileController(fileService))
     app.addController(ChatController(userService, chatService, roomService, objectMapper))
 

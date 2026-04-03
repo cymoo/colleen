@@ -7,14 +7,16 @@ import model.RoomInfo
 import model.UploadResponse
 import service.FileService
 import service.RoomService
+import service.UserService
 
 /**
- * REST API controller for rooms and files
+ * REST API controller for rooms, files, and user profiles
  */
 @Controller("/api")
 class ApiController(
     private val roomService: RoomService,
-    private val fileService: FileService
+    private val fileService: FileService,
+    private val userService: UserService? = null
 ) {
 
     @Get("/rooms")
@@ -69,6 +71,12 @@ class ApiController(
                 error = e.message
             )
         }
+    }
+
+    @Get("/users/{userId}")
+    fun getUser(userId: Path<Int>): Any {
+        val user = userService?.getUserById(userId.value) ?: throw NotFound("User not found")
+        return user
     }
 }
 

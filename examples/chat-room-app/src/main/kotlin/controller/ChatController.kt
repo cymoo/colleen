@@ -7,6 +7,7 @@ import io.github.cymoo.colleen.ws.Ws
 import io.github.cymoo.colleen.ws.WsConnection
 import io.github.cymoo.colleen.ws.WsUse
 import model.User
+import model.WsEvent
 import model.WsMessagePayload
 import service.ChatService
 import service.RoomService
@@ -69,11 +70,13 @@ class ChatController(
         // Join room
         chatService.joinRoom(roomId, conn, user)
 
-        // Send message history
+        // Send message history with hasMore flag
         val history = chatService.getMessageHistory(roomId)
+        val hasMore = history.size >= 30
         conn.send(objectMapper.writeValueAsString(mapOf(
             "type" to "history",
-            "messages" to history
+            "messages" to history,
+            "hasMore" to hasMore
         )))
 
         // Send current users
@@ -91,12 +94,12 @@ class ChatController(
                 when (payload.type) {
                     "text" -> {
                         payload.content?.let { content ->
-                            chatService.sendTextMessage(roomId, user, content)
+                            chatService.sendTextMessage(roomId, user, content, payload.replyToId)
                         }
                     }
                     "image" -> {
                         payload.imageUrl?.let { imageUrl ->
-                            chatService.sendImageMessage(roomId, user, imageUrl, payload.thumbnailUrl)
+                            chatService.sendImageMessage(roomId, user, imageUrl, payload.thumbnailUrl, payload.replyToId)
                         }
                     }
                     "file" -> {
@@ -104,9 +107,63 @@ class ChatController(
                             payload.fileSize != null && payload.mimeType != null) {
                             chatService.sendFileMessage(
                                 roomId, user, payload.fileName, payload.fileUrl,
-                                payload.fileSize, payload.mimeType
+                                payload.fileSize, payload.mimeType, payload.replyToId
                             )
                         }
+                    }
+                    "edit" -> {
+                        if (payload.messageId != null && payload.content != null) {
+                            chatService.editMessage(roomId, user, payload.messageId, payload.content)
+                        }
+                    }
+                    "delete" -> {
+                        payload.messageId?.let { messageId ->
+                            chatService.deleteMessage(roomId, user, messageId)
+                        }
+                    }
+                    "load_history" -> {
+                        payload.beforeId?.let { beforeId ->
+                            val (messages, hasMore) = chatService.getOlderMessages(roomId, beforeId)
+                            conn.send(chatService.serializeEvent(
+                                WsEvent.History(messages, hasMore)
+                            ))
+                        }
+                    }
+                    "search" -> {
+                        payload.query?.let { query ->
+                            if (query.isNotBlank()) {
+                                val results = chatService.searchMessages(roomId, query)
+                                conn.send(chatService.serializeEvent(
+                                    WsEvent.SearchResults(results, query)
+                                ))
+                            }
+                        }
+                    }
+                    "private_message" -> {
+                        if (payload.targetUserId != null && payload.content != null) {
+                            chatService.sendPrivateMessage(user, payload.targetUserId, payload.content)
+                        }
+                    }
+                    "private_history" -> {
+                        payload.targetUserId?.let { targetUserId ->
+                            val (messages, hasMore) = chatService.getPrivateHistory(user.id, targetUserId, payload.beforeId)
+                            conn.send(chatService.serializeEvent(
+                                WsEvent.PrivateHistory(messages, hasMore)
+                            ))
+                        }
+                    }
+                    "set_role" -> {
+                        if (payload.targetUserId != null && payload.role != null) {
+                            chatService.setUserRole(roomId, user, payload.targetUserId, payload.role)
+                        }
+                    }
+                    "kick" -> {
+                        payload.targetUserId?.let { targetUserId ->
+                            chatService.kickUser(roomId, user, targetUserId)
+                        }
+                    }
+                    "update_profile" -> {
+                        chatService.updateUserProfile(user, payload.displayName, payload.avatarUrl, payload.bio, payload.status)
                     }
                 }
             } catch (e: Exception) {
