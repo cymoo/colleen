@@ -190,6 +190,12 @@ class MessageRepository(private val dsl: DSLContext) {
     }
 
     fun searchMessages(roomId: Int, query: String, limit: Int = 50): List<ChatMessage> {
+        // Escape SQL LIKE special characters
+        val escapedQuery = query
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+
         val records = dsl.select(
             MESSAGES.ID,
             MESSAGES.ROOM_ID,
@@ -214,7 +220,7 @@ class MessageRepository(private val dsl: DSLContext) {
             .where(MESSAGES.ROOM_ID.eq(roomId))
             .and(MESSAGES.MESSAGE_TYPE.ne("system"))
             .and(IS_DELETED.eq(0).or(IS_DELETED.isNull))
-            .and(MESSAGES.CONTENT.likeIgnoreCase("%$query%"))
+            .and(MESSAGES.CONTENT.likeIgnoreCase("%$escapedQuery%"))
             .orderBy(MESSAGES.CREATED_AT.desc())
             .limit(limit)
             .fetch()
@@ -224,7 +230,7 @@ class MessageRepository(private val dsl: DSLContext) {
         }
     }
 
-    private fun getReplyInfo(messageId: Int): ReplyInfo? {
+    fun getReplyInfo(messageId: Int): ReplyInfo? {
         val record = dsl.select(
             MESSAGES.ID,
             MESSAGES.MESSAGE_TYPE,
@@ -250,7 +256,7 @@ class MessageRepository(private val dsl: DSLContext) {
             id = record.get(MESSAGES.ID)!!,
             username = record.get(USERS.USERNAME) ?: "unknown",
             displayName = record.get(USERS.DISPLAY_NAME) ?: "Unknown",
-            content = if (content.length > 100) content.substring(0, 100) + "..." else content,
+            content = if (content.length > 100) content.take(100) + "..." else content,
             messageType = msgType
         )
     }

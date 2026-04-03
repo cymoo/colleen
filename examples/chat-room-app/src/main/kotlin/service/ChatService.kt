@@ -305,10 +305,7 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
     }
 
     private fun getReplyInfoById(messageId: Int): ReplyInfo? {
-        // Use the message repository's internal method via a search
-        val messages = messageRepo.searchMessages(0, "")
-        // Actually, we need a direct lookup. Let me use a simple approach:
-        return null // Will be populated by MessageRepository internally via getRecentMessages
+        return messageRepo.getReplyInfo(messageId)
     }
 
     fun broadcastToRoom(roomId: Int, event: WsEvent) {

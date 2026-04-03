@@ -84,18 +84,16 @@ class UserRepository(private val dsl: DSLContext) {
     }
 
     fun updateProfile(userId: Int, displayName: String?, avatarUrl: String?, bio: String?, status: String?) {
-        val update = dsl.update(USERS)
+        val updates = mutableMapOf<org.jooq.Field<*>, Any?>()
+        if (displayName != null) updates[USERS.DISPLAY_NAME] = displayName
+        if (avatarUrl != null) updates[USERS.AVATAR_URL] = avatarUrl
+        if (bio != null) updates[USER_BIO] = bio
+        if (status != null) updates[USER_STATUS] = status
 
-        val step = if (displayName != null) {
-            update.set(USERS.DISPLAY_NAME, displayName)
-        } else {
-            update.set(USERS.ID, USERS.ID) // no-op to start the chain
-        }
+        if (updates.isEmpty()) return
 
-        if (avatarUrl != null) step.set(USERS.AVATAR_URL, avatarUrl)
-        if (bio != null) step.set(USER_BIO, bio)
-        if (status != null) step.set(USER_STATUS, status)
-
+        @Suppress("UNCHECKED_CAST")
+        var step = dsl.update(USERS).set(updates as Map<org.jooq.Field<Any?>, Any?>)
         step.where(USERS.ID.eq(userId)).execute()
     }
 

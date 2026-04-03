@@ -386,7 +386,8 @@ class ChatClient {
     highlightMentions(html) {
         return html.replace(/@(\w+)/g, (match, username) => {
             const isSelf = username === this.username;
-            return `<span class="mention-highlight${isSelf ? ' mention-self' : ''}" onclick="chatClient.openUserProfileByName('${username}')">${match}</span>`;
+            const safeUsername = this.escapeAttr(username);
+            return `<span class="mention-highlight${isSelf ? ' mention-self' : ''}" onclick="chatClient.openUserProfileByName('${safeUsername}')">${this.escapeHtml(match)}</span>`;
         });
     }
 
@@ -458,17 +459,17 @@ class ChatClient {
             `;
             }
 
-            // Action buttons (reply for all, edit/delete for own messages)
+            // Action buttons use data attributes instead of inline scripts for safety
             const actionsHtml = `
                 <div class="message-actions">
-                    <button class="msg-action-btn" onclick="chatClient.startReply(${message.id}, '${this.escapeHtml(displayName)}', '${this.escapeHtml((message.content || '').substring(0, 50))}')" title="Reply">↩</button>
-                    ${isOwn && messageType === 'text' ? `<button class="msg-action-btn" onclick="chatClient.startEdit(${message.id}, '${this.escapeAttr(message.content || '')}')" title="Edit">✎</button>` : ''}
-                    ${isOwn ? `<button class="msg-action-btn msg-action-delete" onclick="chatClient.confirmDelete(${message.id})" title="Delete">✕</button>` : ''}
+                    <button class="msg-action-btn msg-action-reply" data-msg-id="${message.id}" data-display-name="${this.escapeAttr(displayName)}" data-preview="${this.escapeAttr((message.content || '').substring(0, 50))}" title="Reply">↩</button>
+                    ${isOwn && messageType === 'text' ? `<button class="msg-action-btn msg-action-edit" data-msg-id="${message.id}" data-content="${this.escapeAttr(message.content || '')}" title="Edit">✎</button>` : ''}
+                    ${isOwn ? `<button class="msg-action-btn msg-action-delete" data-msg-id="${message.id}" title="Delete">✕</button>` : ''}
                 </div>
             `;
 
             div.innerHTML = `
-            <div class="message-avatar">${message.avatarUrl ? `<img src="${message.avatarUrl}" alt="" class="avatar-img">` : avatar}</div>
+            <div class="message-avatar">${message.avatarUrl ? `<img src="${this.escapeAttr(message.avatarUrl)}" alt="" class="avatar-img">` : avatar}</div>
             <div class="message-content">
                 ${replyHtml}
                 <div class="message-header">
@@ -479,6 +480,26 @@ class ChatClient {
                 ${contentHtml}
             </div>
         `;
+
+            // Attach event listeners safely
+            const replyBtn = div.querySelector('.msg-action-reply');
+            if (replyBtn) {
+                replyBtn.addEventListener('click', () => {
+                    this.startReply(message.id, displayName, (message.content || '').substring(0, 50));
+                });
+            }
+            const editBtn = div.querySelector('.msg-action-edit');
+            if (editBtn) {
+                editBtn.addEventListener('click', () => {
+                    this.startEdit(message.id, message.content || '');
+                });
+            }
+            const deleteBtn = div.querySelector('.msg-action-delete');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', () => {
+                    this.confirmDelete(message.id);
+                });
+            }
         }
 
         return div;
@@ -501,28 +522,41 @@ class ChatClient {
         document.getElementById('online-count').textContent = count;
         document.getElementById('users-count').textContent = count;
         
-        container.innerHTML = this.users.map(user => {
+        container.innerHTML = '';
+        this.users.forEach(user => {
             const avatar = this.getAvatar(user.displayName);
             const roleHtml = user.role && user.role !== 'member' ?
-                `<span class="role-badge role-${user.role}">${user.role.toUpperCase()}</span>` : '';
+                `<span class="role-badge role-${this.escapeHtml(user.role)}">${this.escapeHtml(user.role.toUpperCase())}</span>` : '';
             const statusHtml = user.status ?
                 `<div class="user-item-status">${this.escapeHtml(user.status)}</div>` : '';
-            return `
-                <div class="user-item" data-user-id="${user.id}" onclick="chatClient.openUserProfile(${user.id})">
-                    <div class="user-item-avatar">${user.avatarUrl ? `<img src="${user.avatarUrl}" alt="" class="avatar-img">` : avatar}</div>
-                    <div class="user-item-info">
-                        <div class="user-item-name">${this.escapeHtml(user.displayName)} ${roleHtml}</div>
-                        <div class="user-item-username">@${this.escapeHtml(user.username)}</div>
-                        ${statusHtml}
-                    </div>
-                    <button class="dm-btn" onclick="event.stopPropagation(); chatClient.openPrivateChat(${user.id}, '${this.escapeAttr(user.username)}', '${this.escapeAttr(user.displayName)}')" title="Send DM">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                    </button>
+            
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'user-item';
+            itemDiv.setAttribute('data-user-id', user.id);
+            itemDiv.innerHTML = `
+                <div class="user-item-avatar">${user.avatarUrl ? `<img src="${this.escapeAttr(user.avatarUrl)}" alt="" class="avatar-img">` : avatar}</div>
+                <div class="user-item-info">
+                    <div class="user-item-name">${this.escapeHtml(user.displayName)} ${roleHtml}</div>
+                    <div class="user-item-username">@${this.escapeHtml(user.username)}</div>
+                    ${statusHtml}
                 </div>
+                <button class="dm-btn" title="Send DM">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </button>
             `;
-        }).join('');
+            
+            // Safe event binding
+            itemDiv.addEventListener('click', () => this.openUserProfile(user.id));
+            const dmBtn = itemDiv.querySelector('.dm-btn');
+            dmBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.openPrivateChat(user.id, user.username, user.displayName);
+            });
+            
+            container.appendChild(itemDiv);
+        });
     }
     
     handleUserJoined(user) {
@@ -752,12 +786,18 @@ class ChatClient {
 
     showMentionDropdown(users, matchLen) {
         const dropdown = document.getElementById('mention-dropdown');
-        dropdown.innerHTML = users.map((u, i) =>
-            `<div class="mention-item${i === 0 ? ' selected' : ''}" data-username="${u.username}" onclick="chatClient.insertMention('${u.username}')">
+        dropdown.innerHTML = '';
+        users.forEach((u, i) => {
+            const item = document.createElement('div');
+            item.className = `mention-item${i === 0 ? ' selected' : ''}`;
+            item.setAttribute('data-username', u.username);
+            item.innerHTML = `
                 <span class="mention-item-name">${this.escapeHtml(u.displayName)}</span>
                 <span class="mention-item-username">@${this.escapeHtml(u.username)}</span>
-            </div>`
-        ).join('');
+            `;
+            item.addEventListener('click', () => this.insertMention(u.username));
+            dropdown.appendChild(item);
+        });
         dropdown.style.display = 'block';
         this.mentionDropdownVisible = true;
     }
@@ -816,24 +856,32 @@ class ChatClient {
             container.innerHTML = '<div class="search-no-results">No messages found</div>';
             return;
         }
-        container.innerHTML = messages.map(msg => {
+        container.innerHTML = '';
+        messages.forEach(msg => {
             const name = msg.displayName || msg.username || 'Unknown';
             const content = msg.content || '';
             const time = this.formatTime(msg.timestamp);
-            const highlighted = content.replace(
-                new RegExp(`(${this.escapeRegex(query)})`, 'gi'),
+            // Escape content first, then highlight query matches
+            const escaped = this.escapeHtml(content);
+            const highlighted = escaped.replace(
+                new RegExp(`(${this.escapeRegex(this.escapeHtml(query))})`, 'gi'),
                 '<mark class="search-highlight">$1</mark>'
             );
-            return `
-                <div class="search-result-item" onclick="chatClient.scrollToMessage(${msg.id}); chatClient.toggleSearch();">
-                    <div class="search-result-header">
-                        <span class="search-result-author">${this.escapeHtml(name)}</span>
-                        <span class="search-result-time">${time}</span>
-                    </div>
-                    <div class="search-result-content">${highlighted}</div>
+            const item = document.createElement('div');
+            item.className = 'search-result-item';
+            item.innerHTML = `
+                <div class="search-result-header">
+                    <span class="search-result-author">${this.escapeHtml(name)}</span>
+                    <span class="search-result-time">${time}</span>
                 </div>
+                <div class="search-result-content">${highlighted}</div>
             `;
-        }).join('');
+            item.addEventListener('click', () => {
+                this.scrollToMessage(msg.id);
+                this.toggleSearch();
+            });
+            container.appendChild(item);
+        });
     }
 
     // ============ Private Messages ============
@@ -915,17 +963,25 @@ class ChatClient {
             
             const content = document.getElementById('user-profile-content');
             content.innerHTML = `
-                <div class="profile-avatar-large">${user.avatarUrl ? `<img src="${user.avatarUrl}" class="avatar-img-large">` : this.getAvatar(user.displayName)}</div>
+                <div class="profile-avatar-large">${user.avatarUrl ? `<img src="${this.escapeAttr(user.avatarUrl)}" class="avatar-img-large">` : this.getAvatar(user.displayName)}</div>
                 <div class="profile-display-name">${this.escapeHtml(user.displayName)}</div>
                 <div class="profile-username">@${this.escapeHtml(user.username)}</div>
                 ${user.status ? `<div class="profile-status">${this.escapeHtml(user.status)}</div>` : ''}
                 ${user.bio ? `<div class="profile-bio">${this.escapeHtml(user.bio)}</div>` : ''}
                 <div class="profile-joined">Joined: ${new Date(user.createdAt).toLocaleDateString()}</div>
                 <div class="profile-actions">
-                    <button class="profile-action-btn" onclick="chatClient.closeUserProfile(); chatClient.openPrivateChat(${user.id}, '${this.escapeAttr(user.username)}', '${this.escapeAttr(user.displayName)}')">Send DM</button>
-                    <button class="profile-action-btn" onclick="chatClient.insertMentionInChat('${user.username}')">@Mention</button>
+                    <button class="profile-action-btn profile-dm-btn">Send DM</button>
+                    <button class="profile-action-btn profile-mention-btn">@Mention</button>
                 </div>
             `;
+            // Safe event binding
+            content.querySelector('.profile-dm-btn').addEventListener('click', () => {
+                this.closeUserProfile();
+                this.openPrivateChat(user.id, user.username, user.displayName);
+            });
+            content.querySelector('.profile-mention-btn').addEventListener('click', () => {
+                this.insertMentionInChat(user.username);
+            });
             document.getElementById('user-profile-modal').classList.add('active');
         } catch (e) {
             this.showToast('Failed to load profile', 'error');
@@ -1026,7 +1082,7 @@ class ChatClient {
     }
 
     escapeAttr(text) {
-        return text.replace(/'/g, "\\'").replace(/"/g, '\\"');
+        return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     }
 
     escapeRegex(str) {
