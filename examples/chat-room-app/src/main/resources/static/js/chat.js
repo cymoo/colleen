@@ -28,8 +28,24 @@ class ChatClient {
     }
     
     init() {
+        this.configureMarkdown();
         this.bindEvents();
         this.loadRooms();
+    }
+
+    configureMarkdown() {
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                gfm: true,
+                breaks: true,
+                highlight: function(code, lang) {
+                    if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+                        try { return hljs.highlight(code, { language: lang }).value; } catch (e) {}
+                    }
+                    return code;
+                }
+            });
+        }
     }
     
     bindEvents() {
@@ -46,6 +62,14 @@ class ChatClient {
                 e.preventDefault();
                 this.sendMessage();
             }
+        });
+
+        messageInput.addEventListener('input', (e) => {
+            this.handleMentionInput(e);
+        });
+
+        messageInput.addEventListener('keydown', (e) => {
+            this.handleMentionKeydown(e);
         });
         
         // Send button
@@ -85,6 +109,39 @@ class ChatClient {
         
         backdrop.addEventListener('click', () => {
             modal.classList.remove('active');
+        });
+
+        // Search
+        document.getElementById('search-toggle-btn').addEventListener('click', () => {
+            this.toggleSearch();
+        });
+        document.getElementById('search-close-btn').addEventListener('click', () => {
+            this.toggleSearch();
+        });
+        document.getElementById('search-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.performSearch();
+            }
+        });
+
+        // Indicator cancel (reply/edit)
+        document.getElementById('indicator-cancel').addEventListener('click', () => {
+            this.cancelIndicator();
+        });
+
+        // Private message input
+        document.getElementById('private-message-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.sendPrivateMessage();
+            }
+        });
+
+        // Scroll to load history
+        const messagesContainer = document.getElementById('messages-container');
+        messagesContainer.addEventListener('scroll', () => {
+            if (messagesContainer.scrollTop < 50 && this.hasMoreHistory && !this.loadingHistory && this.oldestMessageId) {
+                this.loadMoreHistory();
+            }
         });
     }
     
@@ -192,6 +249,9 @@ class ChatClient {
         // Clear messages
         document.getElementById('messages-container').innerHTML = '';
         document.getElementById('users-list').innerHTML = '';
+        this.users = [];
+        this.oldestMessageId = null;
+        this.hasMoreHistory = true;
         
         this.showToast('Disconnected', 'success');
     }
@@ -199,7 +259,11 @@ class ChatClient {
     handleMessage(data) {
         switch (data.type) {
             case 'history':
-                this.renderHistory(data.messages);
+                if (this.loadingHistory) {
+                    this.prependHistory(data.messages, data.hasMore);
+                } else {
+                    this.renderHistory(data.messages, data.hasMore);
+                }
                 break;
             case 'users':
                 this.updateUsersList(data.users);
@@ -216,31 +280,122 @@ class ChatClient {
             case 'error':
                 this.showToast(data.message, 'error');
                 break;
+            case 'message_edited':
+                this.handleMessageEdited(data.messageId, data.content, data.editedAt);
+                break;
+            case 'message_deleted':
+                this.handleMessageDeleted(data.messageId);
+                break;
+            case 'private_message':
+                this.handlePrivateMessageReceived(data.message);
+                break;
+            case 'private_history':
+                this.renderPrivateHistory(data.messages, data.hasMore);
+                break;
+            case 'mention':
+                this.handleMention(data);
+                break;
+            case 'user_updated':
+                this.handleUserUpdated(data.user);
+                break;
+            case 'kicked':
+                this.handleKicked(data.reason);
+                break;
+            case 'role_changed':
+                this.handleRoleChanged(data.userId, data.role);
+                break;
+            case 'search_results':
+                this.renderSearchResults(data.messages, data.query);
+                break;
         }
     }
     
-    renderHistory(messages) {
+    // ============ History & Messages ============
+    
+    renderHistory(messages, hasMore = false) {
         const container = document.getElementById('messages-container');
         container.innerHTML = '';
+        this.hasMoreHistory = hasMore;
+        if (messages.length > 0) {
+            this.oldestMessageId = messages[0].id;
+        }
         messages.forEach(msg => this.appendMessage(msg, false));
         this.scrollToBottom();
+    }
+
+    prependHistory(messages, hasMore) {
+        this.loadingHistory = false;
+        this.hasMoreHistory = hasMore;
+        document.getElementById('history-loader').style.display = 'none';
+
+        if (messages.length === 0) return;
+
+        const container = document.getElementById('messages-container');
+        const previousScrollHeight = container.scrollHeight;
+        
+        this.oldestMessageId = messages[0].id;
+        
+        const fragment = document.createDocumentFragment();
+        messages.forEach(msg => {
+            fragment.appendChild(this.createMessageElement(msg));
+        });
+        container.insertBefore(fragment, container.firstChild);
+
+        // Maintain scroll position
+        container.scrollTop = container.scrollHeight - previousScrollHeight;
+    }
+
+    loadMoreHistory() {
+        if (!this.ws || !this.oldestMessageId || this.loadingHistory) return;
+        this.loadingHistory = true;
+        document.getElementById('history-loader').style.display = 'flex';
+        
+        this.ws.send(JSON.stringify({
+            type: 'load_history',
+            beforeId: this.oldestMessageId
+        }));
     }
     
     appendMessage(message, scroll = true) {
         const container = document.getElementById('messages-container');
         const messageEl = this.createMessageElement(message);
         container.appendChild(messageEl);
+
+        // Track oldest message ID
+        if (!this.oldestMessageId || message.id < this.oldestMessageId) {
+            this.oldestMessageId = message.id;
+        }
         
         if (scroll) {
             this.scrollToBottom();
         }
     }
 
+    renderMarkdown(text) {
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            return this.escapeHtml(text);
+        }
+        try {
+            const raw = marked.parse(text);
+            return DOMPurify.sanitize(raw);
+        } catch (e) {
+            return this.escapeHtml(text);
+        }
+    }
+
+    highlightMentions(html) {
+        return html.replace(/@(\w+)/g, (match, username) => {
+            const isSelf = username === this.username;
+            return `<span class="mention-highlight${isSelf ? ' mention-self' : ''}" onclick="chatClient.openUserProfileByName('${username}')">${match}</span>`;
+        });
+    }
+
     createMessageElement(message) {
         const div = document.createElement('div');
         const displayName = message.displayName || message.username || 'Unknown';
+        const isOwn = message.username === this.username;
 
-        // messageType 缺失时根据字段推断，兜底为 system
+        // messageType fallback
         let messageType = message.messageType;
         if (!messageType) {
             if (message.imageUrl) messageType = 'image';
@@ -258,12 +413,27 @@ class ChatClient {
         `;
         } else {
             div.className = 'message';
+            div.setAttribute('data-message-id', message.id);
             const avatar = this.getAvatar(displayName);
             const time = this.formatTime(message.timestamp);
+            const editedHtml = message.editedAt ? '<span class="edited-tag">(edited)</span>' : '';
+
+            // Reply preview
+            let replyHtml = '';
+            if (message.replyTo) {
+                const r = message.replyTo;
+                replyHtml = `
+                <div class="reply-preview" onclick="chatClient.scrollToMessage(${r.id})">
+                    <span class="reply-author">↩ ${this.escapeHtml(r.displayName)}</span>
+                    <span class="reply-content">${this.escapeHtml(r.content)}</span>
+                </div>`;
+            }
 
             let contentHtml = '';
             if (messageType === 'text') {
-                contentHtml = `<div class="message-text">${this.escapeHtml(message.content || '')}</div>`;
+                let rendered = this.renderMarkdown(message.content || '');
+                rendered = this.highlightMentions(rendered);
+                contentHtml = `<div class="message-text markdown-body">${rendered} ${editedHtml}</div>`;
             } else if (messageType === 'image') {
                 contentHtml = `
                 <div class="message-text">shared an image</div>
@@ -288,12 +458,23 @@ class ChatClient {
             `;
             }
 
+            // Action buttons (reply for all, edit/delete for own messages)
+            const actionsHtml = `
+                <div class="message-actions">
+                    <button class="msg-action-btn" onclick="chatClient.startReply(${message.id}, '${this.escapeHtml(displayName)}', '${this.escapeHtml((message.content || '').substring(0, 50))}')" title="Reply">↩</button>
+                    ${isOwn && messageType === 'text' ? `<button class="msg-action-btn" onclick="chatClient.startEdit(${message.id}, '${this.escapeAttr(message.content || '')}')" title="Edit">✎</button>` : ''}
+                    ${isOwn ? `<button class="msg-action-btn msg-action-delete" onclick="chatClient.confirmDelete(${message.id})" title="Delete">✕</button>` : ''}
+                </div>
+            `;
+
             div.innerHTML = `
-            <div class="message-avatar">${avatar}</div>
+            <div class="message-avatar">${message.avatarUrl ? `<img src="${message.avatarUrl}" alt="" class="avatar-img">` : avatar}</div>
             <div class="message-content">
+                ${replyHtml}
                 <div class="message-header">
                     <div class="message-author">${this.escapeHtml(displayName)}</div>
                     <div class="message-time">${time}</div>
+                    ${actionsHtml}
                 </div>
                 ${contentHtml}
             </div>
@@ -302,9 +483,14 @@ class ChatClient {
 
         return div;
     }
+
+    // ============ User List ============
     
     updateUsersList(users) {
         this.users = users;
+        // Try to find self userId
+        const self = users.find(u => u.username === this.username);
+        if (self) this.userId = self.id;
         this.renderUsersList();
     }
 
@@ -329,7 +515,7 @@ class ChatClient {
                         <div class="user-item-username">@${this.escapeHtml(user.username)}</div>
                         ${statusHtml}
                     </div>
-                    <button class="dm-btn" onclick="event.stopPropagation(); chatClient.openPrivateChat(${user.id}, '${this.escapeHtml(user.username)}', '${this.escapeHtml(user.displayName)}')" title="Send DM">
+                    <button class="dm-btn" onclick="event.stopPropagation(); chatClient.openPrivateChat(${user.id}, '${this.escapeAttr(user.username)}', '${this.escapeAttr(user.displayName)}')" title="Send DM">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                         </svg>
@@ -351,22 +537,33 @@ class ChatClient {
         this.renderUsersList();
     }
     
-    async loadUsersList() {
-        // Users list is updated via WebSocket events
-    }
+    // ============ Sending Messages ============
     
     sendMessage() {
         const input = document.getElementById('message-input');
         const content = input.value.trim();
         
         if (!content || !this.ws) return;
+
+        if (this.editingMessageId) {
+            this.ws.send(JSON.stringify({
+                type: 'edit',
+                messageId: this.editingMessageId,
+                content: content
+            }));
+            this.cancelIndicator();
+        } else {
+            const payload = {
+                type: 'text',
+                content: content
+            };
+            if (this.replyingTo) {
+                payload.replyToId = this.replyingTo.id;
+            }
+            this.ws.send(JSON.stringify(payload));
+            this.cancelIndicator();
+        }
         
-        const payload = {
-            type: 'text',
-            content: content
-        };
-        
-        this.ws.send(JSON.stringify(payload));
         input.value = '';
     }
     
@@ -390,6 +587,10 @@ class ChatClient {
                     imageUrl: result.url,
                     thumbnailUrl: result.thumbnail
                 };
+                if (this.replyingTo) {
+                    payload.replyToId = this.replyingTo.id;
+                    this.cancelIndicator();
+                }
                 this.ws.send(JSON.stringify(payload));
                 this.showToast('Image uploaded', 'success');
             } else {
@@ -423,6 +624,10 @@ class ChatClient {
                     fileSize: result.fileSize,
                     mimeType: file.type
                 };
+                if (this.replyingTo) {
+                    payload.replyToId = this.replyingTo.id;
+                    this.cancelIndicator();
+                }
                 this.ws.send(JSON.stringify(payload));
                 this.showToast('File uploaded', 'success');
             } else {
@@ -433,6 +638,343 @@ class ChatClient {
             this.showToast('Upload failed', 'error');
         }
     }
+
+    // ============ Edit / Delete ============
+
+    startEdit(messageId, content) {
+        this.editingMessageId = messageId;
+        this.replyingTo = null;
+        document.getElementById('message-input').value = content;
+        document.getElementById('message-input').focus();
+        document.getElementById('input-indicator').style.display = 'flex';
+        document.getElementById('indicator-text').textContent = '✎ Editing message...';
+    }
+
+    confirmDelete(messageId) {
+        if (confirm('Delete this message?')) {
+            this.ws.send(JSON.stringify({ type: 'delete', messageId }));
+        }
+    }
+
+    handleMessageEdited(messageId, content, editedAt) {
+        const el = document.querySelector(`[data-message-id="${messageId}"] .message-text`);
+        if (el) {
+            let rendered = this.renderMarkdown(content);
+            rendered = this.highlightMentions(rendered);
+            el.innerHTML = rendered + ' <span class="edited-tag">(edited)</span>';
+        }
+    }
+
+    handleMessageDeleted(messageId) {
+        const el = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (el) {
+            el.classList.add('message-deleted');
+            const textEl = el.querySelector('.message-text');
+            if (textEl) {
+                textEl.innerHTML = '<em class="deleted-text">This message has been deleted</em>';
+            }
+            const actions = el.querySelector('.message-actions');
+            if (actions) actions.remove();
+        }
+    }
+
+    // ============ Reply ============
+
+    startReply(messageId, displayName, preview) {
+        this.replyingTo = { id: messageId, displayName, preview };
+        this.editingMessageId = null;
+        document.getElementById('input-indicator').style.display = 'flex';
+        document.getElementById('indicator-text').textContent = `↩ Replying to ${displayName}: ${preview}...`;
+        document.getElementById('message-input').focus();
+    }
+
+    cancelIndicator() {
+        this.editingMessageId = null;
+        this.replyingTo = null;
+        document.getElementById('input-indicator').style.display = 'none';
+    }
+
+    scrollToMessage(messageId) {
+        const el = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.add('message-highlight');
+            setTimeout(() => el.classList.remove('message-highlight'), 2000);
+        }
+    }
+
+    // ============ Mentions ============
+
+    handleMentionInput(e) {
+        const input = e.target;
+        const value = input.value;
+        const cursorPos = input.selectionStart;
+        
+        // Find @ before cursor
+        const textBefore = value.substring(0, cursorPos);
+        const atMatch = textBefore.match(/@(\w*)$/);
+        
+        if (atMatch) {
+            const query = atMatch[1].toLowerCase();
+            const matches = this.users.filter(u => 
+                u.username.toLowerCase().startsWith(query) ||
+                u.displayName.toLowerCase().startsWith(query)
+            ).slice(0, 5);
+            
+            if (matches.length > 0) {
+                this.showMentionDropdown(matches, atMatch[0].length);
+                return;
+            }
+        }
+        this.hideMentionDropdown();
+    }
+
+    handleMentionKeydown(e) {
+        if (!this.mentionDropdownVisible) return;
+        
+        const dropdown = document.getElementById('mention-dropdown');
+        const items = dropdown.querySelectorAll('.mention-item');
+        const selected = dropdown.querySelector('.mention-item.selected');
+        
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            let idx = Array.from(items).indexOf(selected);
+            if (selected) selected.classList.remove('selected');
+            idx = e.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
+            items[idx].classList.add('selected');
+        } else if (e.key === 'Enter' && selected) {
+            e.preventDefault();
+            this.insertMention(selected.dataset.username);
+        } else if (e.key === 'Escape') {
+            this.hideMentionDropdown();
+        }
+    }
+
+    showMentionDropdown(users, matchLen) {
+        const dropdown = document.getElementById('mention-dropdown');
+        dropdown.innerHTML = users.map((u, i) =>
+            `<div class="mention-item${i === 0 ? ' selected' : ''}" data-username="${u.username}" onclick="chatClient.insertMention('${u.username}')">
+                <span class="mention-item-name">${this.escapeHtml(u.displayName)}</span>
+                <span class="mention-item-username">@${this.escapeHtml(u.username)}</span>
+            </div>`
+        ).join('');
+        dropdown.style.display = 'block';
+        this.mentionDropdownVisible = true;
+    }
+
+    hideMentionDropdown() {
+        document.getElementById('mention-dropdown').style.display = 'none';
+        this.mentionDropdownVisible = false;
+    }
+
+    insertMention(username) {
+        const input = document.getElementById('message-input');
+        const value = input.value;
+        const cursorPos = input.selectionStart;
+        const textBefore = value.substring(0, cursorPos);
+        const textAfter = value.substring(cursorPos);
+        const newBefore = textBefore.replace(/@\w*$/, `@${username} `);
+        input.value = newBefore + textAfter;
+        input.selectionStart = input.selectionEnd = newBefore.length;
+        input.focus();
+        this.hideMentionDropdown();
+    }
+
+    handleMention(data) {
+        this.showToast(`${data.mentionedBy} mentioned you`, 'success');
+        // Browser notification
+        if (Notification.permission === 'granted') {
+            new Notification('TERMINAL.CHAT', { body: `${data.mentionedBy} mentioned you` });
+        } else if (Notification.permission !== 'denied') {
+            Notification.requestPermission();
+        }
+    }
+
+    // ============ Search ============
+
+    toggleSearch() {
+        this.searchVisible = !this.searchVisible;
+        const bar = document.getElementById('search-bar');
+        bar.style.display = this.searchVisible ? 'block' : 'none';
+        if (this.searchVisible) {
+            document.getElementById('search-input').focus();
+        } else {
+            document.getElementById('search-results').style.display = 'none';
+        }
+    }
+
+    performSearch() {
+        const query = document.getElementById('search-input').value.trim();
+        if (!query || !this.ws) return;
+        this.ws.send(JSON.stringify({ type: 'search', query }));
+    }
+
+    renderSearchResults(messages, query) {
+        const container = document.getElementById('search-results');
+        container.style.display = 'block';
+        if (messages.length === 0) {
+            container.innerHTML = '<div class="search-no-results">No messages found</div>';
+            return;
+        }
+        container.innerHTML = messages.map(msg => {
+            const name = msg.displayName || msg.username || 'Unknown';
+            const content = msg.content || '';
+            const time = this.formatTime(msg.timestamp);
+            const highlighted = content.replace(
+                new RegExp(`(${this.escapeRegex(query)})`, 'gi'),
+                '<mark class="search-highlight">$1</mark>'
+            );
+            return `
+                <div class="search-result-item" onclick="chatClient.scrollToMessage(${msg.id}); chatClient.toggleSearch();">
+                    <div class="search-result-header">
+                        <span class="search-result-author">${this.escapeHtml(name)}</span>
+                        <span class="search-result-time">${time}</span>
+                    </div>
+                    <div class="search-result-content">${highlighted}</div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // ============ Private Messages ============
+
+    openPrivateChat(userId, username, displayName) {
+        this.privateChatUserId = userId;
+        this.privateChatUsername = username;
+        document.getElementById('private-chat-title').textContent = `DM: ${displayName}`;
+        document.getElementById('private-chat-messages').innerHTML = '<div class="loading-text">Loading...</div>';
+        document.getElementById('private-chat-modal').classList.add('active');
+
+        // Request history
+        if (this.ws) {
+            this.ws.send(JSON.stringify({
+                type: 'private_history',
+                targetUserId: userId
+            }));
+        }
+    }
+
+    closePrivateChat() {
+        document.getElementById('private-chat-modal').classList.remove('active');
+        this.privateChatUserId = null;
+    }
+
+    sendPrivateMessage() {
+        const input = document.getElementById('private-message-input');
+        const content = input.value.trim();
+        if (!content || !this.ws || !this.privateChatUserId) return;
+
+        this.ws.send(JSON.stringify({
+            type: 'private_message',
+            targetUserId: this.privateChatUserId,
+            content: content
+        }));
+        input.value = '';
+    }
+
+    handlePrivateMessageReceived(message) {
+        // If private chat is open with this user, append message
+        if (this.privateChatUserId === message.senderId || this.privateChatUserId === message.receiverId) {
+            this.appendPrivateChatMessage(message);
+        } else {
+            // Show notification
+            this.showToast(`DM from ${message.senderDisplayName}: ${(message.content || '').substring(0, 50)}`, 'success');
+        }
+    }
+
+    renderPrivateHistory(messages, hasMore) {
+        const container = document.getElementById('private-chat-messages');
+        container.innerHTML = '';
+        messages.forEach(msg => this.appendPrivateChatMessage(msg));
+        container.scrollTop = container.scrollHeight;
+    }
+
+    appendPrivateChatMessage(message) {
+        const container = document.getElementById('private-chat-messages');
+        const loadingEl = container.querySelector('.loading-text');
+        if (loadingEl) loadingEl.remove();
+
+        const isSelf = message.senderUsername === this.username;
+        const div = document.createElement('div');
+        div.className = `private-msg ${isSelf ? 'private-msg-self' : 'private-msg-other'}`;
+        div.innerHTML = `
+            <div class="private-msg-author">${this.escapeHtml(message.senderDisplayName)}</div>
+            <div class="private-msg-content">${this.renderMarkdown(message.content || '')}</div>
+            <div class="private-msg-time">${this.formatTime(message.timestamp)}</div>
+        `;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // ============ User Profiles ============
+
+    async openUserProfile(userId) {
+        try {
+            const response = await fetch(`/api/users/${userId}`);
+            const user = await response.json();
+            
+            const content = document.getElementById('user-profile-content');
+            content.innerHTML = `
+                <div class="profile-avatar-large">${user.avatarUrl ? `<img src="${user.avatarUrl}" class="avatar-img-large">` : this.getAvatar(user.displayName)}</div>
+                <div class="profile-display-name">${this.escapeHtml(user.displayName)}</div>
+                <div class="profile-username">@${this.escapeHtml(user.username)}</div>
+                ${user.status ? `<div class="profile-status">${this.escapeHtml(user.status)}</div>` : ''}
+                ${user.bio ? `<div class="profile-bio">${this.escapeHtml(user.bio)}</div>` : ''}
+                <div class="profile-joined">Joined: ${new Date(user.createdAt).toLocaleDateString()}</div>
+                <div class="profile-actions">
+                    <button class="profile-action-btn" onclick="chatClient.closeUserProfile(); chatClient.openPrivateChat(${user.id}, '${this.escapeAttr(user.username)}', '${this.escapeAttr(user.displayName)}')">Send DM</button>
+                    <button class="profile-action-btn" onclick="chatClient.insertMentionInChat('${user.username}')">@Mention</button>
+                </div>
+            `;
+            document.getElementById('user-profile-modal').classList.add('active');
+        } catch (e) {
+            this.showToast('Failed to load profile', 'error');
+        }
+    }
+
+    openUserProfileByName(username) {
+        const user = this.users.find(u => u.username === username);
+        if (user) this.openUserProfile(user.id);
+    }
+
+    closeUserProfile() {
+        document.getElementById('user-profile-modal').classList.remove('active');
+    }
+
+    insertMentionInChat(username) {
+        this.closeUserProfile();
+        const input = document.getElementById('message-input');
+        input.value += `@${username} `;
+        input.focus();
+    }
+
+    handleUserUpdated(user) {
+        const idx = this.users.findIndex(u => u.id === user.id);
+        if (idx !== -1) {
+            this.users[idx] = user;
+            this.renderUsersList();
+        }
+    }
+
+    // ============ Room Permissions ============
+
+    handleKicked(reason) {
+        this.showToast(`You were kicked: ${reason}`, 'error');
+        this.disconnect();
+    }
+
+    handleRoleChanged(userId, role) {
+        const user = this.users.find(u => u.id === userId);
+        if (user) {
+            user.role = role;
+            this.renderUsersList();
+        }
+        if (userId === this.userId) {
+            this.showToast(`Your role changed to: ${role}`, 'success');
+        }
+    }
+
+    // ============ Utilities ============
     
     openImageModal(imageUrl) {
         const modal = document.getElementById('image-modal');
@@ -481,6 +1023,14 @@ class ChatClient {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    escapeAttr(text) {
+        return text.replace(/'/g, "\\'").replace(/"/g, '\\"');
+    }
+
+    escapeRegex(str) {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 }
 
