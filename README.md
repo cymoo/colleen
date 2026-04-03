@@ -60,14 +60,14 @@ The goal is not to maximize features, but to maximize understandability and cont
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.4.3</version>
+    <version>0.4.5</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.4.3")
+implementation("io.github.cymoo:colleen:0.4.5")
 ```
 
 ### Hello World
