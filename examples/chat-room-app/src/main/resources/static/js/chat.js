@@ -7,11 +7,23 @@ class ChatClient {
         this.ws = null;
         this.username = '';
         this.displayName = '';
+        this.userId = null;
         this.roomId = null;
         this.roomName = '';
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
-        
+        this.intentionalDisconnect = false;
+        this.users = [];
+        this.oldestMessageId = null;
+        this.hasMoreHistory = true;
+        this.loadingHistory = false;
+        this.editingMessageId = null;
+        this.replyingTo = null;
+        this.mentionDropdownVisible = false;
+        this.privateChatUserId = null;
+        this.privateChatUsername = '';
+        this.searchVisible = false;
+
         this.init();
     }
     
@@ -108,6 +120,7 @@ class ChatClient {
     }
     
     connect() {
+        this.intentionalDisconnect = false;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/chat/${this.roomId}?username=${encodeURIComponent(this.username)}&displayName=${encodeURIComponent(this.displayName)}`;
         
@@ -151,6 +164,9 @@ class ChatClient {
     }
     
     onDisconnected() {
+        if (this.intentionalDisconnect) {
+            return;
+        }
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             setTimeout(() => {
@@ -163,6 +179,7 @@ class ChatClient {
     }
     
     disconnect() {
+        this.intentionalDisconnect = true;
         if (this.ws) {
             this.ws.close();
             this.ws = null;
@@ -287,32 +304,51 @@ class ChatClient {
     }
     
     updateUsersList(users) {
+        this.users = users;
+        this.renderUsersList();
+    }
+
+    renderUsersList() {
         const container = document.getElementById('users-list');
-        const count = users.length;
+        const count = this.users.length;
         
         document.getElementById('online-count').textContent = count;
         document.getElementById('users-count').textContent = count;
         
-        container.innerHTML = users.map(user => {
+        container.innerHTML = this.users.map(user => {
             const avatar = this.getAvatar(user.displayName);
+            const roleHtml = user.role && user.role !== 'member' ?
+                `<span class="role-badge role-${user.role}">${user.role.toUpperCase()}</span>` : '';
+            const statusHtml = user.status ?
+                `<div class="user-item-status">${this.escapeHtml(user.status)}</div>` : '';
             return `
-                <div class="user-item">
-                    <div class="user-item-avatar">${avatar}</div>
+                <div class="user-item" data-user-id="${user.id}" onclick="chatClient.openUserProfile(${user.id})">
+                    <div class="user-item-avatar">${user.avatarUrl ? `<img src="${user.avatarUrl}" alt="" class="avatar-img">` : avatar}</div>
                     <div class="user-item-info">
-                        <div class="user-item-name">${this.escapeHtml(user.displayName)}</div>
+                        <div class="user-item-name">${this.escapeHtml(user.displayName)} ${roleHtml}</div>
                         <div class="user-item-username">@${this.escapeHtml(user.username)}</div>
+                        ${statusHtml}
                     </div>
+                    <button class="dm-btn" onclick="event.stopPropagation(); chatClient.openPrivateChat(${user.id}, '${this.escapeHtml(user.username)}', '${this.escapeHtml(user.displayName)}')" title="Send DM">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                    </button>
                 </div>
             `;
         }).join('');
     }
     
     handleUserJoined(user) {
-        this.loadUsersList();
+        if (!this.users.find(u => u.id === user.id)) {
+            this.users.push(user);
+        }
+        this.renderUsersList();
     }
     
     handleUserLeft(userId) {
-        this.loadUsersList();
+        this.users = this.users.filter(u => u.id !== userId);
+        this.renderUsersList();
     }
     
     async loadUsersList() {
