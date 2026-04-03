@@ -28,7 +28,7 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
     private val roomConnections = ConcurrentHashMap<Int, CopyOnWriteArraySet<WsConnection>>()
 
     // User ID -> Connection
-    val userConnections = ConcurrentHashMap<Int, WsConnection>()
+    private val userConnections = ConcurrentHashMap<Int, WsConnection>()
 
     // Broadcast executor for async message sending
     private val broadcastExecutor: ExecutorService = Executors.newCachedThreadPool { runnable ->

@@ -196,11 +196,11 @@
     
     <!-- Private Chat Modal -->
     <div id="private-chat-modal" class="modal">
-        <div class="modal-backdrop" onclick="chatClient.closePrivateChat()"></div>
+        <div class="modal-backdrop" id="private-chat-backdrop"></div>
         <div class="private-chat-panel">
             <div class="private-chat-header">
                 <span id="private-chat-title">Direct Message</span>
-                <button class="modal-close" onclick="chatClient.closePrivateChat()">
+                <button class="modal-close" id="private-chat-close-btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
                         <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -212,7 +212,7 @@
             </div>
             <div class="private-chat-input">
                 <input type="text" id="private-message-input" class="message-input" placeholder="Type a private message..." autocomplete="off">
-                <button class="icon-btn send-btn" onclick="chatClient.sendPrivateMessage()">
+                <button class="icon-btn send-btn" id="private-send-btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="22" y1="2" x2="11" y2="13"></line>
                         <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -224,10 +224,10 @@
 
     <!-- User Profile Modal -->
     <div id="user-profile-modal" class="modal">
-        <div class="modal-backdrop" onclick="chatClient.closeUserProfile()"></div>
+        <div class="modal-backdrop" id="user-profile-backdrop"></div>
         <div class="user-profile-panel">
             <div class="profile-header">
-                <button class="modal-close" onclick="chatClient.closeUserProfile()">
+                <button class="modal-close" id="user-profile-close-btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
                         <line x1="6" y1="6" x2="18" y2="18"></line>

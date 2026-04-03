@@ -129,15 +129,46 @@ class ChatClient {
             this.cancelIndicator();
         });
 
-        // Private message input
+        // Private chat modal
         document.getElementById('private-message-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 this.sendPrivateMessage();
             }
         });
+        document.getElementById('private-send-btn').addEventListener('click', () => {
+            this.sendPrivateMessage();
+        });
+        document.getElementById('private-chat-backdrop').addEventListener('click', () => {
+            this.closePrivateChat();
+        });
+        document.getElementById('private-chat-close-btn').addEventListener('click', () => {
+            this.closePrivateChat();
+        });
+
+        // User profile modal
+        document.getElementById('user-profile-backdrop').addEventListener('click', () => {
+            this.closeUserProfile();
+        });
+        document.getElementById('user-profile-close-btn').addEventListener('click', () => {
+            this.closeUserProfile();
+        });
+
+        // Delegated click handler for mention highlights and reply previews
+        const messagesContainer = document.getElementById('messages-container');
+        messagesContainer.addEventListener('click', (e) => {
+            const mention = e.target.closest('[data-mention-user]');
+            if (mention) {
+                this.openUserProfileByName(mention.dataset.mentionUser);
+                return;
+            }
+            const replyPreview = e.target.closest('.reply-preview');
+            if (replyPreview) {
+                const msgId = parseInt(replyPreview.dataset.replyId, 10);
+                if (!isNaN(msgId)) this.scrollToMessage(msgId);
+            }
+        });
 
         // Scroll to load history
-        const messagesContainer = document.getElementById('messages-container');
         messagesContainer.addEventListener('scroll', () => {
             if (messagesContainer.scrollTop < 50 && this.hasMoreHistory && !this.loadingHistory && this.oldestMessageId) {
                 this.loadMoreHistory();
@@ -386,8 +417,8 @@ class ChatClient {
     highlightMentions(html) {
         return html.replace(/@(\w+)/g, (match, username) => {
             const isSelf = username === this.username;
-            const safeUsername = this.escapeAttr(username);
-            return `<span class="mention-highlight${isSelf ? ' mention-self' : ''}" onclick="chatClient.openUserProfileByName('${safeUsername}')">${this.escapeHtml(match)}</span>`;
+            // Use data attribute instead of inline onclick; event delegation handles the click
+            return `<span class="mention-highlight${isSelf ? ' mention-self' : ''}" data-mention-user="${this.escapeAttr(username)}">${this.escapeHtml(match)}</span>`;
         });
     }
 
@@ -424,7 +455,7 @@ class ChatClient {
             if (message.replyTo) {
                 const r = message.replyTo;
                 replyHtml = `
-                <div class="reply-preview" onclick="chatClient.scrollToMessage(${r.id})">
+                <div class="reply-preview" data-reply-id="${r.id}">
                     <span class="reply-author">↩ ${this.escapeHtml(r.displayName)}</span>
                     <span class="reply-content">${this.escapeHtml(r.content)}</span>
                 </div>`;
@@ -957,8 +988,11 @@ class ChatClient {
     // ============ User Profiles ============
 
     async openUserProfile(userId) {
+        // Validate userId is a number to prevent URL injection
+        const safeUserId = parseInt(userId, 10);
+        if (isNaN(safeUserId)) return;
         try {
-            const response = await fetch(`/api/users/${userId}`);
+            const response = await fetch(`/api/users/${safeUserId}`);
             const user = await response.json();
             
             const content = document.getElementById('user-profile-content');
