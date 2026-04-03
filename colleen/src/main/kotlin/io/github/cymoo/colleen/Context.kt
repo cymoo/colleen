@@ -1,7 +1,11 @@
 package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.util.TypeRef
+import io.github.cymoo.colleen.util.http.FileResponse
 import io.github.cymoo.colleen.util.http.UrlPath
+import io.github.cymoo.colleen.util.lastModifiedHeader
+import io.github.cymoo.colleen.util.notModifiedSince
+import io.github.cymoo.colleen.util.resolveFileStream
 import java.io.InputStream
 import java.util.function.BiConsumer
 import java.util.function.Consumer
@@ -526,6 +530,62 @@ data class Context(
     @JvmOverloads
     fun stream(stream: InputStream, contentType: String = "application/octet-stream") =
         response.stream(stream, contentType)
+
+    /**
+     * Sends a file as the response, with full HTTP content negotiation.
+     *
+     * Automatically sets Content-Type, Content-Disposition, Content-Length,
+     * Last-Modified, X-Content-Type-Options, and optionally Cache-Control.
+     * Evaluates the `If-Modified-Since` request header and replies with
+     * 304 Not Modified when the file has not changed, skipping the response body entirely.
+     *
+     * Resolution order (when [classpathOnly] is false):
+     * 1. Filesystem — absolute or relative to the working directory.
+     * 2. Classpath  — fallback for packaged resources.
+     *
+     * Set [classpathOnly] to true to skip filesystem lookup entirely,
+     * which is appropriate for resources bundled in the application JAR.
+     *
+     * @param path          Filesystem path or classpath resource path, e.g. `"reports/q1.pdf"`
+     * @param classpathOnly Resolve from classpath only; skips filesystem lookup.
+     * @param baseDir       Restrict filesystem access to this directory; prevents path traversal.
+     *                      Strongly recommended when [path] originates from user input.
+     * @param attachment    `true` triggers a download prompt; `false` renders inline in the browser.
+     * @param filename      Filename sent to the client. Defaults to the last segment of [path].
+     *                      Supports Unicode — encoded per RFC 5987.
+     * @param contentType   MIME type; inferred from the file extension if null.
+     * @param maxAge        Seconds for `Cache-Control: max-age`; 0 disables the header entirely.
+     */
+    @JvmOverloads
+    fun sendFile(
+        path: String,
+        classpathOnly: Boolean = false,
+        baseDir: String? = null,
+        attachment: Boolean = false,
+        filename: String? = null,
+        contentType: String? = null,
+        maxAge: Int = 0,
+    ) {
+        val resource = resolveFileStream(path, classpathOnly, baseDir)
+
+        if (resource.notModifiedSince(header("if-modified-since"))) {
+            status(304).empty()
+            return
+        }
+
+        val ct = contentType ?: FileResponse.inferContentType(resource.name)
+        val name = filename ?: resource.name
+
+        response.apply {
+            header("Content-Type", ct)
+            header("Content-Disposition", FileResponse.buildContentDisposition(name, attachment))
+            header("X-Content-Type-Options", "nosniff")
+            if (resource.length >= 0) header("Content-Length", resource.length.toString())
+            resource.lastModifiedHeader()?.let { header("Last-Modified", it) }
+            if (maxAge > 0) header("Cache-Control", "public, max-age=$maxAge")
+            body = ResponseBody.Stream(resource.open())
+        }
+    }
 
     /**
      * Sends an HTTP redirect response.

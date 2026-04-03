@@ -63,18 +63,10 @@ fun main() {
     app.addController(FileController(fileService))
     app.addController(ChatController(userService, chatService, roomService, objectMapper))
 
-    app.get("/") {ctx ->
-        ctx.html(loadFrontendHtml())
+    app.get("/") { ctx ->
+        ctx.sendFile("static/index.html", classpathOnly = true)
     }
 
     app.listen(8000)
     logger.info("✅ Chat Room Server running on http://localhost:8000")
-}
-
-private fun loadFrontendHtml(): String {
-    return Thread.currentThread().contextClassLoader
-        .getResourceAsStream("static/index.html")
-        ?.bufferedReader()
-        ?.use { it.readText() }
-        ?: "<h1>Error: Frontend not found</h1>"
 }

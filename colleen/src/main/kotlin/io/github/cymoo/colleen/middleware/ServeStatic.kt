@@ -1,40 +1,35 @@
 package io.github.cymoo.colleen.middleware
 
 import io.github.cymoo.colleen.*
+import io.github.cymoo.colleen.util.ResolvedResource
+import io.github.cymoo.colleen.util.http.FileResponse
+import io.github.cymoo.colleen.util.lastModifiedHeader
+import io.github.cymoo.colleen.util.notModifiedSince
 import java.io.File
-import java.io.InputStream
-import java.net.URLConnection
 import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
-
-// ── Internal model ────────────────────────────────────────────────────────────
 
 /**
- * Minimal metadata for a resolved static resource.
+ * Normalizes a relative URL path by resolving "." and ".." segments.
+ * Returns null if ".." segments would escape the logical root,
+ * indicating a path-traversal attempt that must be rejected with 404.
  *
- * [length] is -1 when unknown (e.g. streamed classpath entry).
- * [lastModified] is [Instant.EPOCH] when unavailable (e.g. resources inside a JAR),
- * in which case conditional-request and Last-Modified header logic is skipped entirely.
+ * Unlike [io.github.cymoo.colleen.util.http.UrlPath.normalize], this function accepts ".." segments rather
+ * than throwing, because static file serving handles them silently as
+ * not-found rather than propagating an error.
  */
-private data class ResolvedResource(
-    val name: String,
-    val length: Long,
-    val lastModified: Instant,
-    val open: () -> InputStream,
-)
+private fun normalizePath(path: String): String? {
+    val segments = mutableListOf<String>()
+    for (segment in path.split('/')) {
+        when (segment) {
+            "", "." -> Unit
+            ".." -> if (segments.isEmpty()) return null else segments.removeLast()
+            else -> segments.add(segment)
+        }
+    }
+    return segments.joinToString("/")
+}
 
-/**
- * A function that maps a sanitized relative path to a [ResolvedResource],
- * or returns null if the resource does not exist.
- *
- * Implementations are responsible for their own security boundary checks
- * (e.g. preventing path traversal outside their root).
- */
 private typealias Resolver = (path: String) -> ResolvedResource?
-
-// ── Resolver factories ────────────────────────────────────────────────────────
 
 /**
  * Returns a [Resolver] that serves files from [root] on the real filesystem.
@@ -64,62 +59,38 @@ private fun fileSystemResolver(root: String): Resolver {
 /**
  * Returns a [Resolver] that serves resources from the classpath under [base].
  *
- * Path traversal is prevented by [normalizePath], which rejects any path whose
- * ".." segments would escape the logical root before it ever reaches the classloader.
+ * Path traversal is not a concern here: [normalizePath] is called by the
+ * middleware before this resolver is invoked, and classpath lookups are
+ * inherently sandboxed by the classloader.
  *
- * Note: [Instant.EPOCH] is used as the lastModified sentinel for JAR entries whose
- * timestamps are unreliable or absent, which suppresses Last-Modified / 304 handling.
+ * Note: [Instant.EPOCH] is used as the lastModified sentinel for JAR entries
+ * whose timestamps are unreliable or absent, which suppresses Last-Modified / 304 handling.
  */
-private fun classPathResolver(
-    base: String,
-    classLoader: ClassLoader = Thread.currentThread().contextClassLoader,
-): Resolver {
+private fun classPathResolver(base: String, classLoader: ClassLoader): Resolver {
     val normalizedBase = base.trim('/')
-    // Fail fast at construction time, consistent with fileSystemResolver.
-    // A missing classpath root is always a configuration error, not a runtime 404.
     requireNotNull(classLoader.getResource(normalizedBase)) {
         "Classpath resource not found: $normalizedBase"
     }
 
     return { path ->
-        // normalizePath is already called by the middleware, but repeated here defensively
-        // so this resolver is safe to use standalone. The null-safe chain short-circuits
-        // without needing a non-local return (which Kotlin prohibits in non-inline lambdas).
-        normalizePath(path)?.let { safePath ->
-            val resourcePath = if (normalizedBase.isEmpty()) safePath else "$normalizedBase/$safePath"
-            classLoader.getResource(resourcePath)?.let { url ->
-                val conn = url.openConnection()
-                ResolvedResource(
-                    name = safePath.substringAfterLast('/'),
-                    length = conn.contentLengthLong,
-                    lastModified = conn.lastModified
-                        .takeIf { it > 0 }
-                        ?.let(Instant::ofEpochMilli) ?: Instant.EPOCH,
-                    open = url::openStream,
-                )
+        val resourcePath = if (normalizedBase.isEmpty()) path else "$normalizedBase/$path"
+        classLoader.getResource(resourcePath)?.let { url ->
+            // Open a connection only to read metadata (length, last-modified), then discard it.
+            // The actual stream is opened lazily via url::openStream when the response is written.
+            val (length, lastModified) = url.openConnection().let { conn ->
+                conn.contentLengthLong to (conn.lastModified
+                    .takeIf { it > 0 }
+                    ?.let(Instant::ofEpochMilli) ?: Instant.EPOCH)
             }
+            ResolvedResource(
+                name = path.substringAfterLast('/'),
+                length = length,
+                lastModified = lastModified,
+                open = url::openStream,
+            )
         }
     }
 }
-
-/**
- * Normalizes a relative URL path by resolving "." and ".." segments.
- * Returns null if ".." segments would escape the logical root,
- * which indicates a path-traversal attempt that must be rejected.
- */
-private fun normalizePath(path: String): String? {
-    val stack = ArrayDeque<String>()
-    for (segment in path.split('/')) {
-        when (segment) {
-            "", "." -> Unit
-            ".." -> if (stack.isEmpty()) return null else stack.removeLast()
-            else -> stack.addLast(segment)
-        }
-    }
-    return stack.joinToString("/")
-}
-
-// ── Middleware ────────────────────────────────────────────────────────────────
 
 /**
  * Middleware that serves static files from either the filesystem or the classpath.
@@ -139,10 +110,7 @@ private fun normalizePath(path: String): String? {
  *
  * Usage:
  * ```kotlin
- * // Filesystem root
  * ServeStatic("/var/www/html")
- *
- * // Classpath root — works inside a JAR (e.g. src/main/resources/static/)
  * ServeStatic("classpath:static")
  * ```
  *
@@ -176,46 +144,38 @@ class ServeStatic @JvmOverloads constructor(
     private val resolver: Resolver = when {
         root.startsWith("classpath:") -> classPathResolver(
             root.removePrefix("classpath:"),
-            // Prefer thread-context classloader (works in most app servers),
-            // fall back to the classloader that loaded this class.
             Thread.currentThread().contextClassLoader
-                ?: ServeStatic::class.java.classLoader
+                ?: ServeStatic::class.java.classLoader,
         )
-
         else -> fileSystemResolver(root)
     }
 
     override fun invoke(ctx: Context, next: Next) {
         val normalizedBase = baseUrl.trimEnd('/')
 
-        val pathMatches = ctx.path == normalizedBase || ctx.path.startsWith("$normalizedBase/")
-
-        if ((ctx.method != "GET" && ctx.method != "HEAD") || !pathMatches) {
-            next()
-            return
+        if (ctx.method != "GET" && ctx.method != "HEAD") {
+            next(); return
+        }
+        if (ctx.path != normalizedBase && !ctx.path.startsWith("$normalizedBase/")) {
+            next(); return
         }
 
         val rawPath = ctx.path.removePrefix(normalizedBase).trimStart('/')
-
-        // Reject null bytes and un-normalizable paths early to avoid ambiguous resolver behavior.
         if ('\u0000' in rawPath) return handleNotFound(next)
         val safePath = normalizePath(rawPath.ifEmpty { index }) ?: return handleNotFound(next)
 
         val resource = resolve(safePath) ?: return handleNotFound(next)
 
-        when (resource.name.startsWith(".")) {
-            true -> when (dotFiles) {
+        if (resource.name.startsWith(".")) {
+            when (dotFiles) {
                 DotFilesPolicy.DENY -> throw Forbidden("Access to dot files is denied")
                 DotFilesPolicy.IGNORE -> return handleNotFound(next)
-                DotFilesPolicy.ALLOW -> Unit
+                else -> Unit
             }
-
-            false -> Unit
         }
 
-        if (checkNotModified(ctx, resource)) {
-            ctx.status(304).empty()
-            return
+        if (resource.notModifiedSince(ctx.header("if-modified-since"))) {
+            ctx.status(304).empty(); return
         }
 
         serveResource(ctx, resource)
@@ -232,45 +192,16 @@ class ServeStatic @JvmOverloads constructor(
             ?: resolver("$path/$index")
             ?: extensions.firstNotNullOfOrNull { resolver("$path$it") }
 
-    /**
-     * Returns true if the resource has not been modified since the client's cached copy.
-     * Skips the check entirely when [ResolvedResource.lastModified] is [Instant.EPOCH].
-     */
-    private fun checkNotModified(ctx: Context, resource: ResolvedResource): Boolean {
-        if (resource.lastModified == Instant.EPOCH) return false
-        val ifModifiedSince = ctx.header("if-modified-since") ?: return false
-        return try {
-            val since = Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(ifModifiedSince))
-            !resource.lastModified.truncatedTo(ChronoUnit.SECONDS).isAfter(since)
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     /** Sets response headers and streams the resource body (omitted for HEAD requests). */
     private fun serveResource(ctx: Context, resource: ResolvedResource) {
-        // URLConnection.guessContentTypeFromName is faster, OS-independent, and works correctly
-        // for both filesystem and classpath resources (unlike Files.probeContentType).
-        val contentType = (URLConnection.guessContentTypeFromName(resource.name)
-            ?: "application/octet-stream")
-            .let { mime ->
-                val needsCharset = mime.startsWith("text/") ||
-                        mime == "application/json" || mime == "application/javascript"
-                if (needsCharset && "charset" !in mime) "$mime; charset=utf-8" else mime
-            }
-
+        val contentType = FileResponse.inferContentType(resource.name)
         ctx.response.apply {
             header("Content-Type", contentType)
             if (resource.length >= 0) header("Content-Length", resource.length.toString())
             header("X-Content-Type-Options", "nosniff")
             if (maxAge > 0) header("Cache-Control", "public, max-age=$maxAge")
-            if (resource.lastModified != Instant.EPOCH) header(
-                "Last-Modified",
-                resource.lastModified.atOffset(ZoneOffset.UTC).format(DateTimeFormatter.RFC_1123_DATE_TIME),
-            )
+            resource.lastModifiedHeader()?.let { header("Last-Modified", it) }
         }
-
-        // Avoid opening the stream entirely for HEAD requests — metadata is sufficient.
         if (ctx.method != "HEAD") ctx.stream(resource.open(), contentType)
     }
 

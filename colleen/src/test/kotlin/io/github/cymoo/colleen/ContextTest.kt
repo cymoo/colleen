@@ -2,9 +2,12 @@ package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.util.http.Headers
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
+import java.nio.file.Files
 import kotlin.test.*
 
 class ContextTest {
@@ -1215,5 +1218,413 @@ class ContextTest {
         assertEquals(session, retrieved)
         assertEquals(1, retrieved.user.id)
         assertEquals("John", retrieved.user.name)
+    }
+
+    @Nested
+    inner class SendFileTest {
+
+        // Classpath test resources layout:
+        //   src/test/resources/static-test/hello.txt
+        //   src/test/resources/static-test/image.png      (fake content, extension matters)
+        //   src/test/resources/static-test/sub/index.html
+        //   src/test/resources/static-test/sub/doc.pdf    (fake content, extension matters)
+
+        @TempDir
+        lateinit var tempDir: java.nio.file.Path
+
+        // Creates a file directly under tempDir.
+        private fun tempFile(name: String, content: String = "fake content"): java.nio.file.Path =
+            tempDir.resolve(name).also { Files.writeString(it, content) }
+
+        // Creates a file under tempDir/<subDir>/, creating the subdirectory if needed.
+        private fun tempFileInSubDir(subDir: String, name: String, content: String = "fake content"): java.nio.file.Path {
+            val dir = tempDir.resolve(subDir).also { Files.createDirectories(it) }
+            return dir.resolve(name).also { Files.writeString(it, content) }
+        }
+
+        private fun createCtxWithIfModifiedSince(value: String): Context {
+            val headers = Headers().apply { set("if-modified-since", value) }
+            return createTestContext(request = createTestRequest(headers = headers))
+        }
+
+        // -----------------------------------------------------------------------
+        // Response body and status
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile sets response body for an existing classpath resource`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true)
+
+            assertNotNull(ctx.response.body)
+        }
+
+        @Test
+        fun `sendFile sets response body for an existing filesystem file`() {
+            val file = tempFile("hello.txt")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString())
+
+            assertNotNull(ctx.response.body)
+        }
+
+        @Test
+        fun `sendFile returns 200 for a normal classpath resource`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true)
+
+            assertEquals(200, ctx.response.status)
+        }
+
+        @Test
+        fun `sendFile returns 200 for a normal filesystem file`() {
+            val file = tempFile("hello.txt")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString())
+
+            assertEquals(200, ctx.response.status)
+        }
+
+        // -----------------------------------------------------------------------
+        // Content-Type inference
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile infers text-plain content type from txt extension`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true)
+
+            val ct = ctx.response.headers["Content-Type"]
+            assertNotNull(ct)
+            assertTrue(ct.startsWith("text/plain"), "Expected text/plain but got: $ct")
+        }
+
+        @Test
+        fun `sendFile infers image-png content type from png extension`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/image.png", classpathOnly = true)
+
+            val ct = ctx.response.headers["Content-Type"]
+            assertNotNull(ct)
+            assertTrue(ct.startsWith("image/png"), "Expected image/png but got: $ct")
+        }
+
+        @Test
+        fun `sendFile infers text-html content type from html extension`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/sub/index.html", classpathOnly = true)
+
+            val ct = ctx.response.headers["Content-Type"]
+            assertNotNull(ct)
+            assertTrue(ct.startsWith("text/html"), "Expected text/html but got: $ct")
+        }
+
+        @Test
+        fun `sendFile infers application-pdf content type from pdf extension`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/sub/doc.pdf", classpathOnly = true)
+
+            val ct = ctx.response.headers["Content-Type"]
+            assertNotNull(ct)
+            assertTrue(ct.startsWith("application/pdf"), "Expected application/pdf but got: $ct")
+        }
+
+        @Test
+        fun `sendFile infers content type for filesystem file from its extension`() {
+            val file = tempFile("report.pdf")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString())
+
+            val ct = ctx.response.headers["Content-Type"]
+            assertNotNull(ct)
+            assertTrue(ct.startsWith("application/pdf"), "Expected application/pdf but got: $ct")
+        }
+
+        @Test
+        fun `sendFile uses explicit contentType over inferred one`() {
+            val file = tempFile("data.txt")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString(), contentType = "application/octet-stream")
+
+            assertEquals("application/octet-stream", ctx.response.headers["Content-Type"])
+        }
+
+        // -----------------------------------------------------------------------
+        // Content-Length
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile sets Content-Length for a filesystem file`() {
+            val content = "hello from file"
+            val file = tempFile("sized.txt", content)
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString())
+
+            val cl = ctx.response.headers["Content-Length"]
+            assertNotNull(cl, "Content-Length must be present for a filesystem file")
+            assertEquals(content.toByteArray().size.toLong(), cl.toLong())
+        }
+
+        // Classpath resources inside a JAR often have no known length (-1); only
+        // assert the header is absent or non-negative — never a negative value.
+        @Test
+        fun `sendFile does not set a negative Content-Length for a classpath resource`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true)
+
+            val cl = ctx.response.headers["Content-Length"]
+            if (cl != null) {
+                assertTrue(cl.toLong() >= 0, "Content-Length must not be negative: $cl")
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // Security headers
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile always sets X-Content-Type-Options to nosniff`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true)
+
+            assertEquals("nosniff", ctx.response.headers["X-Content-Type-Options"])
+        }
+
+        // -----------------------------------------------------------------------
+        // Content-Disposition — inline vs attachment, filename
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile uses inline disposition by default`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true)
+
+            val cd = ctx.response.headers["Content-Disposition"]
+            assertNotNull(cd)
+            assertTrue(cd.startsWith("inline"), "Expected inline disposition but got: $cd")
+        }
+
+        @Test
+        fun `sendFile uses attachment disposition when attachment=true`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true, attachment = true)
+
+            val cd = ctx.response.headers["Content-Disposition"]
+            assertNotNull(cd)
+            assertTrue(cd.startsWith("attachment"), "Expected attachment disposition but got: $cd")
+        }
+
+        @Test
+        fun `sendFile defaults filename to the last segment of the classpath path`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/sub/doc.pdf", classpathOnly = true, attachment = true)
+
+            val cd = ctx.response.headers["Content-Disposition"]
+            assertNotNull(cd)
+            assertTrue(cd.contains("doc.pdf"), "Expected 'doc.pdf' in disposition but got: $cd")
+        }
+
+        @Test
+        fun `sendFile defaults filename to the filesystem file name`() {
+            val file = tempFile("invoice.pdf")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString(), attachment = true)
+
+            val cd = ctx.response.headers["Content-Disposition"]
+            assertNotNull(cd)
+            assertTrue(cd.contains("invoice.pdf"), "Expected 'invoice.pdf' in disposition but got: $cd")
+        }
+
+        @Test
+        fun `sendFile uses explicit ASCII filename in Content-Disposition`() {
+            val file = tempFile("internal.txt")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString(), filename = "readme.txt", attachment = true)
+
+            val cd = ctx.response.headers["Content-Disposition"]
+            assertNotNull(cd)
+            assertTrue(cd.contains("readme.txt"), "Expected 'readme.txt' in disposition but got: $cd")
+        }
+
+        @Test
+        fun `sendFile encodes non-ASCII filename per RFC 5987`() {
+            val file = tempFile("file.txt")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString(), filename = "文件.txt", attachment = true)
+
+            // RFC 5987 encoding: filename*=UTF-8''...
+            // The raw Unicode string must not appear unencoded in the header.
+            val cd = ctx.response.headers["Content-Disposition"]
+            assertNotNull(cd)
+            assertFalse(cd.contains("文件"), "Non-ASCII filename must be encoded in disposition: $cd")
+            assertTrue(
+                cd.contains("filename*", ignoreCase = true),
+                "Expected RFC 5987 filename* parameter but got: $cd"
+            )
+        }
+
+        // -----------------------------------------------------------------------
+        // Cache-Control
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile omits Cache-Control header when maxAge is 0`() {
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true, maxAge = 0)
+
+            assertNull(ctx.response.headers["Cache-Control"])
+        }
+
+        @Test
+        fun `sendFile sets public max-age Cache-Control header when maxAge is positive`() {
+            val file = tempFile("asset.js")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString(), maxAge = 3600)
+
+            val cc = ctx.response.headers["Cache-Control"]
+            assertNotNull(cc)
+            assertTrue(cc.contains("public"), "Expected 'public' in Cache-Control: $cc")
+            assertTrue(cc.contains("max-age=3600"), "Expected 'max-age=3600' in Cache-Control: $cc")
+        }
+
+        // -----------------------------------------------------------------------
+        // Last-Modified
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile sets Last-Modified header for a filesystem file`() {
+            val file = tempFile("page.html")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString())
+
+            val lm = ctx.response.headers["Last-Modified"]
+            assertNotNull(lm, "Filesystem file must expose Last-Modified")
+            assertTrue(lm.contains("GMT"), "Last-Modified must be an HTTP date: $lm")
+        }
+
+        // -----------------------------------------------------------------------
+        // 304 Not Modified
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile responds 304 for a filesystem file when If-Modified-Since matches`() {
+            // Filesystem files always have a reliable last-modified timestamp.
+            val file = tempFile("page.html")
+
+            val probe = createTestContext()
+            probe.sendFile(file.toString())
+            val lastModified = probe.response.headers["Last-Modified"]
+            assertNotNull(lastModified, "Filesystem file must expose Last-Modified")
+
+            val ctx = createCtxWithIfModifiedSince(lastModified)
+            ctx.sendFile(file.toString())
+
+            assertEquals(304, ctx.response.status)
+            val body = ctx.response.body
+            assertTrue(body is ResponseBody.Empty, "Expected empty body on 304")
+        }
+
+        @Test
+        fun `sendFile responds 304 for a classpath resource when If-Modified-Since matches`() {
+            // Classpath resources inside a JAR may not expose a timestamp — skip if absent.
+            val probe = createTestContext()
+            probe.sendFile("static-test/hello.txt", classpathOnly = true)
+            val lastModified = probe.response.headers["Last-Modified"] ?: return
+
+            val ctx = createCtxWithIfModifiedSince(lastModified)
+            ctx.sendFile("static-test/hello.txt", classpathOnly = true)
+
+            assertEquals(304, ctx.response.status)
+            val body = ctx.response.body
+            assertTrue(body is ResponseBody.Empty, "Expected empty body on 304")
+        }
+
+        @Test
+        fun `sendFile does not respond 304 when If-Modified-Since is older than the resource`() {
+            val file = tempFile("page.html")
+
+            // Use a date well in the past — guaranteed to predate any temp file.
+            val ctx = createCtxWithIfModifiedSince("Thu, 01 Jan 1970 00:00:00 GMT")
+            ctx.sendFile(file.toString())
+
+            assertNotEquals(304, ctx.response.status)
+            assertNotNull(ctx.response.body)
+        }
+
+        @Test
+        fun `sendFile does not respond 304 when If-Modified-Since header is absent`() {
+            val file = tempFile("page.html")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString())
+
+            assertNotEquals(304, ctx.response.status)
+        }
+
+        // -----------------------------------------------------------------------
+        // Classpath fallback (classpathOnly = false)
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile falls back to classpath when file does not exist on filesystem`() {
+            // classpathOnly defaults to false: filesystem is checked first, then classpath.
+            // The path does not exist on the filesystem, so it must be resolved from classpath.
+            val ctx = createTestContext()
+            ctx.sendFile("static-test/hello.txt", classpathOnly = false)
+
+            assertNotNull(ctx.response.body)
+            assertEquals(200, ctx.response.status)
+        }
+
+        // -----------------------------------------------------------------------
+        // Path traversal protection
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile throws when path escapes the specified baseDir`() {
+            val ctx = createTestContext()
+            assertThrows<Exception> {
+                ctx.sendFile("../../etc/passwd", baseDir = tempDir.toString())
+            }
+        }
+
+        @Test
+        fun `sendFile serves a file that legitimately resides within baseDir`() {
+            val file = tempFileInSubDir("assets", "style.css")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString(), baseDir = tempDir.toString())
+
+            assertNotNull(ctx.response.body)
+            assertEquals(200, ctx.response.status)
+        }
+
+        @Test
+        fun `sendFile serves a file located directly in baseDir`() {
+            val file = tempFile("index.html")
+            val ctx = createTestContext()
+            ctx.sendFile(file.toString(), baseDir = tempDir.toString())
+
+            assertNotNull(ctx.response.body)
+            assertEquals(200, ctx.response.status)
+        }
+
+        // -----------------------------------------------------------------------
+        // Missing resource
+        // -----------------------------------------------------------------------
+
+        @Test
+        fun `sendFile throws when the classpath resource does not exist`() {
+            val ctx = createTestContext()
+            assertThrows<Exception> {
+                ctx.sendFile("static-test/nonexistent.bin", classpathOnly = true)
+            }
+        }
+
+        @Test
+        fun `sendFile throws when the filesystem file does not exist`() {
+            val ctx = createTestContext()
+            assertThrows<Exception> {
+                ctx.sendFile(tempDir.resolve("ghost.txt").toString())
+            }
+        }
     }
 }
