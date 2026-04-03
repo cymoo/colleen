@@ -11,6 +11,9 @@ data class User(
     val username: String,
     val displayName: String,
     val avatarUrl: String? = null,
+    val bio: String? = null,
+    val status: String? = null,
+    val role: String? = null,
     val createdAt: Long,
     val lastSeen: Long
 )
@@ -54,6 +57,7 @@ data class RoomInfo(
 sealed class ChatMessage {
     abstract val id: Int
     abstract val timestamp: Long
+    abstract val replyTo: ReplyInfo?
 
     data class Text(
         override val id: Int,
@@ -62,7 +66,9 @@ sealed class ChatMessage {
         val displayName: String,
         val avatarUrl: String?,
         val content: String,
-        override val timestamp: Long
+        val editedAt: Long? = null,
+        override val timestamp: Long,
+        override val replyTo: ReplyInfo? = null
     ) : ChatMessage()
 
     data class Image(
@@ -73,7 +79,8 @@ sealed class ChatMessage {
         val avatarUrl: String?,
         val imageUrl: String,
         val thumbnailUrl: String?,
-        override val timestamp: Long
+        override val timestamp: Long,
+        override val replyTo: ReplyInfo? = null
     ) : ChatMessage()
 
     data class File(
@@ -86,15 +93,51 @@ sealed class ChatMessage {
         val fileUrl: String,
         val fileSize: Long,
         val mimeType: String,
-        override val timestamp: Long
+        override val timestamp: Long,
+        override val replyTo: ReplyInfo? = null
     ) : ChatMessage()
 
     data class System(
         override val id: Int,
         val content: String,
-        override val timestamp: Long
+        override val timestamp: Long,
+        override val replyTo: ReplyInfo? = null
     ) : ChatMessage()
 }
+
+/**
+ * Reply reference info (summary of replied-to message)
+ */
+data class ReplyInfo(
+    val id: Int,
+    val username: String,
+    val displayName: String,
+    val content: String,
+    val messageType: String
+)
+
+/**
+ * Private message model
+ */
+data class PrivateMessage(
+    val id: Int,
+    val senderId: Int,
+    val senderUsername: String,
+    val senderDisplayName: String,
+    val senderAvatarUrl: String?,
+    val receiverId: Int,
+    val receiverUsername: String,
+    val receiverDisplayName: String,
+    val messageType: String,
+    val content: String? = null,
+    val fileUrl: String? = null,
+    val fileName: String? = null,
+    val fileSize: Long? = null,
+    val mimeType: String? = null,
+    val thumbnailUrl: String? = null,
+    val isRead: Boolean = false,
+    val timestamp: Long
+)
 
 /**
  * File information
@@ -118,19 +161,39 @@ data class WsMessagePayload(
     val fileName: String? = null,
     val fileUrl: String? = null,
     val fileSize: Long? = null,
-    val mimeType: String? = null
+    val mimeType: String? = null,
+    val messageId: Int? = null,
+    val targetUserId: Int? = null,
+    val replyToId: Int? = null,
+    val beforeId: Int? = null,
+    val query: String? = null,
+    val role: String? = null,
+    val duration: Int? = null,
+    val displayName: String? = null,
+    val bio: String? = null,
+    val status: String? = null,
+    val avatarUrl: String? = null
 )
 
 /**
  * WebSocket event types sent to clients
  */
 sealed class WsEvent {
-    data class History(val messages: List<ChatMessage>) : WsEvent()
+    data class History(val messages: List<ChatMessage>, val hasMore: Boolean = false) : WsEvent()
     data class Users(val users: List<User>) : WsEvent()
     data class Message(val message: ChatMessage) : WsEvent()
     data class UserJoined(val user: User) : WsEvent()
     data class UserLeft(val userId: Int, val username: String) : WsEvent()
     data class Error(val message: String) : WsEvent()
+    data class MessageEdited(val messageId: Int, val content: String, val editedAt: Long) : WsEvent()
+    data class MessageDeleted(val messageId: Int) : WsEvent()
+    data class PrivateMessageEvent(val message: PrivateMessage) : WsEvent()
+    data class PrivateHistory(val messages: List<PrivateMessage>, val hasMore: Boolean = false) : WsEvent()
+    data class Mention(val messageId: Int, val mentionedBy: String, val content: String) : WsEvent()
+    data class UserUpdated(val user: User) : WsEvent()
+    data class Kicked(val reason: String) : WsEvent()
+    data class RoleChanged(val userId: Int, val role: String) : WsEvent()
+    data class SearchResults(val messages: List<ChatMessage>, val query: String) : WsEvent()
 }
 
 /**
