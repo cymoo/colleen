@@ -732,15 +732,11 @@ class ChatClient {
 
     handleMessageDeleted(messageId) {
         const el = document.querySelector(`[data-message-id="${messageId}"]`);
-        if (el) {
-            el.classList.add('message-deleted');
-            const textEl = el.querySelector('.message-text');
-            if (textEl) {
-                textEl.innerHTML = '<em class="deleted-text">This message has been deleted</em>';
-            }
-            const actions = el.querySelector('.message-actions');
-            if (actions) actions.remove();
-        }
+        if (!el) return;
+        el.classList.add('message-deleted');
+        const textEl = el.querySelector('.message-text');
+        if (textEl) textEl.innerHTML = '<em class="deleted-text">This message has been deleted</em>';
+        el.querySelector('.message-actions')?.remove();
     }
 
     // ============ Reply ============

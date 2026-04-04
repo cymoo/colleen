@@ -1,23 +1,18 @@
 package repository
 
 import chatroom.jooq.generated.Tables.USERS
-import chatroom.jooq.generated.tables.records.UsersRecord
 import model.User
 import org.jooq.DSLContext
-import org.jooq.impl.DSL
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 class UserRepository(private val dsl: DSLContext) {
 
-    private val USER_BIO = DSL.field("users.bio", String::class.java)
-    private val USER_STATUS = DSL.field("users.status", String::class.java)
-
     fun findByUsername(username: String): User? {
         return dsl.select(
             USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL,
-            USERS.CREATED_AT, USERS.LAST_SEEN, USER_BIO, USER_STATUS
+            USERS.CREATED_AT, USERS.LAST_SEEN, USERS.BIO, USERS.STATUS
         )
             .from(USERS)
             .where(USERS.USERNAME.eq(username))
@@ -28,8 +23,8 @@ class UserRepository(private val dsl: DSLContext) {
                     username = record.get(USERS.USERNAME)!!,
                     displayName = record.get(USERS.DISPLAY_NAME)!!,
                     avatarUrl = record.get(USERS.AVATAR_URL),
-                    bio = record.get(USER_BIO),
-                    status = record.get(USER_STATUS),
+                    bio = record.get(USERS.BIO),
+                    status = record.get(USERS.STATUS),
                     createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
                     lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
                 )
@@ -39,7 +34,7 @@ class UserRepository(private val dsl: DSLContext) {
     fun findById(id: Int): User? {
         return dsl.select(
             USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL,
-            USERS.CREATED_AT, USERS.LAST_SEEN, USER_BIO, USER_STATUS
+            USERS.CREATED_AT, USERS.LAST_SEEN, USERS.BIO, USERS.STATUS
         )
             .from(USERS)
             .where(USERS.ID.eq(id))
@@ -50,8 +45,8 @@ class UserRepository(private val dsl: DSLContext) {
                     username = record.get(USERS.USERNAME)!!,
                     displayName = record.get(USERS.DISPLAY_NAME)!!,
                     avatarUrl = record.get(USERS.AVATAR_URL),
-                    bio = record.get(USER_BIO),
-                    status = record.get(USER_STATUS),
+                    bio = record.get(USERS.BIO),
+                    status = record.get(USERS.STATUS),
                     createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
                     lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
                 )
@@ -89,8 +84,8 @@ class UserRepository(private val dsl: DSLContext) {
         var step = dsl.update(USERS).set(USERS.LAST_SEEN, USERS.LAST_SEEN) // baseline to start fluent chain
         if (displayName != null) step = step.set(USERS.DISPLAY_NAME, displayName)
         if (avatarUrl != null) step = step.set(USERS.AVATAR_URL, avatarUrl)
-        if (bio != null) step = step.set(USER_BIO, bio)
-        if (status != null) step = step.set(USER_STATUS, status)
+        if (bio != null) step = step.set(USERS.BIO, bio)
+        if (status != null) step = step.set(USERS.STATUS, status)
         step.where(USERS.ID.eq(userId)).execute()
     }
 

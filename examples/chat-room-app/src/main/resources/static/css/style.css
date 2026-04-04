@@ -1080,6 +1080,11 @@ kbd {
     opacity: 0.5;
 }
 
+.message-deleted .message-image,
+.message-deleted .message-file {
+    display: none;
+}
+
 .deleted-text {
     color: var(--color-text-muted);
     font-style: italic;

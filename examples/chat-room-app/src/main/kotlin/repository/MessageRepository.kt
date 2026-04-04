@@ -5,17 +5,11 @@ import chatroom.jooq.generated.Tables.USERS
 import model.ChatMessage
 import model.ReplyInfo
 import org.jooq.DSLContext
-import org.jooq.impl.DSL
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 class MessageRepository(private val dsl: DSLContext) {
-
-    // New column references (not in generated jOOQ)
-    private val EDITED_AT = DSL.field("messages.edited_at", LocalDateTime::class.java)
-    private val IS_DELETED = DSL.field("messages.is_deleted", Int::class.java)
-    private val REPLY_TO_ID = DSL.field("messages.reply_to_id", Int::class.java)
 
     fun saveTextMessage(roomId: Int, userId: Int, content: String, replyToId: Int? = null): Int {
         var step = dsl.insertInto(MESSAGES)
@@ -25,7 +19,7 @@ class MessageRepository(private val dsl: DSLContext) {
             .set(MESSAGES.CONTENT, content)
 
         if (replyToId != null) {
-            step = step.set(REPLY_TO_ID, replyToId)
+            step = step.set(MESSAGES.REPLY_TO_ID, replyToId)
         }
 
         return step.returningResult(MESSAGES.ID)
@@ -42,7 +36,7 @@ class MessageRepository(private val dsl: DSLContext) {
             .set(MESSAGES.THUMBNAIL_URL, thumbnailUrl)
 
         if (replyToId != null) {
-            step = step.set(REPLY_TO_ID, replyToId)
+            step = step.set(MESSAGES.REPLY_TO_ID, replyToId)
         }
 
         return step.returningResult(MESSAGES.ID)
@@ -69,7 +63,7 @@ class MessageRepository(private val dsl: DSLContext) {
             .set(MESSAGES.MIME_TYPE, mimeType)
 
         if (replyToId != null) {
-            step = step.set(REPLY_TO_ID, replyToId)
+            step = step.set(MESSAGES.REPLY_TO_ID, replyToId)
         }
 
         return step.returningResult(MESSAGES.ID)
@@ -91,7 +85,7 @@ class MessageRepository(private val dsl: DSLContext) {
     fun updateMessage(messageId: Int, userId: Int, content: String): Boolean {
         val updated = dsl.update(MESSAGES)
             .set(MESSAGES.CONTENT, content)
-            .set(EDITED_AT, LocalDateTime.now(ZoneOffset.UTC))
+            .set(MESSAGES.EDITED_AT, LocalDateTime.now(ZoneOffset.UTC))
             .where(MESSAGES.ID.eq(messageId))
             .and(MESSAGES.USER_ID.eq(userId))
             .and(MESSAGES.MESSAGE_TYPE.eq("text"))
@@ -101,7 +95,7 @@ class MessageRepository(private val dsl: DSLContext) {
 
     fun softDeleteMessage(messageId: Int, userId: Int): Boolean {
         val updated = dsl.update(MESSAGES)
-            .set(IS_DELETED, 1)
+            .set(MESSAGES.IS_DELETED, 1)
             .where(MESSAGES.ID.eq(messageId))
             .and(MESSAGES.USER_ID.eq(userId))
             .execute()
@@ -110,7 +104,7 @@ class MessageRepository(private val dsl: DSLContext) {
 
     fun adminDeleteMessage(messageId: Int): Boolean {
         val updated = dsl.update(MESSAGES)
-            .set(IS_DELETED, 1)
+            .set(MESSAGES.IS_DELETED, 1)
             .where(MESSAGES.ID.eq(messageId))
             .execute()
         return updated > 0
@@ -129,9 +123,9 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.MIME_TYPE,
             MESSAGES.THUMBNAIL_URL,
             MESSAGES.CREATED_AT,
-            EDITED_AT,
-            IS_DELETED,
-            REPLY_TO_ID,
+            MESSAGES.EDITED_AT,
+            MESSAGES.IS_DELETED,
+            MESSAGES.REPLY_TO_ID,
             USERS.USERNAME,
             USERS.DISPLAY_NAME,
             USERS.AVATAR_URL
@@ -145,8 +139,8 @@ class MessageRepository(private val dsl: DSLContext) {
             .fetch()
 
         return records.reversed().map { record ->
-            val isDeleted = record.get(IS_DELETED) ?: 0
-            val replyToId = record.get(REPLY_TO_ID)
+            val isDeleted = record.get(MESSAGES.IS_DELETED) ?: 0
+            val replyToId = record.get(MESSAGES.REPLY_TO_ID)
             val replyInfo = if (replyToId != null) getReplyInfo(replyToId) else null
             mapRecordToMessage(record, isDeleted, replyInfo)
         }
@@ -165,9 +159,9 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.MIME_TYPE,
             MESSAGES.THUMBNAIL_URL,
             MESSAGES.CREATED_AT,
-            EDITED_AT,
-            IS_DELETED,
-            REPLY_TO_ID,
+            MESSAGES.EDITED_AT,
+            MESSAGES.IS_DELETED,
+            MESSAGES.REPLY_TO_ID,
             USERS.USERNAME,
             USERS.DISPLAY_NAME,
             USERS.AVATAR_URL
@@ -182,8 +176,8 @@ class MessageRepository(private val dsl: DSLContext) {
             .fetch()
 
         return records.reversed().map { record ->
-            val isDeleted = record.get(IS_DELETED) ?: 0
-            val replyToId = record.get(REPLY_TO_ID)
+            val isDeleted = record.get(MESSAGES.IS_DELETED) ?: 0
+            val replyToId = record.get(MESSAGES.REPLY_TO_ID)
             val replyInfo = if (replyToId != null) getReplyInfo(replyToId) else null
             mapRecordToMessage(record, isDeleted, replyInfo)
         }
@@ -208,9 +202,9 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.MIME_TYPE,
             MESSAGES.THUMBNAIL_URL,
             MESSAGES.CREATED_AT,
-            EDITED_AT,
-            IS_DELETED,
-            REPLY_TO_ID,
+            MESSAGES.EDITED_AT,
+            MESSAGES.IS_DELETED,
+            MESSAGES.REPLY_TO_ID,
             USERS.USERNAME,
             USERS.DISPLAY_NAME,
             USERS.AVATAR_URL
@@ -219,7 +213,7 @@ class MessageRepository(private val dsl: DSLContext) {
             .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
             .where(MESSAGES.ROOM_ID.eq(roomId))
             .and(MESSAGES.MESSAGE_TYPE.ne("system"))
-            .and(IS_DELETED.eq(0).or(IS_DELETED.isNull))
+            .and(MESSAGES.IS_DELETED.eq(0).or(MESSAGES.IS_DELETED.isNull))
             .and(MESSAGES.CONTENT.likeIgnoreCase("%$escapedQuery%"))
             .orderBy(MESSAGES.CREATED_AT.desc())
             .limit(limit)
@@ -273,7 +267,7 @@ class MessageRepository(private val dsl: DSLContext) {
         val username = record.get(USERS.USERNAME) ?: "system"
         val displayName = record.get(USERS.DISPLAY_NAME) ?: "System"
         val avatarUrl = record.get(USERS.AVATAR_URL)
-        val editedAt = record.get(EDITED_AT)?.let { parseTimestamp(it) }
+        val editedAt = record.get(MESSAGES.EDITED_AT)?.let { parseTimestamp(it) }
 
         if (isDeleted == 1) {
             return ChatMessage.Text(

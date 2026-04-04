@@ -1,10 +1,7 @@
 package controller
 
 import io.github.cymoo.colleen.*
-import model.CreateRoomRequest
-import model.Room
-import model.RoomInfo
-import model.UploadResponse
+import model.*
 import service.FileService
 import service.RoomService
 import service.UserService
@@ -31,9 +28,9 @@ class ApiController(
     }
 
     @Post("/upload/image")
-    fun uploadImage(ctx: Context): UploadResponse {
+    fun uploadImage(image: UploadedFile): UploadResponse {
         return try {
-            val file = ctx.file("image") ?: throw BadRequest("No image uploaded")
+            val file = image.value ?: throw BadRequest("No image uploaded")
 
             val fileInfo = fileService.saveImage(file)
 
@@ -53,9 +50,9 @@ class ApiController(
     }
 
     @Post("/upload/file")
-    fun uploadFile(ctx: Context): UploadResponse {
+    fun uploadFile(file: UploadedFile): UploadResponse {
         return try {
-            val file = ctx.file("file") ?: throw BadRequest("No file uploaded")
+            val file = file.value ?: throw BadRequest("No file uploaded")
 
             val fileInfo = fileService.saveFile(file)
 
@@ -74,7 +71,7 @@ class ApiController(
     }
 
     @Get("/users/{userId}")
-    fun getUser(userId: Path<Int>): Any {
+    fun getUser(userId: Path<Int>): User {
         val user = userService?.getUserById(userId.value) ?: throw NotFound("User not found")
         return user
     }
