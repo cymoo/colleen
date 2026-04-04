@@ -8,6 +8,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+    <!-- DOMPurify for XSS prevention -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 </head>
 <body>
     <div class="noise-overlay"></div>
@@ -66,6 +73,12 @@
                     </div>
                 </div>
                 <div class="header-right">
+                    <button id="search-toggle-btn" class="icon-btn" title="Search Messages">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                    </button>
                     <div class="user-info">
                         <span class="user-label">LOGGED AS:</span>
                         <span class="user-name" id="current-username">USER</span>
@@ -79,10 +92,29 @@
                 </div>
             </div>
             
+            <!-- Search Bar (hidden by default) -->
+            <div id="search-bar" class="search-bar" style="display: none;">
+                <div class="search-input-wrapper">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="search-input" class="search-input" placeholder="Search messages..." autocomplete="off">
+                    <button id="search-close-btn" class="search-close-btn">&times;</button>
+                </div>
+                <div id="search-results" class="search-results" style="display: none;">
+                    <!-- Search results inserted here -->
+                </div>
+            </div>
+
             <!-- Main Content -->
             <div class="chat-content">
                 <!-- Messages Area -->
                 <div class="messages-panel">
+                    <!-- History loading indicator -->
+                    <div id="history-loader" class="history-loader" style="display: none;">
+                        <span class="loader-text">Loading history...</span>
+                    </div>
                     <div class="messages-container" id="messages-container">
                         <!-- Messages will be inserted here -->
                     </div>
@@ -100,10 +132,21 @@
                 </div>
             </div>
             
+            <!-- Reply/Edit indicator -->
+            <div id="input-indicator" class="input-indicator" style="display: none;">
+                <span id="indicator-text"></span>
+                <button id="indicator-cancel" class="indicator-cancel">&times;</button>
+            </div>
+
+            <!-- Mention autocomplete -->
+            <div id="mention-dropdown" class="mention-dropdown" style="display: none;">
+                <!-- Mention suggestions inserted here -->
+            </div>
+
             <!-- Input Area -->
             <div class="input-panel">
                 <div class="input-wrapper">
-                    <input type="text" id="message-input" class="message-input" placeholder="Type message..." autocomplete="off">
+                    <input type="text" id="message-input" class="message-input" placeholder="Type message... (Markdown supported)" autocomplete="off">
                     <div class="input-actions">
                         <label for="image-upload" class="icon-btn" title="Upload Image">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -131,7 +174,7 @@
                     </div>
                 </div>
                 <div class="input-hint">
-                    Press <kbd>Enter</kbd> to send • <kbd>Shift+Enter</kbd> for new line
+                    Press <kbd>Enter</kbd> to send • <kbd>Shift+Enter</kbd> for new line • Supports **Markdown** and `code` • Use @username to mention
                 </div>
             </div>
         </div>
@@ -148,6 +191,52 @@
                 </svg>
             </button>
             <img id="modal-image" src="" alt="Full size">
+        </div>
+    </div>
+    
+    <!-- Private Chat Modal -->
+    <div id="private-chat-modal" class="modal">
+        <div class="modal-backdrop" id="private-chat-backdrop"></div>
+        <div class="private-chat-panel">
+            <div class="private-chat-header">
+                <span id="private-chat-title">Direct Message</span>
+                <button class="modal-close" id="private-chat-close-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="private-chat-messages" id="private-chat-messages">
+                <!-- Private messages inserted here -->
+            </div>
+            <div class="private-chat-input">
+                <input type="text" id="private-message-input" class="message-input" placeholder="Type a private message..." autocomplete="off">
+                <button class="icon-btn send-btn" id="private-send-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Profile Modal -->
+    <div id="user-profile-modal" class="modal">
+        <div class="modal-backdrop" id="user-profile-backdrop"></div>
+        <div class="user-profile-panel">
+            <div class="profile-header">
+                <button class="modal-close" id="user-profile-close-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div id="user-profile-content" class="profile-content">
+                <!-- Profile content inserted here -->
+            </div>
         </div>
     </div>
     

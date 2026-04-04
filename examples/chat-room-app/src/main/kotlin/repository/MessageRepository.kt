@@ -3,32 +3,49 @@ package repository
 import chatroom.jooq.generated.Tables.MESSAGES
 import chatroom.jooq.generated.Tables.USERS
 import model.ChatMessage
+import model.ReplyInfo
 import org.jooq.DSLContext
+import org.jooq.impl.DSL
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 class MessageRepository(private val dsl: DSLContext) {
 
-    fun saveTextMessage(roomId: Int, userId: Int, content: String): Int {
-        return dsl.insertInto(MESSAGES)
+    // New column references (not in generated jOOQ)
+    private val EDITED_AT = DSL.field("messages.edited_at", LocalDateTime::class.java)
+    private val IS_DELETED = DSL.field("messages.is_deleted", Int::class.java)
+    private val REPLY_TO_ID = DSL.field("messages.reply_to_id", Int::class.java)
+
+    fun saveTextMessage(roomId: Int, userId: Int, content: String, replyToId: Int? = null): Int {
+        var step = dsl.insertInto(MESSAGES)
             .set(MESSAGES.ROOM_ID, roomId)
             .set(MESSAGES.USER_ID, userId)
             .set(MESSAGES.MESSAGE_TYPE, "text")
             .set(MESSAGES.CONTENT, content)
-            .returningResult(MESSAGES.ID)
+
+        if (replyToId != null) {
+            step = step.set(REPLY_TO_ID, replyToId)
+        }
+
+        return step.returningResult(MESSAGES.ID)
             .fetchOne()!!
             .get(MESSAGES.ID)!!
     }
 
-    fun saveImageMessage(roomId: Int, userId: Int, imageUrl: String, thumbnailUrl: String?): Int {
-        return dsl.insertInto(MESSAGES)
+    fun saveImageMessage(roomId: Int, userId: Int, imageUrl: String, thumbnailUrl: String?, replyToId: Int? = null): Int {
+        var step = dsl.insertInto(MESSAGES)
             .set(MESSAGES.ROOM_ID, roomId)
             .set(MESSAGES.USER_ID, userId)
             .set(MESSAGES.MESSAGE_TYPE, "image")
             .set(MESSAGES.FILE_URL, imageUrl)
             .set(MESSAGES.THUMBNAIL_URL, thumbnailUrl)
-            .returningResult(MESSAGES.ID)
+
+        if (replyToId != null) {
+            step = step.set(REPLY_TO_ID, replyToId)
+        }
+
+        return step.returningResult(MESSAGES.ID)
             .fetchOne()!!
             .get(MESSAGES.ID)!!
     }
@@ -39,9 +56,10 @@ class MessageRepository(private val dsl: DSLContext) {
         fileName: String,
         fileUrl: String,
         fileSize: Long,
-        mimeType: String
+        mimeType: String,
+        replyToId: Int? = null
     ): Int {
-        return dsl.insertInto(MESSAGES)
+        var step = dsl.insertInto(MESSAGES)
             .set(MESSAGES.ROOM_ID, roomId)
             .set(MESSAGES.USER_ID, userId)
             .set(MESSAGES.MESSAGE_TYPE, "file")
@@ -49,7 +67,12 @@ class MessageRepository(private val dsl: DSLContext) {
             .set(MESSAGES.FILE_URL, fileUrl)
             .set(MESSAGES.FILE_SIZE, fileSize.toInt())
             .set(MESSAGES.MIME_TYPE, mimeType)
-            .returningResult(MESSAGES.ID)
+
+        if (replyToId != null) {
+            step = step.set(REPLY_TO_ID, replyToId)
+        }
+
+        return step.returningResult(MESSAGES.ID)
             .fetchOne()!!
             .get(MESSAGES.ID)!!
     }
@@ -65,7 +88,35 @@ class MessageRepository(private val dsl: DSLContext) {
             .get(MESSAGES.ID)!!
     }
 
-    fun getRecentMessages(roomId: Int, limit: Int = 100): List<ChatMessage> {
+    fun updateMessage(messageId: Int, userId: Int, content: String): Boolean {
+        val updated = dsl.update(MESSAGES)
+            .set(MESSAGES.CONTENT, content)
+            .set(EDITED_AT, LocalDateTime.now(ZoneOffset.UTC))
+            .where(MESSAGES.ID.eq(messageId))
+            .and(MESSAGES.USER_ID.eq(userId))
+            .and(MESSAGES.MESSAGE_TYPE.eq("text"))
+            .execute()
+        return updated > 0
+    }
+
+    fun softDeleteMessage(messageId: Int, userId: Int): Boolean {
+        val updated = dsl.update(MESSAGES)
+            .set(IS_DELETED, 1)
+            .where(MESSAGES.ID.eq(messageId))
+            .and(MESSAGES.USER_ID.eq(userId))
+            .execute()
+        return updated > 0
+    }
+
+    fun adminDeleteMessage(messageId: Int): Boolean {
+        val updated = dsl.update(MESSAGES)
+            .set(IS_DELETED, 1)
+            .where(MESSAGES.ID.eq(messageId))
+            .execute()
+        return updated > 0
+    }
+
+    fun getRecentMessages(roomId: Int, limit: Int = 30): List<ChatMessage> {
         val records = dsl.select(
             MESSAGES.ID,
             MESSAGES.ROOM_ID,
@@ -78,6 +129,9 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.MIME_TYPE,
             MESSAGES.THUMBNAIL_URL,
             MESSAGES.CREATED_AT,
+            EDITED_AT,
+            IS_DELETED,
+            REPLY_TO_ID,
             USERS.USERNAME,
             USERS.DISPLAY_NAME,
             USERS.AVATAR_URL
@@ -91,53 +145,193 @@ class MessageRepository(private val dsl: DSLContext) {
             .fetch()
 
         return records.reversed().map { record ->
-            val messageType = record.get(MESSAGES.MESSAGE_TYPE)!!
-            val messageId = record.get(MESSAGES.ID)!!
-            val timestamp = parseTimestamp(record.get(MESSAGES.CREATED_AT))
-            val userId = record.get(MESSAGES.USER_ID)!!
-            val username = record.get(USERS.USERNAME) ?: "system"
-            val displayName = record.get(USERS.DISPLAY_NAME) ?: "System"
-            val avatarUrl = record.get(USERS.AVATAR_URL)
+            val isDeleted = record.get(IS_DELETED) ?: 0
+            val replyToId = record.get(REPLY_TO_ID)
+            val replyInfo = if (replyToId != null) getReplyInfo(replyToId) else null
+            mapRecordToMessage(record, isDeleted, replyInfo)
+        }
+    }
 
-            when (messageType) {
-                "text" -> ChatMessage.Text(
-                    id = messageId,
-                    userId = userId,
-                    username = username,
-                    displayName = displayName,
-                    avatarUrl = avatarUrl,
-                    content = record.get(MESSAGES.CONTENT) ?: "",
-                    timestamp = timestamp
-                )
-                "image" -> ChatMessage.Image(
-                    id = messageId,
-                    userId = userId,
-                    username = username,
-                    displayName = displayName,
-                    avatarUrl = avatarUrl,
-                    imageUrl = record.get(MESSAGES.FILE_URL) ?: "",
-                    thumbnailUrl = record.get(MESSAGES.THUMBNAIL_URL),
-                    timestamp = timestamp
-                )
-                "file" -> ChatMessage.File(
-                    id = messageId,
-                    userId = userId,
-                    username = username,
-                    displayName = displayName,
-                    avatarUrl = avatarUrl,
-                    fileName = record.get(MESSAGES.FILE_NAME) ?: "",
-                    fileUrl = record.get(MESSAGES.FILE_URL) ?: "",
-                    fileSize = record.get(MESSAGES.FILE_SIZE)?.toLong() ?: 0L,
-                    mimeType = record.get(MESSAGES.MIME_TYPE) ?: "application/octet-stream",
-                    timestamp = timestamp
-                )
-                "system" -> ChatMessage.System(
-                    id = messageId,
-                    content = record.get(MESSAGES.CONTENT) ?: "",
-                    timestamp = timestamp
-                )
-                else -> throw IllegalStateException("Unknown message type: $messageType")
-            }
+    fun getMessagesBefore(roomId: Int, beforeId: Int, limit: Int = 30): List<ChatMessage> {
+        val records = dsl.select(
+            MESSAGES.ID,
+            MESSAGES.ROOM_ID,
+            MESSAGES.USER_ID,
+            MESSAGES.MESSAGE_TYPE,
+            MESSAGES.CONTENT,
+            MESSAGES.FILE_URL,
+            MESSAGES.FILE_NAME,
+            MESSAGES.FILE_SIZE,
+            MESSAGES.MIME_TYPE,
+            MESSAGES.THUMBNAIL_URL,
+            MESSAGES.CREATED_AT,
+            EDITED_AT,
+            IS_DELETED,
+            REPLY_TO_ID,
+            USERS.USERNAME,
+            USERS.DISPLAY_NAME,
+            USERS.AVATAR_URL
+        )
+            .from(MESSAGES)
+            .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
+            .where(MESSAGES.ROOM_ID.eq(roomId))
+            .and(MESSAGES.MESSAGE_TYPE.ne("system"))
+            .and(MESSAGES.ID.lt(beforeId))
+            .orderBy(MESSAGES.CREATED_AT.desc())
+            .limit(limit)
+            .fetch()
+
+        return records.reversed().map { record ->
+            val isDeleted = record.get(IS_DELETED) ?: 0
+            val replyToId = record.get(REPLY_TO_ID)
+            val replyInfo = if (replyToId != null) getReplyInfo(replyToId) else null
+            mapRecordToMessage(record, isDeleted, replyInfo)
+        }
+    }
+
+    fun searchMessages(roomId: Int, query: String, limit: Int = 50): List<ChatMessage> {
+        // Escape SQL LIKE special characters
+        val escapedQuery = query
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+
+        val records = dsl.select(
+            MESSAGES.ID,
+            MESSAGES.ROOM_ID,
+            MESSAGES.USER_ID,
+            MESSAGES.MESSAGE_TYPE,
+            MESSAGES.CONTENT,
+            MESSAGES.FILE_URL,
+            MESSAGES.FILE_NAME,
+            MESSAGES.FILE_SIZE,
+            MESSAGES.MIME_TYPE,
+            MESSAGES.THUMBNAIL_URL,
+            MESSAGES.CREATED_AT,
+            EDITED_AT,
+            IS_DELETED,
+            REPLY_TO_ID,
+            USERS.USERNAME,
+            USERS.DISPLAY_NAME,
+            USERS.AVATAR_URL
+        )
+            .from(MESSAGES)
+            .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
+            .where(MESSAGES.ROOM_ID.eq(roomId))
+            .and(MESSAGES.MESSAGE_TYPE.ne("system"))
+            .and(IS_DELETED.eq(0).or(IS_DELETED.isNull))
+            .and(MESSAGES.CONTENT.likeIgnoreCase("%$escapedQuery%"))
+            .orderBy(MESSAGES.CREATED_AT.desc())
+            .limit(limit)
+            .fetch()
+
+        return records.reversed().map { record ->
+            mapRecordToMessage(record, 0, null)
+        }
+    }
+
+    fun getReplyInfo(messageId: Int): ReplyInfo? {
+        val record = dsl.select(
+            MESSAGES.ID,
+            MESSAGES.MESSAGE_TYPE,
+            MESSAGES.CONTENT,
+            MESSAGES.FILE_NAME,
+            USERS.USERNAME,
+            USERS.DISPLAY_NAME
+        )
+            .from(MESSAGES)
+            .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
+            .where(MESSAGES.ID.eq(messageId))
+            .fetchOne() ?: return null
+
+        val msgType = record.get(MESSAGES.MESSAGE_TYPE) ?: "text"
+        val content = when (msgType) {
+            "text" -> record.get(MESSAGES.CONTENT) ?: ""
+            "image" -> "[Image]"
+            "file" -> record.get(MESSAGES.FILE_NAME) ?: "[File]"
+            else -> ""
+        }
+
+        return ReplyInfo(
+            id = record.get(MESSAGES.ID)!!,
+            username = record.get(USERS.USERNAME) ?: "unknown",
+            displayName = record.get(USERS.DISPLAY_NAME) ?: "Unknown",
+            content = if (content.length > 100) content.take(100) + "..." else content,
+            messageType = msgType
+        )
+    }
+
+    private fun mapRecordToMessage(
+        record: org.jooq.Record,
+        isDeleted: Int,
+        replyInfo: ReplyInfo?
+    ): ChatMessage {
+        val messageType = record.get(MESSAGES.MESSAGE_TYPE)!!
+        val messageId = record.get(MESSAGES.ID)!!
+        val timestamp = parseTimestamp(record.get(MESSAGES.CREATED_AT))
+        val userId = record.get(MESSAGES.USER_ID)!!
+        val username = record.get(USERS.USERNAME) ?: "system"
+        val displayName = record.get(USERS.DISPLAY_NAME) ?: "System"
+        val avatarUrl = record.get(USERS.AVATAR_URL)
+        val editedAt = record.get(EDITED_AT)?.let { parseTimestamp(it) }
+
+        if (isDeleted == 1) {
+            return ChatMessage.Text(
+                id = messageId,
+                userId = userId,
+                username = username,
+                displayName = displayName,
+                avatarUrl = avatarUrl,
+                content = "This message has been deleted",
+                editedAt = null,
+                timestamp = timestamp,
+                replyTo = replyInfo
+            )
+        }
+
+        return when (messageType) {
+            "text" -> ChatMessage.Text(
+                id = messageId,
+                userId = userId,
+                username = username,
+                displayName = displayName,
+                avatarUrl = avatarUrl,
+                content = record.get(MESSAGES.CONTENT) ?: "",
+                editedAt = editedAt,
+                timestamp = timestamp,
+                replyTo = replyInfo
+            )
+            "image" -> ChatMessage.Image(
+                id = messageId,
+                userId = userId,
+                username = username,
+                displayName = displayName,
+                avatarUrl = avatarUrl,
+                imageUrl = record.get(MESSAGES.FILE_URL) ?: "",
+                thumbnailUrl = record.get(MESSAGES.THUMBNAIL_URL),
+                timestamp = timestamp,
+                replyTo = replyInfo
+            )
+            "file" -> ChatMessage.File(
+                id = messageId,
+                userId = userId,
+                username = username,
+                displayName = displayName,
+                avatarUrl = avatarUrl,
+                fileName = record.get(MESSAGES.FILE_NAME) ?: "",
+                fileUrl = record.get(MESSAGES.FILE_URL) ?: "",
+                fileSize = record.get(MESSAGES.FILE_SIZE)?.toLong() ?: 0L,
+                mimeType = record.get(MESSAGES.MIME_TYPE) ?: "application/octet-stream",
+                timestamp = timestamp,
+                replyTo = replyInfo
+            )
+            "system" -> ChatMessage.System(
+                id = messageId,
+                content = record.get(MESSAGES.CONTENT) ?: "",
+                timestamp = timestamp,
+                replyTo = null
+            )
+            else -> throw IllegalStateException("Unknown message type: $messageType")
         }
     }
 
