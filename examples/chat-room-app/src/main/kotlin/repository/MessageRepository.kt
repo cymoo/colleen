@@ -127,22 +127,21 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.IS_DELETED,
             MESSAGES.REPLY_TO_ID,
             USERS.USERNAME,
-            USERS.DISPLAY_NAME,
             USERS.AVATAR_URL
         )
             .from(MESSAGES)
             .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
             .where(MESSAGES.ROOM_ID.eq(roomId))
             .and(MESSAGES.MESSAGE_TYPE.ne("system"))
+            .and(MESSAGES.IS_DELETED.eq(0).or(MESSAGES.IS_DELETED.isNull))
             .orderBy(MESSAGES.CREATED_AT.desc())
             .limit(limit)
             .fetch()
 
         return records.reversed().map { record ->
-            val isDeleted = record.get(MESSAGES.IS_DELETED) ?: 0
             val replyToId = record.get(MESSAGES.REPLY_TO_ID)
             val replyInfo = if (replyToId != null) getReplyInfo(replyToId) else null
-            mapRecordToMessage(record, isDeleted, replyInfo)
+            mapRecordToMessage(record, 0, replyInfo)
         }
     }
 
@@ -163,23 +162,22 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.IS_DELETED,
             MESSAGES.REPLY_TO_ID,
             USERS.USERNAME,
-            USERS.DISPLAY_NAME,
             USERS.AVATAR_URL
         )
             .from(MESSAGES)
             .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
             .where(MESSAGES.ROOM_ID.eq(roomId))
             .and(MESSAGES.MESSAGE_TYPE.ne("system"))
+            .and(MESSAGES.IS_DELETED.eq(0).or(MESSAGES.IS_DELETED.isNull))
             .and(MESSAGES.ID.lt(beforeId))
             .orderBy(MESSAGES.CREATED_AT.desc())
             .limit(limit)
             .fetch()
 
         return records.reversed().map { record ->
-            val isDeleted = record.get(MESSAGES.IS_DELETED) ?: 0
             val replyToId = record.get(MESSAGES.REPLY_TO_ID)
             val replyInfo = if (replyToId != null) getReplyInfo(replyToId) else null
-            mapRecordToMessage(record, isDeleted, replyInfo)
+            mapRecordToMessage(record, 0, replyInfo)
         }
     }
 
@@ -206,7 +204,6 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.IS_DELETED,
             MESSAGES.REPLY_TO_ID,
             USERS.USERNAME,
-            USERS.DISPLAY_NAME,
             USERS.AVATAR_URL
         )
             .from(MESSAGES)
@@ -230,8 +227,7 @@ class MessageRepository(private val dsl: DSLContext) {
             MESSAGES.MESSAGE_TYPE,
             MESSAGES.CONTENT,
             MESSAGES.FILE_NAME,
-            USERS.USERNAME,
-            USERS.DISPLAY_NAME
+            USERS.USERNAME
         )
             .from(MESSAGES)
             .leftJoin(USERS).on(MESSAGES.USER_ID.eq(USERS.ID))
@@ -249,7 +245,6 @@ class MessageRepository(private val dsl: DSLContext) {
         return ReplyInfo(
             id = record.get(MESSAGES.ID)!!,
             username = record.get(USERS.USERNAME) ?: "unknown",
-            displayName = record.get(USERS.DISPLAY_NAME) ?: "Unknown",
             content = if (content.length > 100) content.take(100) + "..." else content,
             messageType = msgType
         )
@@ -265,30 +260,14 @@ class MessageRepository(private val dsl: DSLContext) {
         val timestamp = parseTimestamp(record.get(MESSAGES.CREATED_AT))
         val userId = record.get(MESSAGES.USER_ID)!!
         val username = record.get(USERS.USERNAME) ?: "system"
-        val displayName = record.get(USERS.DISPLAY_NAME) ?: "System"
         val avatarUrl = record.get(USERS.AVATAR_URL)
         val editedAt = record.get(MESSAGES.EDITED_AT)?.let { parseTimestamp(it) }
-
-        if (isDeleted == 1) {
-            return ChatMessage.Text(
-                id = messageId,
-                userId = userId,
-                username = username,
-                displayName = displayName,
-                avatarUrl = avatarUrl,
-                content = "This message has been deleted",
-                editedAt = null,
-                timestamp = timestamp,
-                replyTo = replyInfo
-            )
-        }
 
         return when (messageType) {
             "text" -> ChatMessage.Text(
                 id = messageId,
                 userId = userId,
                 username = username,
-                displayName = displayName,
                 avatarUrl = avatarUrl,
                 content = record.get(MESSAGES.CONTENT) ?: "",
                 editedAt = editedAt,
@@ -299,7 +278,6 @@ class MessageRepository(private val dsl: DSLContext) {
                 id = messageId,
                 userId = userId,
                 username = username,
-                displayName = displayName,
                 avatarUrl = avatarUrl,
                 imageUrl = record.get(MESSAGES.FILE_URL) ?: "",
                 thumbnailUrl = record.get(MESSAGES.THUMBNAIL_URL),
@@ -310,7 +288,6 @@ class MessageRepository(private val dsl: DSLContext) {
                 id = messageId,
                 userId = userId,
                 username = username,
-                displayName = displayName,
                 avatarUrl = avatarUrl,
                 fileName = record.get(MESSAGES.FILE_NAME) ?: "",
                 fileUrl = record.get(MESSAGES.FILE_URL) ?: "",

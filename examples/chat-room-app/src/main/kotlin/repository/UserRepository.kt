@@ -16,7 +16,7 @@ class UserRepository(private val dsl: DSLContext) {
 
     fun findByUsernameForAuth(username: String): AuthUser? {
         return dsl.select(
-            USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL,
+            USERS.ID, USERS.USERNAME, USERS.AVATAR_URL,
             USERS.CREATED_AT, USERS.LAST_SEEN, USERS.BIO, USERS.STATUS, USERS.PASSWORD_HASH
         )
             .from(USERS)
@@ -27,7 +27,6 @@ class UserRepository(private val dsl: DSLContext) {
                     user = User(
                         id = record.get(USERS.ID)!!,
                         username = record.get(USERS.USERNAME)!!,
-                        displayName = record.get(USERS.DISPLAY_NAME)!!,
                         avatarUrl = record.get(USERS.AVATAR_URL),
                         bio = record.get(USERS.BIO),
                         status = record.get(USERS.STATUS),
@@ -41,7 +40,7 @@ class UserRepository(private val dsl: DSLContext) {
 
     fun findById(id: Int): User? {
         return dsl.select(
-            USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL,
+            USERS.ID, USERS.USERNAME, USERS.AVATAR_URL,
             USERS.CREATED_AT, USERS.LAST_SEEN, USERS.BIO, USERS.STATUS
         )
             .from(USERS)
@@ -51,7 +50,6 @@ class UserRepository(private val dsl: DSLContext) {
                 User(
                     id = record.get(USERS.ID)!!,
                     username = record.get(USERS.USERNAME)!!,
-                    displayName = record.get(USERS.DISPLAY_NAME)!!,
                     avatarUrl = record.get(USERS.AVATAR_URL),
                     bio = record.get(USERS.BIO),
                     status = record.get(USERS.STATUS),
@@ -61,18 +59,17 @@ class UserRepository(private val dsl: DSLContext) {
             }
     }
 
-    fun createUser(username: String, displayName: String, passwordHash: String? = null): User {
+    fun createUser(username: String, passwordHash: String? = null): User {
         val record = dsl.insertInto(USERS)
             .set(USERS.USERNAME, username)
-            .set(USERS.DISPLAY_NAME, displayName)
+            .set(USERS.DISPLAY_NAME, username)
             .set(USERS.PASSWORD_HASH, passwordHash)
-            .returningResult(USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL, USERS.CREATED_AT, USERS.LAST_SEEN)
+            .returningResult(USERS.ID, USERS.USERNAME, USERS.AVATAR_URL, USERS.CREATED_AT, USERS.LAST_SEEN)
             .fetchOne()!!
 
         return User(
             id = record.get(USERS.ID)!!,
             username = record.get(USERS.USERNAME)!!,
-            displayName = record.get(USERS.DISPLAY_NAME)!!,
             avatarUrl = record.get(USERS.AVATAR_URL),
             createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
             lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
@@ -93,11 +90,10 @@ class UserRepository(private val dsl: DSLContext) {
             .execute()
     }
 
-    fun updateProfile(userId: Int, displayName: String?, avatarUrl: String?, bio: String?, status: String?) {
-        if (displayName == null && avatarUrl == null && bio == null && status == null) return
+    fun updateProfile(userId: Int, avatarUrl: String?, bio: String?, status: String?) {
+        if (avatarUrl == null && bio == null && status == null) return
 
-        var step = dsl.update(USERS).set(USERS.LAST_SEEN, USERS.LAST_SEEN) // baseline to start fluent chain
-        if (displayName != null) step = step.set(USERS.DISPLAY_NAME, displayName)
+        var step = dsl.update(USERS).set(USERS.LAST_SEEN, USERS.LAST_SEEN)
         if (avatarUrl != null) step = step.set(USERS.AVATAR_URL, avatarUrl)
         if (bio != null) step = step.set(USERS.BIO, bio)
         if (status != null) step = step.set(USERS.STATUS, status)

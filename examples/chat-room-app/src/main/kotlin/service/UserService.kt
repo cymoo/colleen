@@ -13,7 +13,7 @@ class UserService(dsl: DSLContext) {
 
     private val userRepo = UserRepository(dsl)
 
-    fun register(username: String, displayName: String?, password: String): AuthResponse {
+    fun register(username: String, password: String): AuthResponse {
         require(username.isNotBlank()) { "Username is required" }
         require(password.length >= 6) { "Password must be at least 6 characters" }
 
@@ -26,7 +26,7 @@ class UserService(dsl: DSLContext) {
             userRepo.setPasswordHash(existing.user.id, passwordHash)
             existing.user
         } else {
-            userRepo.createUser(username, displayName ?: username, passwordHash)
+            userRepo.createUser(username, passwordHash)
         }
 
         return AuthResponse(token = "", user = user)
@@ -41,17 +41,21 @@ class UserService(dsl: DSLContext) {
     }
 
     /** Finds or creates a guest user (no password). Used for legacy/system purposes. */
-    fun findOrCreateUser(username: String, displayName: String? = null): User {
+    fun findOrCreateUser(username: String): User {
         return userRepo.findByUsername(username)
-            ?: userRepo.createUser(username, displayName ?: username)
+            ?: userRepo.createUser(username)
     }
 
     fun getUserById(id: Int): User? {
         return userRepo.findById(id)
     }
 
-    fun updateProfile(userId: Int, displayName: String?, avatarUrl: String?, bio: String?, status: String?): User? {
-        userRepo.updateProfile(userId, displayName, avatarUrl, bio, status)
+    fun getUserByUsername(username: String): User? {
+        return userRepo.findByUsername(username)
+    }
+
+    fun updateProfile(userId: Int, avatarUrl: String?, bio: String?, status: String?): User? {
+        userRepo.updateProfile(userId, avatarUrl, bio, status)
         return userRepo.findById(userId)
     }
 }

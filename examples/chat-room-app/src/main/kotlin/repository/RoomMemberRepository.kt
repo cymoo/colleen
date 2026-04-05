@@ -28,7 +28,7 @@ class RoomMemberRepository(private val dsl: DSLContext) {
 
     fun getRoomMembers(roomId: Int): List<User> {
         return dsl.select(
-            USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL,
+            USERS.ID, USERS.USERNAME, USERS.AVATAR_URL,
             USERS.CREATED_AT, USERS.LAST_SEEN, USERS.BIO, USERS.STATUS, ROOM_MEMBERS.ROLE
         )
             .from(ROOM_MEMBERS)
@@ -39,7 +39,6 @@ class RoomMemberRepository(private val dsl: DSLContext) {
                 User(
                     id = record.get(USERS.ID)!!,
                     username = record.get(USERS.USERNAME)!!,
-                    displayName = record.get(USERS.DISPLAY_NAME)!!,
                     avatarUrl = record.get(USERS.AVATAR_URL),
                     bio = record.get(USERS.BIO),
                     status = record.get(USERS.STATUS),

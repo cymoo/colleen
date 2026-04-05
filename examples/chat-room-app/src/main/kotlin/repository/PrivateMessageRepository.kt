@@ -30,8 +30,8 @@ class PrivateMessageRepository(private val dsl: DSLContext) {
             PRIVATE_MESSAGES.MESSAGE_TYPE, PRIVATE_MESSAGES.CONTENT, PRIVATE_MESSAGES.FILE_URL,
             PRIVATE_MESSAGES.FILE_NAME, PRIVATE_MESSAGES.FILE_SIZE, PRIVATE_MESSAGES.MIME_TYPE,
             PRIVATE_MESSAGES.THUMBNAIL_URL, PRIVATE_MESSAGES.IS_READ, PRIVATE_MESSAGES.CREATED_AT,
-            SENDER.USERNAME, SENDER.DISPLAY_NAME, SENDER.AVATAR_URL,
-            RECEIVER.USERNAME, RECEIVER.DISPLAY_NAME
+            SENDER.USERNAME, SENDER.AVATAR_URL,
+            RECEIVER.USERNAME
         )
             .from(PRIVATE_MESSAGES)
             .join(SENDER).on(PRIVATE_MESSAGES.SENDER_ID.eq(SENDER.ID))
@@ -54,11 +54,9 @@ class PrivateMessageRepository(private val dsl: DSLContext) {
                 id = record.get(PRIVATE_MESSAGES.ID)!!,
                 senderId = record.get(PRIVATE_MESSAGES.SENDER_ID)!!,
                 senderUsername = record.get(SENDER.USERNAME) ?: "unknown",
-                senderDisplayName = record.get(SENDER.DISPLAY_NAME) ?: "Unknown",
                 senderAvatarUrl = record.get(SENDER.AVATAR_URL),
                 receiverId = record.get(PRIVATE_MESSAGES.RECEIVER_ID)!!,
                 receiverUsername = record.get(RECEIVER.USERNAME) ?: "unknown",
-                receiverDisplayName = record.get(RECEIVER.DISPLAY_NAME) ?: "Unknown",
                 messageType = record.get(PRIVATE_MESSAGES.MESSAGE_TYPE) ?: "text",
                 content = record.get(PRIVATE_MESSAGES.CONTENT),
                 fileUrl = record.get(PRIVATE_MESSAGES.FILE_URL),
@@ -87,6 +85,31 @@ class PrivateMessageRepository(private val dsl: DSLContext) {
             .where(PRIVATE_MESSAGES.RECEIVER_ID.eq(userId))
             .and(PRIVATE_MESSAGES.IS_READ.eq(0))
             .fetchOne(0, Int::class.java) ?: 0
+    }
+
+    fun getUnreadSenders(userId: Int): List<Map<String, Any>> {
+        val unreadCount = dsl.selectCount().from(PRIVATE_MESSAGES)
+            .where(PRIVATE_MESSAGES.SENDER_ID.eq(SENDER.ID))
+            .and(PRIVATE_MESSAGES.RECEIVER_ID.eq(userId))
+            .and(PRIVATE_MESSAGES.IS_READ.eq(0))
+            .asField<Int>("unread_count")
+
+        return dsl.select(SENDER.ID, SENDER.USERNAME, SENDER.AVATAR_URL, unreadCount)
+            .from(PRIVATE_MESSAGES)
+            .join(SENDER).on(PRIVATE_MESSAGES.SENDER_ID.eq(SENDER.ID))
+            .where(PRIVATE_MESSAGES.RECEIVER_ID.eq(userId))
+            .and(PRIVATE_MESSAGES.IS_READ.eq(0))
+            .groupBy(SENDER.ID, SENDER.USERNAME, SENDER.AVATAR_URL)
+            .orderBy(unreadCount.desc())
+            .fetch()
+            .map { r ->
+                mapOf(
+                    "userId" to r.get(SENDER.ID)!!,
+                    "username" to (r.get(SENDER.USERNAME) ?: ""),
+                    "avatarUrl" to (r.get(SENDER.AVATAR_URL) ?: ""),
+                    "unreadCount" to (r.get(unreadCount) ?: 0)
+                )
+            }
     }
 
     private fun parseTimestamp(timestamp: LocalDateTime?): Long {

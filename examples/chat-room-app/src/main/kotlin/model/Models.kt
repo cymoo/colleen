@@ -9,7 +9,6 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
 data class User(
     val id: Int,
     val username: String,
-    val displayName: String,
     val avatarUrl: String? = null,
     val bio: String? = null,
     val status: String? = null,
@@ -67,7 +66,6 @@ sealed class ChatMessage {
         override val id: Int,
         val userId: Int,
         val username: String,
-        val displayName: String,
         val avatarUrl: String?,
         val content: String,
         val editedAt: Long? = null,
@@ -79,7 +77,6 @@ sealed class ChatMessage {
         override val id: Int,
         val userId: Int,
         val username: String,
-        val displayName: String,
         val avatarUrl: String?,
         val imageUrl: String,
         val thumbnailUrl: String?,
@@ -91,7 +88,6 @@ sealed class ChatMessage {
         override val id: Int,
         val userId: Int,
         val username: String,
-        val displayName: String,
         val avatarUrl: String?,
         val fileName: String,
         val fileUrl: String,
@@ -115,7 +111,6 @@ sealed class ChatMessage {
 data class ReplyInfo(
     val id: Int,
     val username: String,
-    val displayName: String,
     val content: String,
     val messageType: String
 )
@@ -127,11 +122,9 @@ data class PrivateMessage(
     val id: Int,
     val senderId: Int,
     val senderUsername: String,
-    val senderDisplayName: String,
     val senderAvatarUrl: String?,
     val receiverId: Int,
     val receiverUsername: String,
-    val receiverDisplayName: String,
     val messageType: String,
     val content: String? = null,
     val fileUrl: String? = null,
@@ -173,7 +166,6 @@ data class WsMessagePayload(
     val query: String? = null,
     val role: String? = null,
     val duration: Int? = null,
-    val displayName: String? = null,
     val bio: String? = null,
     val status: String? = null,
     val avatarUrl: String? = null
@@ -198,6 +190,7 @@ sealed class WsEvent {
     data class Kicked(val reason: String) : WsEvent()
     data class RoleChanged(val userId: Int, val role: String) : WsEvent()
     data class SearchResults(val messages: List<ChatMessage>, val query: String) : WsEvent()
+    data class UnreadCounts(val unreadDms: Int) : WsEvent()
 }
 
 /**
@@ -212,7 +205,6 @@ data class CreateRoomRequest(
 
 data class RegisterRequest(
     val username: String,
-    val displayName: String?,
     val password: String
 )
 
@@ -227,7 +219,6 @@ data class AuthResponse(
 )
 
 data class UpdateProfileRequest(
-    val displayName: String? = null,
     val avatarUrl: String? = null,
     val bio: String? = null,
     val status: String? = null

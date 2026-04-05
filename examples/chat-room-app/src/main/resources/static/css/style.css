@@ -599,9 +599,14 @@ body {
    CHAT SCREEN
    ============================================ */
 
+#chat-screen {
+    padding: 0;
+    align-items: stretch;
+}
+
 .chat-layout {
     width: 100%;
-    height: 100vh;
+    height: 100%;
     display: flex;
     flex-direction: column;
     background: var(--color-surface);
@@ -708,6 +713,138 @@ body {
     box-shadow: 0 0 10px rgba(0, 255, 65, 0.3);
 }
 
+.dm-badge-btn {
+    position: relative;
+    color: var(--color-info);
+    border-color: var(--color-info);
+}
+
+.dm-badge-btn:hover {
+    box-shadow: 0 0 10px rgba(0, 217, 255, 0.3);
+}
+
+.dm-unread-count {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    background: var(--color-info);
+    color: var(--color-bg);
+    font-size: 9px;
+    font-weight: bold;
+    padding: 1px 4px;
+    border-radius: 8px;
+    min-width: 14px;
+    text-align: center;
+    line-height: 1.4;
+}
+
+/* DM Inbox Modal */
+.dm-inbox-container {
+    position: relative;
+    z-index: 1;
+    width: 340px;
+    max-height: 400px;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border: 2px solid var(--color-border-bright);
+}
+
+.dm-inbox-list {
+    overflow-y: auto;
+    flex: 1;
+    padding: 8px 0;
+}
+
+.dm-inbox-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.dm-inbox-item:hover {
+    background: var(--color-surface-light);
+}
+
+.dm-inbox-avatar {
+    width: 36px;
+    height: 36px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border-bright);
+    border-radius: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--color-accent);
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.dm-inbox-name {
+    flex: 1;
+    color: var(--color-text);
+    font-size: 14px;
+}
+
+.dm-inbox-badge {
+    background: var(--color-info);
+    color: var(--color-bg);
+    font-size: 11px;
+    font-weight: bold;
+    padding: 2px 7px;
+    border-radius: 10px;
+    min-width: 20px;
+    text-align: center;
+}
+
+.dm-inbox-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 13px;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.modal-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--color-accent);
+}
+
+.modal-close-btn {
+    background: transparent;
+    border: none;
+    color: var(--color-text-dim);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 6px;
+    transition: color var(--transition-fast);
+}
+
+.modal-close-btn:hover {
+    color: var(--color-warning);
+}
+
+.profile-online-badge {
+    font-size: 11px;
+    color: var(--color-accent);
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
 .chat-content {
     flex: 1;
     display: flex;
@@ -752,6 +889,14 @@ body {
     gap: 15px;
     opacity: 0;
     animation: messageSlide 0.3s ease-out forwards;
+    padding: 6px 10px;
+    margin: 0 -10px;
+    border-radius: 4px;
+    transition: background var(--transition-fast);
+}
+
+.message:hover {
+    background: rgba(46, 204, 113, 0.04);
 }
 
 @keyframes messageSlide {
@@ -1019,6 +1164,17 @@ body {
     padding: 12px 16px;
     outline: none;
     transition: all var(--transition-fast);
+    resize: none;
+    min-height: 46px;
+    max-height: 200px;
+    overflow-y: auto;
+    line-height: 1.5;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.message-input::-webkit-scrollbar {
+    display: none;
 }
 
 .message-input:focus {
@@ -1029,6 +1185,7 @@ body {
 .input-actions {
     display: flex;
     gap: 8px;
+    align-self: flex-start;
 }
 
 .send-btn {
@@ -1350,24 +1507,26 @@ kbd {
    ============================================ */
 
 .message-actions {
-    display: none;
+    visibility: hidden;
+    display: flex;
     gap: 4px;
     margin-left: auto;
 }
 
 .message:hover .message-actions {
-    display: flex;
+    visibility: visible;
 }
 
 .msg-action-btn {
     background: transparent;
     border: 1px solid var(--color-border);
     color: var(--color-text-muted);
-    font-size: 12px;
-    padding: 2px 6px;
+    font-size: 17px;
+    padding: 4px 10px;
     cursor: pointer;
     transition: all var(--transition-fast);
     font-family: var(--font-mono);
+    line-height: 1.2;
 }
 
 .msg-action-btn:hover {
@@ -1619,6 +1778,19 @@ kbd {
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+.private-chat-messages::-webkit-scrollbar {
+    width: 8px;
+}
+
+.private-chat-messages::-webkit-scrollbar-track {
+    background: var(--color-bg);
+}
+
+.private-chat-messages::-webkit-scrollbar-thumb {
+    background: var(--color-border-bright);
+    border-radius: 4px;
 }
 
 .private-msg {

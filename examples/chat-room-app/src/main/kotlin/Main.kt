@@ -63,7 +63,7 @@ fun main() {
 
     // Controllers
     app.addController(AuthController(userService, sessionService))
-    app.addController(ApiController(roomService, fileService, userService, sessionService))
+    app.addController(ApiController(roomService, fileService, userService, sessionService, chatService))
     app.addController(FileController(fileService))
     app.addController(ChatController(userService, chatService, roomService, sessionService, objectMapper))
 

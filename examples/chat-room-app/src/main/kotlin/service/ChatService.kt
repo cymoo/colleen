@@ -51,13 +51,13 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
         // Save system message
         val systemMessageId = messageRepo.saveSystemMessage(
             roomId,
-            "${user.displayName} joined the room"
+            "${user.username} joined the room"
         )
 
         // Broadcast join event
         val joinMessage = ChatMessage.System(
             id = systemMessageId,
-            content = "${user.displayName} joined the room",
+            content = "${user.username} joined the room",
             timestamp = System.currentTimeMillis()
         )
 
@@ -81,13 +81,13 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
         // Save system message
         val systemMessageId = messageRepo.saveSystemMessage(
             roomId,
-            "${user.displayName} left the room"
+            "${user.username} left the room"
         )
 
         // Broadcast leave event
         val leaveMessage = ChatMessage.System(
             id = systemMessageId,
-            content = "${user.displayName} left the room",
+            content = "${user.username} left the room",
             timestamp = System.currentTimeMillis()
         )
 
@@ -104,7 +104,6 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
             id = messageId,
             userId = user.id,
             username = user.username,
-            displayName = user.displayName,
             avatarUrl = user.avatarUrl,
             content = content,
             timestamp = System.currentTimeMillis(),
@@ -114,7 +113,7 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
         broadcastToRoom(roomId, WsEvent.Message(message))
 
         // Parse mentions
-        parseMentions(content, roomId, messageId, user.displayName)
+        parseMentions(content, roomId, messageId, user.username)
     }
 
     fun sendImageMessage(roomId: Int, user: User, imageUrl: String, thumbnailUrl: String?, replyToId: Int? = null) {
@@ -126,7 +125,6 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
             id = messageId,
             userId = user.id,
             username = user.username,
-            displayName = user.displayName,
             avatarUrl = user.avatarUrl,
             imageUrl = imageUrl,
             thumbnailUrl = thumbnailUrl,
@@ -156,7 +154,6 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
             id = messageId,
             userId = user.id,
             username = user.username,
-            displayName = user.displayName,
             avatarUrl = user.avatarUrl,
             fileName = fileName,
             fileUrl = fileUrl,
@@ -217,11 +214,9 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
             id = messageId,
             senderId = sender.id,
             senderUsername = sender.username,
-            senderDisplayName = sender.displayName,
             senderAvatarUrl = sender.avatarUrl,
             receiverId = receiverId,
             receiverUsername = receiver.username,
-            receiverDisplayName = receiver.displayName,
             messageType = "text",
             content = content,
             timestamp = System.currentTimeMillis()
@@ -231,7 +226,12 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
         val receiverConn = userConnections[receiverId]
         if (receiverConn != null) {
             runCatching { receiverConn.send(serializeEvent(WsEvent.PrivateMessageEvent(pm))) }
+            // Receiver is online — push updated unread count immediately
+            runCatching {
+                receiverConn.send(serializeEvent(WsEvent.UnreadCounts(privateMessageRepo.getUnreadCount(receiverId))))
+            }
         }
+        // If offline — unread count will be picked up on next connect
 
         // Send to sender (confirmation)
         val senderConn = userConnections[sender.id]
@@ -243,10 +243,16 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
     fun getPrivateHistory(userId1: Int, userId2: Int, beforeId: Int? = null): Pair<List<PrivateMessage>, Boolean> {
         val messages = privateMessageRepo.getConversation(userId1, userId2, 31, beforeId)
         val hasMore = messages.size > 30
-        // Mark as read
+        // Mark messages from userId2 to userId1 as read
         privateMessageRepo.markAsRead(userId2, userId1)
+        // Notify sender of updated unread count
+        sendToUser(userId1, WsEvent.UnreadCounts(privateMessageRepo.getUnreadCount(userId1)))
         return Pair(if (hasMore) messages.drop(1) else messages, hasMore)
     }
+
+    fun getUnreadDmCount(userId: Int): Int = privateMessageRepo.getUnreadCount(userId)
+
+    fun getUnreadDmSenders(userId: Int): List<Map<String, Any>> = privateMessageRepo.getUnreadSenders(userId)
 
     // Room permissions
     fun setUserRole(roomId: Int, actorUser: User, targetUserId: Int, role: String) {
@@ -272,8 +278,8 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
     }
 
     // User profiles — returns the refreshed user
-    fun updateUserProfile(user: User, displayName: String?, avatarUrl: String?, bio: String?, status: String?): User {
-        userRepo.updateProfile(user.id, displayName, avatarUrl, bio, status)
+    fun updateUserProfile(user: User, avatarUrl: String?, bio: String?, status: String?): User {
+        userRepo.updateProfile(user.id, avatarUrl, bio, status)
         val updatedUser = userRepo.findById(user.id) ?: return user
 
         // Broadcast to all rooms the user is in
@@ -397,6 +403,10 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
                 "type" to "search_results",
                 "messages" to event.messages.map { objectMapper.valueToTree<JsonNode>(it) },
                 "query" to event.query
+            )
+            is WsEvent.UnreadCounts -> mapOf(
+                "type" to "unread_counts",
+                "unreadDms" to event.unreadDms
             )
         }
         return objectMapper.writeValueAsString(payload)

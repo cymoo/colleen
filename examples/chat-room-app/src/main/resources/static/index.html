@@ -55,10 +55,6 @@
                     <input type="text" id="register-username" class="terminal-input" placeholder="anonymous" autocomplete="off" required>
                 </div>
                 <div class="input-group">
-                    <label class="input-label">&gt; DISPLAY NAME</label>
-                    <input type="text" id="register-displayname" class="terminal-input" placeholder="Guest User" autocomplete="off">
-                </div>
-                <div class="input-group">
                     <label class="input-label">&gt; PASSWORD</label>
                     <input type="password" id="register-password" class="terminal-input" placeholder="••••••••" autocomplete="new-password" required>
                 </div>
@@ -135,6 +131,12 @@
                             <circle cx="12" cy="7" r="4"></circle>
                         </svg>
                     </button>
+                    <button id="dm-badge-btn" class="icon-btn dm-badge-btn" title="Unread DMs" style="display:none;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span id="dm-unread-count" class="dm-unread-count">0</span>
+                    </button>
                     <div class="user-info">
                         <span class="user-label">LOGGED AS:</span>
                         <span class="user-name" id="current-username">USER</span>
@@ -193,7 +195,7 @@
             <!-- Input Area -->
             <div class="input-panel">
                 <div class="input-wrapper">
-                    <input type="text" id="message-input" class="message-input" placeholder="Type message... (Markdown supported)" autocomplete="off">
+                    <textarea id="message-input" class="message-input" placeholder="Type message... (Markdown supported)" autocomplete="off" rows="1"></textarea>
                     <div class="input-actions">
                         <label for="image-upload" class="icon-btn" title="Upload Image">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -303,10 +305,6 @@
                     <div class="my-profile-avatar-hint">&gt; CLICK AVATAR TO UPLOAD</div>
                 </div>
                 <div class="input-group">
-                    <label class="input-label">&gt; DISPLAY NAME</label>
-                    <input type="text" id="my-profile-displayname" class="terminal-input" placeholder="Display Name">
-                </div>
-                <div class="input-group">
                     <label class="input-label">&gt; STATUS</label>
                     <input type="text" id="my-profile-status" class="terminal-input" placeholder="What's on your mind?">
                 </div>
@@ -404,6 +402,23 @@
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
 
+    <!-- DM Inbox Modal -->
+    <div id="dm-inbox-modal" class="modal">
+        <div class="modal-backdrop" id="dm-inbox-backdrop"></div>
+        <div class="dm-inbox-container">
+            <div class="modal-header">
+                <span class="modal-title">UNREAD MESSAGES</span>
+                <button id="dm-inbox-close-btn" class="modal-close-btn">✕</button>
+            </div>
+            <div id="dm-inbox-list" class="dm-inbox-list"></div>
+        </div>
+    </div>
+
     <script src="/static/js/chat.js"></script>
+    <script src="/static/js/chat-ui.js"></script>
+    <script src="/static/js/chat-api.js"></script>
+    <script src="/static/js/chat-messages.js"></script>
+    <script src="/static/js/chat-users.js"></script>
+    <script>const chatClient = new ChatClient();</script>
 </body>
 </html>

@@ -24,7 +24,7 @@ class AuthController(
         if (req.password.length < 6) throw BadRequest("Password must be at least 6 characters")
 
         return try {
-            val result = userService.register(req.username, req.displayName, req.password)
+            val result = userService.register(req.username, req.password)
             val token = sessionService.createSession(result.user.id)
             AuthResponse(token = token, user = result.user)
         } catch (e: IllegalArgumentException) {

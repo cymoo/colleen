@@ -6,6 +6,7 @@ import service.FileService
 import service.RoomService
 import service.SessionService
 import service.UserService
+import service.ChatService
 
 /**
  * REST API controller for rooms, files, and user profiles
@@ -15,7 +16,8 @@ class ApiController(
     private val roomService: RoomService,
     private val fileService: FileService,
     private val userService: UserService,
-    private val sessionService: SessionService
+    private val sessionService: SessionService,
+    private val chatService: ChatService
 ) {
 
     @Get("/rooms")
@@ -61,11 +63,22 @@ class ApiController(
         return userService.getUserById(userId.value) ?: throw NotFound("User not found")
     }
 
+    @Get("/users/by-name/{username}")
+    fun getUserByName(username: Path<String>): User {
+        return userService.getUserByUsername(username.value) ?: throw NotFound("User not found")
+    }
+
+    @Get("/dms/unread-senders")
+    fun getUnreadDmSenders(ctx: Context): List<Map<String, Any>> {
+        val userId = ctx.requireAuth()
+        return chatService.getUnreadDmSenders(userId)
+    }
+
     @Patch("/users/me")
     fun updateMyProfile(ctx: Context, body: Json<UpdateProfileRequest>): User {
         val userId = ctx.requireAuth()
         val req = body.value
-        return userService.updateProfile(userId, req.displayName, req.avatarUrl, req.bio, req.status)
+        return userService.updateProfile(userId, req.avatarUrl, req.bio, req.status)
             ?: throw NotFound("User not found")
     }
 

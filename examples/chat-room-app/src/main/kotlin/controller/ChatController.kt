@@ -104,6 +104,10 @@ class ChatController(
             "users" to users
         )))
 
+        // Send initial unread DM count
+        val unreadCount = chatService.getUnreadDmCount(currentUser.id)
+        conn.send(chatService.serializeEvent(WsEvent.UnreadCounts(unreadCount)))
+
         // Handle incoming messages
         conn.onMessage { msg ->
             try {
@@ -181,9 +185,9 @@ class ChatController(
                         }
                     }
                     "update_profile" -> {
-                        // Update currentUser so subsequent messages carry the new avatar/displayName
+                        // Update currentUser so subsequent messages carry the new avatar/status
                         currentUser = chatService.updateUserProfile(
-                            currentUser, payload.displayName, payload.avatarUrl, payload.bio, payload.status
+                            currentUser, payload.avatarUrl, payload.bio, payload.status
                         )
                     }
                 }
