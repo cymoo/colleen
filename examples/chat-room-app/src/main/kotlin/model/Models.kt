@@ -25,6 +25,8 @@ data class Room(
     val id: Int,
     val name: String,
     val description: String?,
+    val isPrivate: Boolean = false,
+    val creatorId: Int? = null,
     val createdAt: Long,
     val maxUsers: Int = 100
 )
@@ -36,6 +38,8 @@ data class RoomInfo(
     val id: Int,
     val name: String,
     val description: String?,
+    val isPrivate: Boolean = false,
+    val creatorId: Int? = null,
     val onlineUsers: Int,
     val maxUsers: Int
 )
@@ -201,7 +205,32 @@ sealed class WsEvent {
  */
 data class CreateRoomRequest(
     val name: String,
-    val description: String?
+    val description: String?,
+    val isPrivate: Boolean = false,
+    val password: String? = null
+)
+
+data class RegisterRequest(
+    val username: String,
+    val displayName: String?,
+    val password: String
+)
+
+data class LoginRequest(
+    val username: String,
+    val password: String
+)
+
+data class AuthResponse(
+    val token: String,
+    val user: User
+)
+
+data class UpdateProfileRequest(
+    val displayName: String? = null,
+    val avatarUrl: String? = null,
+    val bio: String? = null,
+    val status: String? = null
 )
 
 data class UploadResponse(

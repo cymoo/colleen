@@ -11,6 +11,7 @@ import model.WsEvent
 import model.WsMessagePayload
 import service.ChatService
 import service.RoomService
+import service.SessionService
 import service.UserService
 
 /**
@@ -21,25 +22,31 @@ class ChatController(
     private val userService: UserService,
     private val chatService: ChatService,
     private val roomService: RoomService,
+    private val sessionService: SessionService,
     private val objectMapper: ObjectMapper
 ) {
 
     @WsUse
     fun validateUser(ctx: Context, next: Next) {
-        val username = ctx.query("username")
-        val displayName = ctx.query("displayName")
-
-        if (username.isNullOrBlank()) {
-            ctx.status(400).json(mapOf("error" to "Username is required"))
+        val token = ctx.query("token")
+        if (token.isNullOrBlank()) {
+            ctx.status(401).json(mapOf("error" to "Authentication required"))
             return
         }
 
-        // Find or create user
-        val user = userService.findOrCreateUser(username, displayName)
+        val userId = sessionService.validateSession(token)
+        if (userId == null) {
+            ctx.status(401).json(mapOf("error" to "Invalid or expired session"))
+            return
+        }
 
-        // Store user in context state for WS handler
+        val user = userService.getUserById(userId)
+        if (user == null) {
+            ctx.status(401).json(mapOf("error" to "User not found"))
+            return
+        }
+
         ctx.setState("user", user)
-
         next()
     }
 
@@ -52,7 +59,8 @@ class ChatController(
                 return
             }
 
-        val user = conn.getStateOrNull<User>("user")
+        // Mutable reference so profile updates are reflected in subsequent messages
+        var currentUser = conn.getStateOrNull<User>("user")
             ?: run {
                 conn.send("""{"type":"error","message":"User not authenticated"}""")
                 conn.close()
@@ -67,8 +75,18 @@ class ChatController(
                 return
             }
 
+        // Verify password for private rooms
+        if (room.isPrivate) {
+            val roomPassword = conn.query("roomPassword")
+            if (!roomService.verifyRoomPassword(roomId, roomPassword)) {
+                conn.send("""{"type":"error","message":"Incorrect room password"}""")
+                conn.close()
+                return
+            }
+        }
+
         // Join room
-        chatService.joinRoom(roomId, conn, user)
+        chatService.joinRoom(roomId, conn, currentUser)
 
         // Send message history with hasMore flag
         val history = chatService.getMessageHistory(roomId)
@@ -94,31 +112,31 @@ class ChatController(
                 when (payload.type) {
                     "text" -> {
                         payload.content?.let { content ->
-                            chatService.sendTextMessage(roomId, user, content, payload.replyToId)
+                            chatService.sendTextMessage(roomId, currentUser, content, payload.replyToId)
                         }
                     }
                     "image" -> {
                         payload.imageUrl?.let { imageUrl ->
-                            chatService.sendImageMessage(roomId, user, imageUrl, payload.thumbnailUrl, payload.replyToId)
+                            chatService.sendImageMessage(roomId, currentUser, imageUrl, payload.thumbnailUrl, payload.replyToId)
                         }
                     }
                     "file" -> {
                         if (payload.fileName != null && payload.fileUrl != null &&
                             payload.fileSize != null && payload.mimeType != null) {
                             chatService.sendFileMessage(
-                                roomId, user, payload.fileName, payload.fileUrl,
+                                roomId, currentUser, payload.fileName, payload.fileUrl,
                                 payload.fileSize, payload.mimeType, payload.replyToId
                             )
                         }
                     }
                     "edit" -> {
                         if (payload.messageId != null && payload.content != null) {
-                            chatService.editMessage(roomId, user, payload.messageId, payload.content)
+                            chatService.editMessage(roomId, currentUser, payload.messageId, payload.content)
                         }
                     }
                     "delete" -> {
                         payload.messageId?.let { messageId ->
-                            chatService.deleteMessage(roomId, user, messageId)
+                            chatService.deleteMessage(roomId, currentUser, messageId)
                         }
                     }
                     "load_history" -> {
@@ -141,12 +159,12 @@ class ChatController(
                     }
                     "private_message" -> {
                         if (payload.targetUserId != null && payload.content != null) {
-                            chatService.sendPrivateMessage(user, payload.targetUserId, payload.content)
+                            chatService.sendPrivateMessage(currentUser, payload.targetUserId, payload.content)
                         }
                     }
                     "private_history" -> {
                         payload.targetUserId?.let { targetUserId ->
-                            val (messages, hasMore) = chatService.getPrivateHistory(user.id, targetUserId, payload.beforeId)
+                            val (messages, hasMore) = chatService.getPrivateHistory(currentUser.id, targetUserId, payload.beforeId)
                             conn.send(chatService.serializeEvent(
                                 WsEvent.PrivateHistory(messages, hasMore)
                             ))
@@ -154,16 +172,19 @@ class ChatController(
                     }
                     "set_role" -> {
                         if (payload.targetUserId != null && payload.role != null) {
-                            chatService.setUserRole(roomId, user, payload.targetUserId, payload.role)
+                            chatService.setUserRole(roomId, currentUser, payload.targetUserId, payload.role)
                         }
                     }
                     "kick" -> {
                         payload.targetUserId?.let { targetUserId ->
-                            chatService.kickUser(roomId, user, targetUserId)
+                            chatService.kickUser(roomId, currentUser, targetUserId)
                         }
                     }
                     "update_profile" -> {
-                        chatService.updateUserProfile(user, payload.displayName, payload.avatarUrl, payload.bio, payload.status)
+                        // Update currentUser so subsequent messages carry the new avatar/displayName
+                        currentUser = chatService.updateUserProfile(
+                            currentUser, payload.displayName, payload.avatarUrl, payload.bio, payload.status
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -176,11 +197,11 @@ class ChatController(
 
         // Handle disconnect
         conn.onClose { reason ->
-            chatService.leaveRoom(roomId, user, conn)
+            chatService.leaveRoom(roomId, currentUser, conn)
         }
 
         conn.onError { error ->
-            println("WebSocket error for user ${user.username}: ${error.message}")
+            println("WebSocket error for user ${currentUser.username}: ${error.message}")
         }
     }
 }

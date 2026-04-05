@@ -10,10 +10,12 @@ class ChatClient {
         this.userId = null;
         this.roomId = null;
         this.roomName = '';
+        this.currentRoomPassword = '';
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
         this.intentionalDisconnect = false;
         this.users = [];
+        this.rooms = [];
         this.oldestMessageId = null;
         this.hasMoreHistory = true;
         this.loadingHistory = false;
@@ -24,14 +26,399 @@ class ChatClient {
         this.privateChatUsername = '';
         this.searchVisible = false;
 
+        // Auth state
+        this.authToken = localStorage.getItem('authToken');
+        this.currentUser = JSON.parse(localStorage.getItem('currentUser') || 'null');
+
+        // Pending state
+        this._pendingRoom = null;
+        this._pendingAvatarUrl = null;
+
         this.init();
     }
-    
+
     init() {
         this.configureMarkdown();
         this.bindEvents();
-        this.loadRooms();
+        this.checkAuth();
     }
+
+    // ============ API Helper ============
+
+    async apiRequest(method, url, body) {
+        const headers = {};
+        if (this.authToken) {
+            headers['Authorization'] = `Bearer ${this.authToken}`;
+        }
+        if (body !== undefined) {
+            headers['Content-Type'] = 'application/json';
+        }
+        const options = { method, headers };
+        if (body !== undefined) {
+            options.body = JSON.stringify(body);
+        }
+        const response = await fetch(url, options);
+        if (response.status === 204) return null;
+        return response.json();
+    }
+
+    // ============ Auth ============
+
+    async checkAuth() {
+        if (!this.authToken) {
+            this.showAuthScreen();
+            return;
+        }
+        try {
+            const user = await this.apiRequest('GET', '/api/auth/me');
+            if (user && user.id) {
+                this.currentUser = user;
+                localStorage.setItem('currentUser', JSON.stringify(user));
+                this.username = user.username;
+                this.displayName = user.displayName;
+                this.showLobbyScreen();
+            } else {
+                this.clearAuth();
+                this.showAuthScreen();
+            }
+        } catch (e) {
+            this.clearAuth();
+            this.showAuthScreen();
+        }
+    }
+
+    clearAuth() {
+        this.authToken = null;
+        this.currentUser = null;
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('currentUser');
+    }
+
+    async handleLogin(e) {
+        e.preventDefault();
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+
+        if (!username || !password) {
+            this.showToast('Please fill in all fields', 'error');
+            return;
+        }
+
+        try {
+            document.getElementById('auth-status-text').textContent = 'AUTHENTICATING...';
+            const data = await this.apiRequest('POST', '/api/auth/login', { username, password });
+            if (data && data.token) {
+                this.authToken = data.token;
+                this.currentUser = data.user;
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('currentUser', JSON.stringify(data.user));
+                this.username = data.user.username;
+                this.displayName = data.user.displayName;
+                this.showToast('Welcome back, ' + data.user.displayName, 'success');
+                this.showLobbyScreen();
+            } else {
+                this.showToast((data && data.message) || 'Login failed', 'error');
+            }
+        } catch (e) {
+            this.showToast('Login failed', 'error');
+        } finally {
+            document.getElementById('auth-status-text').textContent = 'SYSTEM READY';
+        }
+    }
+
+    async handleRegister(e) {
+        e.preventDefault();
+        const username = document.getElementById('register-username').value.trim();
+        const displayName = document.getElementById('register-displayname').value.trim() || username;
+        const password = document.getElementById('register-password').value;
+        const confirm = document.getElementById('register-confirm').value;
+
+        if (!username || !password) {
+            this.showToast('Please fill in all fields', 'error');
+            return;
+        }
+        if (password !== confirm) {
+            this.showToast('Passwords do not match', 'error');
+            return;
+        }
+
+        try {
+            document.getElementById('auth-status-text').textContent = 'REGISTERING...';
+            const data = await this.apiRequest('POST', '/api/auth/register', { username, displayName, password });
+            if (data && data.token) {
+                this.authToken = data.token;
+                this.currentUser = data.user;
+                localStorage.setItem('authToken', data.token);
+                localStorage.setItem('currentUser', JSON.stringify(data.user));
+                this.username = data.user.username;
+                this.displayName = data.user.displayName;
+                this.showToast('Welcome, ' + data.user.displayName, 'success');
+                this.showLobbyScreen();
+            } else {
+                this.showToast((data && data.message) || 'Registration failed', 'error');
+            }
+        } catch (e) {
+            this.showToast('Registration failed', 'error');
+        } finally {
+            document.getElementById('auth-status-text').textContent = 'SYSTEM READY';
+        }
+    }
+
+    async logout() {
+        try {
+            await this.apiRequest('POST', '/api/auth/logout');
+        } catch (e) {}
+        if (this.ws) {
+            this.intentionalDisconnect = true;
+            this.ws.close();
+            this.ws = null;
+        }
+        this.clearAuth();
+        this.username = '';
+        this.displayName = '';
+        this.showAuthScreen();
+        this.showToast('Logged out', 'success');
+    }
+
+    // ============ Screen Management ============
+
+    showAuthScreen() {
+        document.getElementById('auth-screen').classList.add('active');
+        document.getElementById('lobby-screen').classList.remove('active');
+        document.getElementById('chat-screen').classList.remove('active');
+    }
+
+    showLobbyScreen() {
+        document.getElementById('auth-screen').classList.remove('active');
+        document.getElementById('lobby-screen').classList.add('active');
+        document.getElementById('chat-screen').classList.remove('active');
+        const displayName = (this.currentUser && (this.currentUser.displayName || this.currentUser.username)) || 'USER';
+        document.getElementById('lobby-username').textContent = displayName;
+        this.loadRoomsForLobby();
+    }
+
+    showChatScreen() {
+        document.getElementById('auth-screen').classList.remove('active');
+        document.getElementById('lobby-screen').classList.remove('active');
+        document.getElementById('chat-screen').classList.add('active');
+    }
+
+    // ============ Lobby ============
+
+    async loadRoomsForLobby() {
+        const grid = document.getElementById('lobby-rooms-grid');
+        grid.innerHTML = '<div class="lobby-loading">Loading rooms...</div>';
+        try {
+            const rooms = await this.apiRequest('GET', '/api/rooms');
+            this.rooms = rooms;
+            this.renderRooms(rooms);
+        } catch (error) {
+            grid.innerHTML = '<div class="lobby-loading">Failed to load rooms</div>';
+            this.showToast('Failed to load rooms', 'error');
+        }
+    }
+
+    renderRooms(rooms) {
+        const grid = document.getElementById('lobby-rooms-grid');
+        if (!rooms || rooms.length === 0) {
+            grid.innerHTML = '<div class="lobby-loading">No rooms available. Create one!</div>';
+            return;
+        }
+        grid.innerHTML = '';
+        rooms.forEach(room => {
+            const card = document.createElement('div');
+            card.className = 'room-card';
+            card.setAttribute('data-room-id', room.id);
+            const lockIcon = room.isPrivate ? '<span class="room-lock-icon">&#x1F512;</span>' : '';
+            const onlineCount = room.onlineUsers !== undefined ? room.onlineUsers : 0;
+            const maxUsers = room.maxUsers || '\u221E';
+            card.innerHTML = `
+                <div class="room-card-header">
+                    <div class="room-card-name">${this.escapeHtml(room.name.toUpperCase())} ${lockIcon}</div>
+                </div>
+                ${room.description ? `<div class="room-card-desc">${this.escapeHtml(room.description)}</div>` : ''}
+                <div class="room-card-meta">
+                    <span class="pulse-dot"></span>
+                    <span>${onlineCount}/${maxUsers} ONLINE</span>
+                </div>
+            `;
+            card.addEventListener('click', () => this.joinRoom(room));
+            grid.appendChild(card);
+        });
+    }
+
+    joinRoom(room) {
+        if (room.isPrivate) {
+            this.openRoomPasswordDialog(room);
+        } else {
+            this.connectToRoom(room.id, room.name, '');
+        }
+    }
+
+    connectToRoom(roomId, roomName, roomPassword) {
+        this.roomId = roomId;
+        this.roomName = roomName;
+        this.currentRoomPassword = roomPassword;
+        this.connect();
+    }
+
+    // ============ Room Password Dialog ============
+
+    openRoomPasswordDialog(room) {
+        this._pendingRoom = room;
+        document.getElementById('room-password-title').textContent = '\uD83D\uDD12 ' + room.name.toUpperCase();
+        document.getElementById('room-password-input').value = '';
+        document.getElementById('room-password-modal').classList.add('active');
+        setTimeout(() => document.getElementById('room-password-input').focus(), 100);
+    }
+
+    closeRoomPasswordDialog() {
+        document.getElementById('room-password-modal').classList.remove('active');
+        this._pendingRoom = null;
+    }
+
+    submitRoomPassword() {
+        const password = document.getElementById('room-password-input').value;
+        if (!password) {
+            this.showToast('Please enter the room password', 'error');
+            return;
+        }
+        const room = this._pendingRoom;
+        this.closeRoomPasswordDialog();
+        this.connectToRoom(room.id, room.name, password);
+    }
+
+    // ============ Create Room Modal ============
+
+    openCreateRoomModal() {
+        document.getElementById('create-room-name').value = '';
+        document.getElementById('create-room-desc').value = '';
+        document.getElementById('create-room-password').value = '';
+        document.querySelector('input[name="room-visibility"][value="public"]').checked = true;
+        document.getElementById('room-password-group').style.display = 'none';
+        document.getElementById('create-room-modal').classList.add('active');
+    }
+
+    closeCreateRoomModal() {
+        document.getElementById('create-room-modal').classList.remove('active');
+    }
+
+    async createRoom() {
+        const name = document.getElementById('create-room-name').value.trim();
+        const description = document.getElementById('create-room-desc').value.trim();
+        const isPrivate = document.querySelector('input[name="room-visibility"]:checked').value === 'private';
+        const password = document.getElementById('create-room-password').value;
+
+        if (!name) {
+            this.showToast('Room name is required', 'error');
+            return;
+        }
+        if (isPrivate && !password) {
+            this.showToast('Private rooms require a password', 'error');
+            return;
+        }
+
+        try {
+            const body = { name, description, isPrivate };
+            if (isPrivate) body.password = password;
+            const room = await this.apiRequest('POST', '/api/rooms', body);
+            if (room && room.id) {
+                this.showToast('Room created: ' + room.name, 'success');
+                this.closeCreateRoomModal();
+                this.loadRoomsForLobby();
+            } else {
+                this.showToast((room && room.message) || 'Failed to create room', 'error');
+            }
+        } catch (e) {
+            this.showToast('Failed to create room', 'error');
+        }
+    }
+
+    // ============ My Profile Modal ============
+
+    openMyProfile() {
+        if (!this.currentUser) return;
+        this._pendingAvatarUrl = this.currentUser.avatarUrl || null;
+        this.populateMyProfile();
+        document.getElementById('my-profile-modal').classList.add('active');
+    }
+
+    populateMyProfile() {
+        const user = this.currentUser;
+        if (!user) return;
+
+        const avatarEl = document.getElementById('my-profile-avatar');
+        if (this._pendingAvatarUrl) {
+            avatarEl.innerHTML = `<img src="${this.escapeAttr(this._pendingAvatarUrl)}" class="avatar-img-large" alt="">`;
+        } else {
+            avatarEl.textContent = this.getAvatar(user.displayName || user.username || '?');
+        }
+
+        document.getElementById('my-profile-displayname').value = user.displayName || '';
+        document.getElementById('my-profile-status').value = user.status || '';
+        document.getElementById('my-profile-bio').value = user.bio || '';
+        document.getElementById('my-profile-username').value = user.username || '';
+    }
+
+    closeMyProfile() {
+        document.getElementById('my-profile-modal').classList.remove('active');
+        this._pendingAvatarUrl = null;
+    }
+
+    async uploadAvatar(file) {
+        const formData = new FormData();
+        formData.append('image', file);
+        try {
+            const response = await fetch('/api/upload/image', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${this.authToken || ''}` },
+                body: formData
+            });
+            const result = await response.json();
+            if (result.url) {
+                this._pendingAvatarUrl = result.url;
+                const avatarEl = document.getElementById('my-profile-avatar');
+                avatarEl.innerHTML = `<img src="${this.escapeAttr(result.url)}" class="avatar-img-large" alt="">`;
+                this.showToast('Avatar uploaded', 'success');
+            } else {
+                this.showToast(result.error || 'Upload failed', 'error');
+            }
+        } catch (e) {
+            this.showToast('Avatar upload failed', 'error');
+        }
+    }
+
+    saveProfile() {
+        const displayName = document.getElementById('my-profile-displayname').value.trim();
+        const status = document.getElementById('my-profile-status').value.trim();
+        const bio = document.getElementById('my-profile-bio').value.trim();
+
+        if (!displayName) {
+            this.showToast('Display name cannot be empty', 'error');
+            return;
+        }
+
+        const avatarUrl = this._pendingAvatarUrl || (this.currentUser && this.currentUser.avatarUrl) || '';
+
+        // Always persist via REST API (works from both lobby and chat)
+        this.apiRequest('PATCH', '/api/users/me', { displayName, status, bio, avatarUrl })
+            .then(updatedUser => {
+                this.currentUser = updatedUser;
+                localStorage.setItem('currentUser', JSON.stringify(updatedUser));
+                this.displayName = updatedUser.displayName;
+                this._pendingAvatarUrl = null;
+                this.showToast('Profile updated', 'success');
+                document.getElementById('my-profile-modal').classList.remove('active');
+            })
+            .catch(err => this.showToast(err.message || 'Failed to update profile', 'error'));
+
+        // Also send WS update_profile if connected so other users see changes live
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'update_profile', displayName, status, bio, avatarUrl }));
+        }
+    }
+
+    // ============ Markdown ============
 
     configureMarkdown() {
         if (typeof marked !== 'undefined') {
@@ -47,14 +434,66 @@ class ChatClient {
             });
         }
     }
-    
+
+    // ============ Event Binding ============
+
     bindEvents() {
-        // Login form
-        document.getElementById('login-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            this.handleLogin();
+        // Auth tabs
+        document.querySelectorAll('.auth-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(`${tab.dataset.tab}-form`).classList.add('active');
+            });
         });
-        
+
+        // Login form
+        document.getElementById('login-form').addEventListener('submit', (e) => this.handleLogin(e));
+
+        // Register form
+        document.getElementById('register-form').addEventListener('submit', (e) => this.handleRegister(e));
+
+        // Lobby
+        document.getElementById('lobby-logout-btn').addEventListener('click', () => this.logout());
+        document.getElementById('create-room-btn').addEventListener('click', () => this.openCreateRoomModal());
+        document.getElementById('my-profile-lobby-btn').addEventListener('click', () => this.openMyProfile());
+        document.getElementById('my-profile-chat-btn').addEventListener('click', () => this.openMyProfile());
+
+        // Create room modal
+        document.getElementById('create-room-close-btn').addEventListener('click', () => this.closeCreateRoomModal());
+        document.getElementById('create-room-backdrop').addEventListener('click', () => this.closeCreateRoomModal());
+        document.getElementById('create-room-submit-btn').addEventListener('click', () => this.createRoom());
+        document.querySelectorAll('input[name="room-visibility"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                document.getElementById('room-password-group').style.display =
+                    (radio.value === 'private' && radio.checked) ? 'block' : 'none';
+            });
+        });
+
+        // Room password modal
+        document.getElementById('room-password-close-btn').addEventListener('click', () => this.closeRoomPasswordDialog());
+        document.getElementById('room-password-backdrop').addEventListener('click', () => this.closeRoomPasswordDialog());
+        document.getElementById('room-password-cancel-btn').addEventListener('click', () => this.closeRoomPasswordDialog());
+        document.getElementById('room-password-join-btn').addEventListener('click', () => this.submitRoomPassword());
+        document.getElementById('room-password-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.submitRoomPassword();
+        });
+
+        // My profile modal
+        document.getElementById('my-profile-close-btn').addEventListener('click', () => this.closeMyProfile());
+        document.getElementById('my-profile-backdrop').addEventListener('click', () => this.closeMyProfile());
+        document.getElementById('my-profile-save-btn').addEventListener('click', () => this.saveProfile());
+        document.getElementById('my-profile-avatar').addEventListener('click', () => {
+            document.getElementById('avatar-upload').click();
+        });
+        document.getElementById('avatar-upload').addEventListener('change', (e) => {
+            if (e.target.files[0]) {
+                this.uploadAvatar(e.target.files[0]);
+                e.target.value = '';
+            }
+        });
+
         // Message input
         const messageInput = document.getElementById('message-input');
         messageInput.addEventListener('keypress', (e) => {
@@ -63,20 +502,18 @@ class ChatClient {
                 this.sendMessage();
             }
         });
-
         messageInput.addEventListener('input', (e) => {
             this.handleMentionInput(e);
         });
-
         messageInput.addEventListener('keydown', (e) => {
             this.handleMentionKeydown(e);
         });
-        
+
         // Send button
         document.getElementById('send-btn').addEventListener('click', () => {
             this.sendMessage();
         });
-        
+
         // Image upload
         document.getElementById('image-upload').addEventListener('change', (e) => {
             if (e.target.files[0]) {
@@ -84,7 +521,7 @@ class ChatClient {
                 e.target.value = '';
             }
         });
-        
+
         // File upload
         document.getElementById('file-upload').addEventListener('change', (e) => {
             if (e.target.files[0]) {
@@ -92,21 +529,20 @@ class ChatClient {
                 e.target.value = '';
             }
         });
-        
-        // Disconnect button
+
+        // Disconnect button (back to lobby)
         document.getElementById('disconnect-btn').addEventListener('click', () => {
             this.disconnect();
         });
-        
+
         // Image modal
         const modal = document.getElementById('image-modal');
         const modalClose = document.getElementById('modal-close-btn');
         const backdrop = modal.querySelector('.modal-backdrop');
-        
+
         modalClose.addEventListener('click', () => {
             modal.classList.remove('active');
         });
-        
         backdrop.addEventListener('click', () => {
             modal.classList.remove('active');
         });
@@ -175,82 +611,51 @@ class ChatClient {
             }
         });
     }
-    
-    async loadRooms() {
-        try {
-            const response = await fetch('/api/rooms');
-            const rooms = await response.json();
-            
-            const select = document.getElementById('room-select');
-            select.innerHTML = rooms.map(room => 
-                `<option value="${room.id}">${room.name.toUpperCase()} — ${room.onlineUsers}/${room.maxUsers} online</option>`
-            ).join('');
-        } catch (error) {
-            console.error('Failed to load rooms:', error);
-            this.showToast('Failed to load rooms', 'error');
-        }
-    }
-    
-    handleLogin() {
-        this.username = document.getElementById('username-input').value.trim();
-        this.displayName = document.getElementById('displayname-input').value.trim() || this.username;
-        this.roomId = document.getElementById('room-select').value;
-        
-        if (!this.username || !this.roomId) {
-            this.showToast('Please fill in all fields', 'error');
-            return;
-        }
-        
-        const select = document.getElementById('room-select');
-        this.roomName = select.options[select.selectedIndex].text.split(' —')[0];
-        
-        this.connect();
-    }
-    
+
+    // ============ WebSocket Connection ============
+
     connect() {
         this.intentionalDisconnect = false;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/chat/${this.roomId}?username=${encodeURIComponent(this.username)}&displayName=${encodeURIComponent(this.displayName)}`;
-        
+        let wsUrl = `${protocol}//${window.location.host}/chat/${this.roomId}?token=${encodeURIComponent(this.authToken || '')}`;
+        if (this.currentRoomPassword) {
+            wsUrl += `&roomPassword=${encodeURIComponent(this.currentRoomPassword)}`;
+        }
+
         this.ws = new WebSocket(wsUrl);
-        
+
         this.ws.onopen = () => {
             console.log('Connected to chat room');
             this.onConnected();
         };
-        
+
         this.ws.onmessage = (event) => {
             this.handleMessage(JSON.parse(event.data));
         };
-        
+
         this.ws.onclose = () => {
             console.log('Disconnected from chat room');
             this.onDisconnected();
         };
-        
+
         this.ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             this.showToast('Connection error', 'error');
         };
     }
-    
+
     onConnected() {
         this.reconnectAttempts = 0;
-        
-        // Switch screens
-        document.getElementById('login-screen').classList.remove('active');
-        document.getElementById('chat-screen').classList.add('active');
-        
-        // Update UI
+        this.showChatScreen();
+
         document.getElementById('current-room-name').textContent = this.roomName;
-        document.getElementById('current-username').textContent = this.username;
-        
-        // Focus message input
+        const displayName = (this.currentUser && (this.currentUser.displayName || this.currentUser.username)) || 'USER';
+        document.getElementById('current-username').textContent = displayName;
+
         document.getElementById('message-input').focus();
-        
         this.showToast('Connected to ' + this.roomName, 'success');
     }
-    
+
     onDisconnected() {
         if (this.intentionalDisconnect) {
             return;
@@ -265,28 +670,27 @@ class ChatClient {
             this.showToast('Connection lost. Please refresh.', 'error');
         }
     }
-    
+
     disconnect() {
         this.intentionalDisconnect = true;
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
-        
-        // Switch screens
-        document.getElementById('chat-screen').classList.remove('active');
-        document.getElementById('login-screen').classList.add('active');
-        
-        // Clear messages
+
+        // Clear chat state
         document.getElementById('messages-container').innerHTML = '';
         document.getElementById('users-list').innerHTML = '';
         this.users = [];
         this.oldestMessageId = null;
         this.hasMoreHistory = true;
-        
-        this.showToast('Disconnected', 'success');
+        this.currentRoomPassword = '';
+
+        // Go back to lobby
+        this.showLobbyScreen();
+        this.showToast('Left room', 'success');
     }
-    
+
     handleMessage(data) {
         switch (data.type) {
             case 'history':
@@ -340,9 +744,9 @@ class ChatClient {
                 break;
         }
     }
-    
+
     // ============ History & Messages ============
-    
+
     renderHistory(messages, hasMore = false) {
         const container = document.getElementById('messages-container');
         container.innerHTML = '';
@@ -363,9 +767,9 @@ class ChatClient {
 
         const container = document.getElementById('messages-container');
         const previousScrollHeight = container.scrollHeight;
-        
+
         this.oldestMessageId = messages[0].id;
-        
+
         const fragment = document.createDocumentFragment();
         messages.forEach(msg => {
             fragment.appendChild(this.createMessageElement(msg));
@@ -380,23 +784,22 @@ class ChatClient {
         if (!this.ws || !this.oldestMessageId || this.loadingHistory) return;
         this.loadingHistory = true;
         document.getElementById('history-loader').style.display = 'flex';
-        
+
         this.ws.send(JSON.stringify({
             type: 'load_history',
             beforeId: this.oldestMessageId
         }));
     }
-    
+
     appendMessage(message, scroll = true) {
         const container = document.getElementById('messages-container');
         const messageEl = this.createMessageElement(message);
         container.appendChild(messageEl);
 
-        // Track oldest message ID
         if (!this.oldestMessageId || message.id < this.oldestMessageId) {
             this.oldestMessageId = message.id;
         }
-        
+
         if (scroll) {
             this.scrollToBottom();
         }
@@ -417,7 +820,6 @@ class ChatClient {
     highlightMentions(html) {
         return html.replace(/@(\w+)/g, (match, username) => {
             const isSelf = username === this.username;
-            // Use data attribute instead of inline onclick; event delegation handles the click
             return `<span class="mention-highlight${isSelf ? ' mention-self' : ''}" data-mention-user="${this.escapeAttr(username)}">${this.escapeHtml(match)}</span>`;
         });
     }
@@ -427,7 +829,6 @@ class ChatClient {
         const displayName = message.displayName || message.username || 'Unknown';
         const isOwn = message.username === this.username;
 
-        // messageType fallback
         let messageType = message.messageType;
         if (!messageType) {
             if (message.imageUrl) messageType = 'image';
@@ -450,13 +851,12 @@ class ChatClient {
             const time = this.formatTime(message.timestamp);
             const editedHtml = message.editedAt ? '<span class="edited-tag">(edited)</span>' : '';
 
-            // Reply preview
             let replyHtml = '';
             if (message.replyTo) {
                 const r = message.replyTo;
                 replyHtml = `
                 <div class="reply-preview" data-reply-id="${r.id}">
-                    <span class="reply-author">↩ ${this.escapeHtml(r.displayName)}</span>
+                    <span class="reply-author">&#x21A9; ${this.escapeHtml(r.displayName)}</span>
                     <span class="reply-content">${this.escapeHtml(r.content)}</span>
                 </div>`;
             }
@@ -490,12 +890,11 @@ class ChatClient {
             `;
             }
 
-            // Action buttons use data attributes instead of inline scripts for safety
             const actionsHtml = `
                 <div class="message-actions">
-                    <button class="msg-action-btn msg-action-reply" data-msg-id="${message.id}" data-display-name="${this.escapeAttr(displayName)}" data-preview="${this.escapeAttr((message.content || '').substring(0, 50))}" title="Reply">↩</button>
-                    ${isOwn && messageType === 'text' ? `<button class="msg-action-btn msg-action-edit" data-msg-id="${message.id}" data-content="${this.escapeAttr(message.content || '')}" title="Edit">✎</button>` : ''}
-                    ${isOwn ? `<button class="msg-action-btn msg-action-delete" data-msg-id="${message.id}" title="Delete">✕</button>` : ''}
+                    <button class="msg-action-btn msg-action-reply" data-msg-id="${message.id}" data-display-name="${this.escapeAttr(displayName)}" data-preview="${this.escapeAttr((message.content || '').substring(0, 50))}" title="Reply">&#x21A9;</button>
+                    ${isOwn && messageType === 'text' ? `<button class="msg-action-btn msg-action-edit" data-msg-id="${message.id}" data-content="${this.escapeAttr(message.content || '')}" title="Edit">&#x270E;</button>` : ''}
+                    ${isOwn ? `<button class="msg-action-btn msg-action-delete" data-msg-id="${message.id}" title="Delete">&#x2715;</button>` : ''}
                 </div>
             `;
 
@@ -512,7 +911,6 @@ class ChatClient {
             </div>
         `;
 
-            // Attach event listeners safely
             const replyBtn = div.querySelector('.msg-action-reply');
             if (replyBtn) {
                 replyBtn.addEventListener('click', () => {
@@ -537,10 +935,9 @@ class ChatClient {
     }
 
     // ============ User List ============
-    
+
     updateUsersList(users) {
         this.users = users;
-        // Try to find self userId
         const self = users.find(u => u.username === this.username);
         if (self) this.userId = self.id;
         this.renderUsersList();
@@ -549,10 +946,10 @@ class ChatClient {
     renderUsersList() {
         const container = document.getElementById('users-list');
         const count = this.users.length;
-        
+
         document.getElementById('online-count').textContent = count;
         document.getElementById('users-count').textContent = count;
-        
+
         container.innerHTML = '';
         this.users.forEach(user => {
             const avatar = this.getAvatar(user.displayName);
@@ -560,7 +957,7 @@ class ChatClient {
                 `<span class="role-badge role-${this.escapeHtml(user.role)}">${this.escapeHtml(user.role.toUpperCase())}</span>` : '';
             const statusHtml = user.status ?
                 `<div class="user-item-status">${this.escapeHtml(user.status)}</div>` : '';
-            
+
             const itemDiv = document.createElement('div');
             itemDiv.className = 'user-item';
             itemDiv.setAttribute('data-user-id', user.id);
@@ -577,37 +974,36 @@ class ChatClient {
                     </svg>
                 </button>
             `;
-            
-            // Safe event binding
+
             itemDiv.addEventListener('click', () => this.openUserProfile(user.id));
             const dmBtn = itemDiv.querySelector('.dm-btn');
             dmBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.openPrivateChat(user.id, user.username, user.displayName);
             });
-            
+
             container.appendChild(itemDiv);
         });
     }
-    
+
     handleUserJoined(user) {
         if (!this.users.find(u => u.id === user.id)) {
             this.users.push(user);
         }
         this.renderUsersList();
     }
-    
+
     handleUserLeft(userId) {
         this.users = this.users.filter(u => u.id !== userId);
         this.renderUsersList();
     }
-    
+
     // ============ Sending Messages ============
-    
+
     sendMessage() {
         const input = document.getElementById('message-input');
         const content = input.value.trim();
-        
+
         if (!content || !this.ws) return;
 
         if (this.editingMessageId) {
@@ -628,24 +1024,25 @@ class ChatClient {
             this.ws.send(JSON.stringify(payload));
             this.cancelIndicator();
         }
-        
+
         input.value = '';
     }
-    
+
     async uploadImage(file) {
         if (!this.ws) return;
-        
+
         const formData = new FormData();
         formData.append('image', file);
-        
+
         try {
             const response = await fetch('/api/upload/image', {
                 method: 'POST',
+                headers: { 'Authorization': `Bearer ${this.authToken || ''}` },
                 body: formData
             });
-            
+
             const result = await response.json();
-            
+
             if (result.success) {
                 const payload = {
                     type: 'image',
@@ -666,21 +1063,22 @@ class ChatClient {
             this.showToast('Upload failed', 'error');
         }
     }
-    
+
     async uploadFile(file) {
         if (!this.ws) return;
-        
+
         const formData = new FormData();
         formData.append('file', file);
-        
+
         try {
             const response = await fetch('/api/upload/file', {
                 method: 'POST',
+                headers: { 'Authorization': `Bearer ${this.authToken || ''}` },
                 body: formData
             });
-            
+
             const result = await response.json();
-            
+
             if (result.success) {
                 const payload = {
                     type: 'file',
@@ -712,7 +1110,7 @@ class ChatClient {
         document.getElementById('message-input').value = content;
         document.getElementById('message-input').focus();
         document.getElementById('input-indicator').style.display = 'flex';
-        document.getElementById('indicator-text').textContent = '✎ Editing message...';
+        document.getElementById('indicator-text').textContent = '&#x270E; Editing message...';
     }
 
     confirmDelete(messageId) {
@@ -736,7 +1134,7 @@ class ChatClient {
         el.classList.add('message-deleted');
         const textEl = el.querySelector('.message-text');
         if (textEl) textEl.innerHTML = '<em class="deleted-text">This message has been deleted</em>';
-        el.querySelector('.message-actions')?.remove();
+        el.querySelector('.message-actions') && el.querySelector('.message-actions').remove();
     }
 
     // ============ Reply ============
@@ -745,7 +1143,7 @@ class ChatClient {
         this.replyingTo = { id: messageId, displayName, preview };
         this.editingMessageId = null;
         document.getElementById('input-indicator').style.display = 'flex';
-        document.getElementById('indicator-text').textContent = `↩ Replying to ${displayName}: ${preview}...`;
+        document.getElementById('indicator-text').textContent = `&#x21A9; Replying to ${displayName}: ${preview}...`;
         document.getElementById('message-input').focus();
     }
 
@@ -770,18 +1168,17 @@ class ChatClient {
         const input = e.target;
         const value = input.value;
         const cursorPos = input.selectionStart;
-        
-        // Find @ before cursor
+
         const textBefore = value.substring(0, cursorPos);
         const atMatch = textBefore.match(/@(\w*)$/);
-        
+
         if (atMatch) {
             const query = atMatch[1].toLowerCase();
-            const matches = this.users.filter(u => 
+            const matches = this.users.filter(u =>
                 u.username.toLowerCase().startsWith(query) ||
                 u.displayName.toLowerCase().startsWith(query)
             ).slice(0, 5);
-            
+
             if (matches.length > 0) {
                 this.showMentionDropdown(matches, atMatch[0].length);
                 return;
@@ -792,11 +1189,11 @@ class ChatClient {
 
     handleMentionKeydown(e) {
         if (!this.mentionDropdownVisible) return;
-        
+
         const dropdown = document.getElementById('mention-dropdown');
         const items = dropdown.querySelectorAll('.mention-item');
         const selected = dropdown.querySelector('.mention-item.selected');
-        
+
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault();
             let idx = Array.from(items).indexOf(selected);
@@ -849,7 +1246,6 @@ class ChatClient {
 
     handleMention(data) {
         this.showToast(`${data.mentionedBy} mentioned you`, 'success');
-        // Browser notification
         if (Notification.permission === 'granted') {
             new Notification('TERMINAL.CHAT', { body: `${data.mentionedBy} mentioned you` });
         } else if (Notification.permission !== 'denied') {
@@ -888,7 +1284,6 @@ class ChatClient {
             const name = msg.displayName || msg.username || 'Unknown';
             const content = msg.content || '';
             const time = this.formatTime(msg.timestamp);
-            // Escape content first, then highlight query matches
             const escaped = this.escapeHtml(content);
             const highlighted = escaped.replace(
                 new RegExp(`(${this.escapeRegex(this.escapeHtml(query))})`, 'gi'),
@@ -920,7 +1315,6 @@ class ChatClient {
         document.getElementById('private-chat-messages').innerHTML = '<div class="loading-text">Loading...</div>';
         document.getElementById('private-chat-modal').classList.add('active');
 
-        // Request history
         if (this.ws) {
             this.ws.send(JSON.stringify({
                 type: 'private_history',
@@ -948,11 +1342,9 @@ class ChatClient {
     }
 
     handlePrivateMessageReceived(message) {
-        // If private chat is open with this user, append message
         if (this.privateChatUserId === message.senderId || this.privateChatUserId === message.receiverId) {
             this.appendPrivateChatMessage(message);
         } else {
-            // Show notification
             this.showToast(`DM from ${message.senderDisplayName}: ${(message.content || '').substring(0, 50)}`, 'success');
         }
     }
@@ -984,13 +1376,12 @@ class ChatClient {
     // ============ User Profiles ============
 
     async openUserProfile(userId) {
-        // Validate userId is a number to prevent URL injection
         const safeUserId = parseInt(userId, 10);
         if (isNaN(safeUserId)) return;
         try {
             const response = await fetch(`/api/users/${safeUserId}`);
             const user = await response.json();
-            
+
             const content = document.getElementById('user-profile-content');
             content.innerHTML = `
                 <div class="profile-avatar-large">${user.avatarUrl ? `<img src="${this.escapeAttr(user.avatarUrl)}" class="avatar-img-large">` : this.getAvatar(user.displayName)}</div>
@@ -1004,7 +1395,6 @@ class ChatClient {
                     <button class="profile-action-btn profile-mention-btn">@Mention</button>
                 </div>
             `;
-            // Safe event binding
             content.querySelector('.profile-dm-btn').addEventListener('click', () => {
                 this.closeUserProfile();
                 this.openPrivateChat(user.id, user.username, user.displayName);
@@ -1040,6 +1430,23 @@ class ChatClient {
             this.users[idx] = user;
             this.renderUsersList();
         }
+        // Update current user in localStorage if it's self
+        if (this.currentUser && user.id === this.currentUser.id) {
+            this.currentUser = Object.assign({}, this.currentUser, user);
+            localStorage.setItem('currentUser', JSON.stringify(this.currentUser));
+            this.username = this.currentUser.username;
+            this.displayName = this.currentUser.displayName;
+            const usernameEl = document.getElementById('current-username');
+            if (usernameEl) usernameEl.textContent = this.currentUser.displayName;
+            const lobbyUsernameEl = document.getElementById('lobby-username');
+            if (lobbyUsernameEl) lobbyUsernameEl.textContent = this.currentUser.displayName;
+            // Update my profile modal if open
+            const myProfileModal = document.getElementById('my-profile-modal');
+            if (myProfileModal && myProfileModal.classList.contains('active')) {
+                this._pendingAvatarUrl = this.currentUser.avatarUrl || null;
+                this.populateMyProfile();
+            }
+        }
     }
 
     // ============ Room Permissions ============
@@ -1061,58 +1468,58 @@ class ChatClient {
     }
 
     // ============ Utilities ============
-    
+
     openImageModal(imageUrl) {
         const modal = document.getElementById('image-modal');
         const img = document.getElementById('modal-image');
         img.src = imageUrl;
         modal.classList.add('active');
     }
-    
+
     scrollToBottom() {
         const container = document.getElementById('messages-container');
         container.scrollTop = container.scrollHeight;
     }
-    
+
     showToast(message, type = 'success') {
         const container = document.getElementById('toast-container');
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
         toast.textContent = message;
-        
+
         container.appendChild(toast);
-        
+
         setTimeout(() => {
             toast.style.opacity = '0';
             setTimeout(() => toast.remove(), 300);
         }, 3000);
     }
-    
+
     getAvatar(name) {
-        return name.charAt(0).toUpperCase();
+        return (name || '?').charAt(0).toUpperCase();
     }
-    
+
     formatTime(timestamp) {
         const date = new Date(timestamp);
         const hours = date.getHours().toString().padStart(2, '0');
         const minutes = date.getMinutes().toString().padStart(2, '0');
         return `${hours}:${minutes}`;
     }
-    
+
     formatFileSize(bytes) {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
-    
+
     escapeHtml(text) {
         const div = document.createElement('div');
-        div.textContent = text;
+        div.textContent = String(text);
         return div.innerHTML;
     }
 
     escapeAttr(text) {
-        return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+        return String(text).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     }
 
     escapeRegex(str) {

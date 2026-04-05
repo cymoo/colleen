@@ -18,48 +18,98 @@
 </head>
 <body>
     <div class="noise-overlay"></div>
-    
-    <!-- Login Screen -->
-    <div id="login-screen" class="screen active">
+
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="screen active">
         <div class="login-container">
             <div class="glitch-wrapper">
                 <h1 class="title glitch" data-text="TERMINAL.CHAT">TERMINAL.CHAT</h1>
             </div>
             <div class="subtitle">/// ENTER THE VOID</div>
-            
-            <form id="login-form" class="login-form">
+
+            <div class="auth-tabs">
+                <button class="auth-tab active" data-tab="login">LOGIN</button>
+                <button class="auth-tab" data-tab="register">REGISTER</button>
+            </div>
+
+            <!-- Login Form -->
+            <form id="login-form" class="auth-form active">
                 <div class="input-group">
                     <label class="input-label">&gt; USERNAME</label>
-                    <input type="text" id="username-input" class="terminal-input" placeholder="anonymous" autocomplete="off" required>
+                    <input type="text" id="login-username" class="terminal-input" placeholder="anonymous" autocomplete="off" required>
                 </div>
-                
                 <div class="input-group">
-                    <label class="input-label">&gt; DISPLAY NAME</label>
-                    <input type="text" id="displayname-input" class="terminal-input" placeholder="Guest User" autocomplete="off">
+                    <label class="input-label">&gt; PASSWORD</label>
+                    <input type="password" id="login-password" class="terminal-input" placeholder="••••••••" autocomplete="current-password" required>
                 </div>
-                
-                <div class="input-group">
-                    <label class="input-label">&gt; SELECT ROOM</label>
-                    <select id="room-select" class="terminal-select">
-                        <option value="">Loading rooms...</option>
-                    </select>
-                </div>
-                
                 <button type="submit" class="connect-btn">
-                    <span class="btn-text">CONNECT &gt;&gt;</span>
+                    <span class="btn-text">LOGIN &gt;&gt;</span>
                     <span class="btn-scan"></span>
                 </button>
             </form>
-            
+
+            <!-- Register Form -->
+            <form id="register-form" class="auth-form">
+                <div class="input-group">
+                    <label class="input-label">&gt; USERNAME</label>
+                    <input type="text" id="register-username" class="terminal-input" placeholder="anonymous" autocomplete="off" required>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; DISPLAY NAME</label>
+                    <input type="text" id="register-displayname" class="terminal-input" placeholder="Guest User" autocomplete="off">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; PASSWORD</label>
+                    <input type="password" id="register-password" class="terminal-input" placeholder="••••••••" autocomplete="new-password" required>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; CONFIRM PASSWORD</label>
+                    <input type="password" id="register-confirm" class="terminal-input" placeholder="••••••••" autocomplete="new-password" required>
+                </div>
+                <button type="submit" class="connect-btn">
+                    <span class="btn-text">REGISTER &gt;&gt;</span>
+                    <span class="btn-scan"></span>
+                </button>
+            </form>
+
             <div class="login-footer">
                 <div class="status-bar">
                     <span class="status-indicator"></span>
-                    <span class="status-text">SYSTEM READY</span>
+                    <span class="status-text" id="auth-status-text">SYSTEM READY</span>
                 </div>
             </div>
         </div>
     </div>
-    
+
+    <!-- Lobby Screen -->
+    <div id="lobby-screen" class="screen">
+        <div class="lobby-container">
+            <div class="lobby-header">
+                <div class="lobby-title-section">
+                    <div class="lobby-title">SELECT ROOM</div>
+                    <div class="lobby-user-info">
+                        <span class="user-label">LOGGED AS:</span>
+                        <span class="user-name" id="lobby-username">USER</span>
+                    </div>
+                </div>
+                <div class="lobby-actions">
+                    <button id="my-profile-lobby-btn" class="icon-btn lobby-action-btn" title="My Profile">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        MY PROFILE
+                    </button>
+                    <button id="create-room-btn" class="icon-btn lobby-action-btn" title="Create Room">+ NEW ROOM</button>
+                    <button id="lobby-logout-btn" class="icon-btn lobby-action-btn" title="Logout">LOGOUT</button>
+                </div>
+            </div>
+            <div class="lobby-rooms-grid" id="lobby-rooms-grid">
+                <!-- Rooms inserted here -->
+            </div>
+        </div>
+    </div>
+
     <!-- Chat Screen -->
     <div id="chat-screen" class="screen">
         <div class="chat-layout">
@@ -79,19 +129,25 @@
                             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                         </svg>
                     </button>
+                    <button id="my-profile-chat-btn" class="icon-btn" title="My Profile">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                    </button>
                     <div class="user-info">
                         <span class="user-label">LOGGED AS:</span>
                         <span class="user-name" id="current-username">USER</span>
                     </div>
-                    <button id="disconnect-btn" class="icon-btn">
+                    <button id="disconnect-btn" class="icon-btn" title="Back to Lobby">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="18" y1="6" x2="6" y2="18"></line>
-                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                            <line x1="19" y1="12" x2="5" y2="12"></line>
+                            <polyline points="12 19 5 12 12 5"></polyline>
                         </svg>
                     </button>
                 </div>
             </div>
-            
+
             <!-- Search Bar (hidden by default) -->
             <div id="search-bar" class="search-bar" style="display: none;">
                 <div class="search-input-wrapper">
@@ -102,36 +158,29 @@
                     <input type="text" id="search-input" class="search-input" placeholder="Search messages..." autocomplete="off">
                     <button id="search-close-btn" class="search-close-btn">&times;</button>
                 </div>
-                <div id="search-results" class="search-results" style="display: none;">
-                    <!-- Search results inserted here -->
-                </div>
+                <div id="search-results" class="search-results" style="display: none;"></div>
             </div>
 
             <!-- Main Content -->
             <div class="chat-content">
                 <!-- Messages Area -->
                 <div class="messages-panel">
-                    <!-- History loading indicator -->
                     <div id="history-loader" class="history-loader" style="display: none;">
                         <span class="loader-text">Loading history...</span>
                     </div>
-                    <div class="messages-container" id="messages-container">
-                        <!-- Messages will be inserted here -->
-                    </div>
+                    <div class="messages-container" id="messages-container"></div>
                 </div>
-                
+
                 <!-- Users Sidebar -->
                 <div class="users-sidebar">
                     <div class="sidebar-header">
                         <div class="sidebar-title">USERS ONLINE</div>
                         <div class="sidebar-count" id="users-count">0</div>
                     </div>
-                    <div class="users-list" id="users-list">
-                        <!-- Users will be inserted here -->
-                    </div>
+                    <div class="users-list" id="users-list"></div>
                 </div>
             </div>
-            
+
             <!-- Reply/Edit indicator -->
             <div id="input-indicator" class="input-indicator" style="display: none;">
                 <span id="indicator-text"></span>
@@ -139,9 +188,7 @@
             </div>
 
             <!-- Mention autocomplete -->
-            <div id="mention-dropdown" class="mention-dropdown" style="display: none;">
-                <!-- Mention suggestions inserted here -->
-            </div>
+            <div id="mention-dropdown" class="mention-dropdown" style="display: none;"></div>
 
             <!-- Input Area -->
             <div class="input-panel">
@@ -156,7 +203,7 @@
                             </svg>
                         </label>
                         <input type="file" id="image-upload" accept="image/*" style="display: none">
-                        
+
                         <label for="file-upload" class="icon-btn" title="Upload File">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
@@ -164,7 +211,7 @@
                             </svg>
                         </label>
                         <input type="file" id="file-upload" style="display: none">
-                        
+
                         <button id="send-btn" class="icon-btn send-btn">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -174,12 +221,12 @@
                     </div>
                 </div>
                 <div class="input-hint">
-                    Press <kbd>Enter</kbd> to send • <kbd>Shift+Enter</kbd> for new line • Supports **Markdown** and `code` • Use @username to mention
+                    Press <kbd>Enter</kbd> to send &bull; <kbd>Shift+Enter</kbd> for new line &bull; Supports **Markdown** and `code` &bull; Use @username to mention
                 </div>
             </div>
         </div>
     </div>
-    
+
     <!-- Image Modal -->
     <div id="image-modal" class="modal">
         <div class="modal-backdrop"></div>
@@ -193,7 +240,7 @@
             <img id="modal-image" src="" alt="Full size">
         </div>
     </div>
-    
+
     <!-- Private Chat Modal -->
     <div id="private-chat-modal" class="modal">
         <div class="modal-backdrop" id="private-chat-backdrop"></div>
@@ -207,9 +254,7 @@
                     </svg>
                 </button>
             </div>
-            <div class="private-chat-messages" id="private-chat-messages">
-                <!-- Private messages inserted here -->
-            </div>
+            <div class="private-chat-messages" id="private-chat-messages"></div>
             <div class="private-chat-input">
                 <input type="text" id="private-message-input" class="message-input" placeholder="Type a private message..." autocomplete="off">
                 <button class="icon-btn send-btn" id="private-send-btn">
@@ -222,7 +267,7 @@
         </div>
     </div>
 
-    <!-- User Profile Modal -->
+    <!-- User Profile Modal (other users) -->
     <div id="user-profile-modal" class="modal">
         <div class="modal-backdrop" id="user-profile-backdrop"></div>
         <div class="user-profile-panel">
@@ -234,15 +279,131 @@
                     </svg>
                 </button>
             </div>
-            <div id="user-profile-content" class="profile-content">
-                <!-- Profile content inserted here -->
+            <div id="user-profile-content" class="profile-content"></div>
+        </div>
+    </div>
+
+    <!-- My Profile Modal -->
+    <div id="my-profile-modal" class="modal">
+        <div class="modal-backdrop" id="my-profile-backdrop"></div>
+        <div class="my-profile-panel">
+            <div class="panel-header">
+                <span class="panel-title">MY PROFILE</span>
+                <button class="modal-close panel-close-btn" id="my-profile-close-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="my-profile-content">
+                <div class="my-profile-avatar-section">
+                    <div class="profile-avatar-large" id="my-profile-avatar" title="Click to change avatar"></div>
+                    <input type="file" id="avatar-upload" accept="image/*" style="display: none">
+                    <div class="my-profile-avatar-hint">&gt; CLICK AVATAR TO UPLOAD</div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; DISPLAY NAME</label>
+                    <input type="text" id="my-profile-displayname" class="terminal-input" placeholder="Display Name">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; STATUS</label>
+                    <input type="text" id="my-profile-status" class="terminal-input" placeholder="What's on your mind?">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; BIO</label>
+                    <textarea id="my-profile-bio" class="terminal-input terminal-textarea" placeholder="Tell us about yourself..." rows="3"></textarea>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; USERNAME (read-only)</label>
+                    <input type="text" id="my-profile-username" class="terminal-input" disabled>
+                </div>
+                <button id="my-profile-save-btn" class="connect-btn" style="margin-top: 0;">
+                    <span class="btn-text">SAVE PROFILE &gt;&gt;</span>
+                    <span class="btn-scan"></span>
+                </button>
             </div>
         </div>
     </div>
-    
+
+    <!-- Create Room Modal -->
+    <div id="create-room-modal" class="modal">
+        <div class="modal-backdrop" id="create-room-backdrop"></div>
+        <div class="create-room-panel">
+            <div class="panel-header">
+                <span class="panel-title">NEW ROOM</span>
+                <button class="modal-close panel-close-btn" id="create-room-close-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="create-room-content">
+                <div class="input-group">
+                    <label class="input-label">&gt; ROOM NAME</label>
+                    <input type="text" id="create-room-name" class="terminal-input" placeholder="my-awesome-room" required>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; DESCRIPTION (optional)</label>
+                    <input type="text" id="create-room-desc" class="terminal-input" placeholder="What is this room about?">
+                </div>
+                <div class="input-group">
+                    <label class="input-label">&gt; VISIBILITY</label>
+                    <div class="radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="room-visibility" value="public" checked> PUBLIC
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="room-visibility" value="private"> PRIVATE
+                        </label>
+                    </div>
+                </div>
+                <div class="input-group" id="room-password-group" style="display: none;">
+                    <label class="input-label">&gt; ROOM PASSWORD</label>
+                    <input type="password" id="create-room-password" class="terminal-input" placeholder="Room password">
+                </div>
+                <button id="create-room-submit-btn" class="connect-btn" style="margin-top: 0;">
+                    <span class="btn-text">CREATE ROOM &gt;&gt;</span>
+                    <span class="btn-scan"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Room Password Dialog -->
+    <div id="room-password-modal" class="modal">
+        <div class="modal-backdrop" id="room-password-backdrop"></div>
+        <div class="room-password-panel">
+            <div class="panel-header">
+                <span class="panel-title" id="room-password-title">PRIVATE ROOM</span>
+                <button class="modal-close panel-close-btn" id="room-password-close-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="room-password-content">
+                <p class="room-password-info">This room requires a password to join.</p>
+                <div class="input-group">
+                    <label class="input-label">&gt; PASSWORD</label>
+                    <input type="password" id="room-password-input" class="terminal-input" placeholder="Enter room password" autocomplete="off">
+                </div>
+                <div class="room-password-actions">
+                    <button id="room-password-cancel-btn" class="icon-btn">CANCEL</button>
+                    <button id="room-password-join-btn" class="connect-btn" style="flex: 1; margin-top: 0;">
+                        <span class="btn-text">JOIN &gt;&gt;</span>
+                        <span class="btn-scan"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
-    
+
     <script src="/static/js/chat.js"></script>
 </body>
 </html>

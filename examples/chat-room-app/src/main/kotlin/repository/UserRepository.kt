@@ -7,26 +7,34 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
+/** Internal record that includes sensitive auth fields not exposed in the User model. */
+data class AuthUser(val user: User, val passwordHash: String?)
+
 class UserRepository(private val dsl: DSLContext) {
 
-    fun findByUsername(username: String): User? {
+    fun findByUsername(username: String): User? = findByUsernameForAuth(username)?.user
+
+    fun findByUsernameForAuth(username: String): AuthUser? {
         return dsl.select(
             USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL,
-            USERS.CREATED_AT, USERS.LAST_SEEN, USERS.BIO, USERS.STATUS
+            USERS.CREATED_AT, USERS.LAST_SEEN, USERS.BIO, USERS.STATUS, USERS.PASSWORD_HASH
         )
             .from(USERS)
             .where(USERS.USERNAME.eq(username))
             .fetchOne()
             ?.let { record ->
-                User(
-                    id = record.get(USERS.ID)!!,
-                    username = record.get(USERS.USERNAME)!!,
-                    displayName = record.get(USERS.DISPLAY_NAME)!!,
-                    avatarUrl = record.get(USERS.AVATAR_URL),
-                    bio = record.get(USERS.BIO),
-                    status = record.get(USERS.STATUS),
-                    createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
-                    lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
+                AuthUser(
+                    user = User(
+                        id = record.get(USERS.ID)!!,
+                        username = record.get(USERS.USERNAME)!!,
+                        displayName = record.get(USERS.DISPLAY_NAME)!!,
+                        avatarUrl = record.get(USERS.AVATAR_URL),
+                        bio = record.get(USERS.BIO),
+                        status = record.get(USERS.STATUS),
+                        createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
+                        lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
+                    ),
+                    passwordHash = record.get(USERS.PASSWORD_HASH)
                 )
             }
     }
@@ -53,11 +61,11 @@ class UserRepository(private val dsl: DSLContext) {
             }
     }
 
-    fun createUser(username: String, displayName: String, avatarUrl: String? = null): User {
+    fun createUser(username: String, displayName: String, passwordHash: String? = null): User {
         val record = dsl.insertInto(USERS)
             .set(USERS.USERNAME, username)
             .set(USERS.DISPLAY_NAME, displayName)
-            .set(USERS.AVATAR_URL, avatarUrl)
+            .set(USERS.PASSWORD_HASH, passwordHash)
             .returningResult(USERS.ID, USERS.USERNAME, USERS.DISPLAY_NAME, USERS.AVATAR_URL, USERS.CREATED_AT, USERS.LAST_SEEN)
             .fetchOne()!!
 
@@ -69,6 +77,13 @@ class UserRepository(private val dsl: DSLContext) {
             createdAt = parseTimestamp(record.get(USERS.CREATED_AT)),
             lastSeen = parseTimestamp(record.get(USERS.LAST_SEEN))
         )
+    }
+
+    fun setPasswordHash(userId: Int, passwordHash: String) {
+        dsl.update(USERS)
+            .set(USERS.PASSWORD_HASH, passwordHash)
+            .where(USERS.ID.eq(userId))
+            .execute()
     }
 
     fun updateLastSeen(userId: Int) {

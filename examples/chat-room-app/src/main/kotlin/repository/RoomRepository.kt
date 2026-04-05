@@ -31,20 +31,27 @@ class RoomRepository(private val dsl: DSLContext) {
             ?.toModel()
     }
 
-    fun create(name: String, description: String?): Room {
-        val record = dsl.insertInto(ROOMS)
+    fun create(name: String, description: String?, isPrivate: Boolean = false, passwordHash: String? = null, creatorId: Int? = null): Room {
+        val id = dsl.insertInto(ROOMS)
             .set(ROOMS.NAME, name)
             .set(ROOMS.DESCRIPTION, description)
-            .returningResult(ROOMS.fields().toList())
+            .set(ROOMS.IS_PRIVATE, if (isPrivate) 1 else 0)
+            .set(ROOMS.PASSWORD_HASH, passwordHash)
+            .set(ROOMS.CREATOR_ID, creatorId)
+            .returning(ROOMS.ID)
             .fetchOne()!!
+            .get(ROOMS.ID)!!
 
-        return Room(
-            id = record.get(ROOMS.ID)!!,
-            name = record.get(ROOMS.NAME)!!,
-            description = record.get(ROOMS.DESCRIPTION),
-            createdAt = parseTimestamp(record.get(ROOMS.CREATED_AT)),
-            maxUsers = record.get(ROOMS.MAX_USERS) ?: 100
-        )
+        return findById(id)!!
+    }
+
+    /** Returns the stored password hash for a private room, null if room is public or has no password. */
+    fun getPasswordHash(roomId: Int): String? {
+        return dsl.select(ROOMS.PASSWORD_HASH)
+            .from(ROOMS)
+            .where(ROOMS.ID.eq(roomId))
+            .fetchOne()
+            ?.get(ROOMS.PASSWORD_HASH)
     }
 
     fun getOnlineUserCount(roomId: Int): Int {
@@ -59,6 +66,8 @@ class RoomRepository(private val dsl: DSLContext) {
             id = this.id!!,
             name = this.name!!,
             description = this.description,
+            isPrivate = (this.isPrivate ?: 0) != 0,
+            creatorId = this.creatorId,
             createdAt = parseTimestamp(this.createdAt),
             maxUsers = this.maxUsers ?: 100
         )

@@ -2,6 +2,7 @@ import com.fasterxml.jackson.databind.SerializationFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import config.DatabaseConfig
 import controller.ApiController
+import controller.AuthController
 import controller.ChatController
 import controller.FileController
 import io.github.cymoo.colleen.Colleen
@@ -13,6 +14,7 @@ import org.slf4j.LoggerFactory
 import service.ChatService
 import service.FileService
 import service.RoomService
+import service.SessionService
 import service.UserService
 
 val logger: Logger = LoggerFactory.getLogger("App")
@@ -52,6 +54,7 @@ fun main() {
     val roomService = RoomService(dsl)
     val chatService = ChatService(dsl, objectMapper)
     val fileService = FileService("uploads")
+    val sessionService = SessionService()
 
     // Middleware
     app.use(RequestLogger())
@@ -59,9 +62,10 @@ fun main() {
     app.use(ServeStatic("classpath:static"))
 
     // Controllers
-    app.addController(ApiController(roomService, fileService, userService))
+    app.addController(AuthController(userService, sessionService))
+    app.addController(ApiController(roomService, fileService, userService, sessionService))
     app.addController(FileController(fileService))
-    app.addController(ChatController(userService, chatService, roomService, objectMapper))
+    app.addController(ChatController(userService, chatService, roomService, sessionService, objectMapper))
 
     app.get("/") { ctx ->
         ctx.sendFile("static/index.html", classpathOnly = true)

@@ -271,10 +271,10 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
         }
     }
 
-    // User profiles
-    fun updateUserProfile(user: User, displayName: String?, avatarUrl: String?, bio: String?, status: String?) {
+    // User profiles — returns the refreshed user
+    fun updateUserProfile(user: User, displayName: String?, avatarUrl: String?, bio: String?, status: String?): User {
         userRepo.updateProfile(user.id, displayName, avatarUrl, bio, status)
-        val updatedUser = userRepo.findById(user.id) ?: return
+        val updatedUser = userRepo.findById(user.id) ?: return user
 
         // Broadcast to all rooms the user is in
         for ((roomId, connections) in roomConnections) {
@@ -282,6 +282,7 @@ class ChatService(dsl: DSLContext, private val objectMapper: ObjectMapper) {
                 broadcastToRoom(roomId, WsEvent.UserUpdated(updatedUser))
             }
         }
+        return updatedUser
     }
 
     private fun parseMentions(content: String, roomId: Int, messageId: Int, mentionedBy: String) {
