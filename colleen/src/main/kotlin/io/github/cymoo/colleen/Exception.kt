@@ -108,6 +108,11 @@ class Gone(
     cause: Throwable? = null
 ) : HttpException(410, message, cause)
 
+class PayloadTooLarge(
+    message: String = "Payload Too Large",
+    cause: Throwable? = null
+) : HttpException(413, message, cause)
+
 class UnsupportedMediaType(
     message: String = "Unsupported Media Type",
     cause: Throwable? = null

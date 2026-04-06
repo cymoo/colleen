@@ -104,20 +104,11 @@ internal object UndertowRequestAdapter {
      */
     private fun parseMultipart(exchange: HttpServerExchange, config: ServerConfig): List<Part> {
         val parser = getFormParserFactory(config).createParser(exchange) ?: error("Request is not multipart")
-        val formData: FormData
 
-        try {
-            formData = parser.parseBlocking()
-        } catch (err: IOException) {
-            if (err.message?.contains("UT000036") == true) {
-                throw IllegalStateException(
-                    "Failed to parse multipart body. " +
-                            "The request body may have been consumed earlier " +
-                            "(e.g. reading raw InputStream before parsing multipart).",
-                    err
-                )
-            }
-            throw err
+        val formData: FormData = try {
+            parser.parseBlocking()
+        } catch (err: Throwable) {
+            throw mapMultipartException(err, config)
         }
 
         val parts = mutableListOf<Part>()
@@ -141,6 +132,80 @@ internal object UndertowRequestAdapter {
         }
 
         return parts
+    }
+
+    private fun mapMultipartException(err: Throwable, config: ServerConfig): HttpException {
+        val msg = err.message ?: ""
+        val className = err.javaClass.name
+
+        return when {
+            // ----------------------------------------------------------------
+            // File too large (single part exceeds maxFileSize)
+            // Undertow: UT000054
+            // ----------------------------------------------------------------
+            className.contains("FileTooLargeException") ||
+                    msg.contains("UT000054") -> {
+                PayloadTooLarge(
+                    message = "Uploaded file exceeds the maximum allowed size (${config.maxFileSize} bytes).",
+                    cause = err,
+                )
+            }
+
+            // ----------------------------------------------------------------
+            // Request entity too large (entire request exceeds maxRequestSize)
+            // Undertow: UT000020
+            // ----------------------------------------------------------------
+            msg.contains("UT000020") ||
+                    msg.contains("Request entity too large", ignoreCase = true) -> {
+                PayloadTooLarge(
+                    message = "Request size exceeds the maximum allowed size (${config.maxRequestSize} bytes).",
+                    cause = err,
+                )
+            }
+
+            // ----------------------------------------------------------------
+            // Request body already consumed before multipart parsing
+            // Undertow: UT000036
+            // Common developer mistake: reading InputStream before parsing multipart
+            // ----------------------------------------------------------------
+            msg.contains("UT000036") -> {
+                ServerError(
+                    message = "Request body has already been consumed before multipart parsing.",
+                    cause = err
+                )
+            }
+
+            // ----------------------------------------------------------------
+            // Invalid or non-multipart request
+            // ----------------------------------------------------------------
+            msg.contains("not a multipart", ignoreCase = true) -> {
+                UnsupportedMediaType(
+                    message = "Content-Type must be multipart/form-data.",
+                    cause = err
+                )
+            }
+
+            // ----------------------------------------------------------------
+            // I/O level failure (connection reset, malformed stream, etc.)
+            // Treat as bad request since input is not usable
+            // ----------------------------------------------------------------
+            err is IOException -> {
+                BadRequest(
+                    message = "Malformed multipart request or I/O error during parsing.",
+                    cause = err
+                )
+            }
+
+            // ----------------------------------------------------------------
+            // Fallback: unexpected error
+            // ----------------------------------------------------------------
+            else -> {
+                ServerError(
+                    message = "Failed to parse multipart request.",
+                    cause = err
+                )
+            }
+        }
     }
 
     /**

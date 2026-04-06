@@ -25,6 +25,7 @@ object HttpStatus {
         406 to "Not Acceptable",
         409 to "Conflict",
         410 to "Gone",
+        413 to "Payload Too Large",
         415 to "Unsupported Media Type",
         422 to "Unprocessable Entity",
         429 to "Too Many Requests",
