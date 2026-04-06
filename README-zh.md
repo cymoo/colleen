@@ -58,14 +58,14 @@ Colleen 是一个轻量级、类型安全的 Kotlin / Java Web 框架。
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.4.5</version>
+    <version>0.4.6</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.4.5")
+implementation("io.github.cymoo:colleen:0.4.6")
 ```
 
 ### Hello World
