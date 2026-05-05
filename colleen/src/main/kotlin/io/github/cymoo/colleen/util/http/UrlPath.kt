@@ -36,8 +36,29 @@ object UrlPath {
      */
     fun split(rawPath: String): List<String> {
         val normalized = normalize(rawPath)
-        return if (normalized == "/") emptyList()
-        else normalized.drop(1).split('/')
+        return splitNormalized(normalized)
+    }
+
+    /**
+     * Returns path segments for an already-normalized path.
+     *
+     * Unlike [split], this does not percent-decode again. Use this after
+     * request ingress or route registration has already called [normalize].
+     */
+    fun splitNormalized(normalizedPath: String): List<String> {
+        if (normalizedPath.isEmpty() || normalizedPath == "/") return emptyList()
+
+        require(normalizedPath.startsWith("/")) {
+            "Path must be absolute: $normalizedPath"
+        }
+
+        val segments = normalizedPath.drop(1).split('/').filter { it.isNotEmpty() }
+
+        require(segments.none { it == "." || it == ".." }) {
+            "Invalid path segment in: $normalizedPath"
+        }
+
+        return segments
     }
 
     /**
@@ -61,4 +82,3 @@ object UrlPath {
         }
     }
 }
-

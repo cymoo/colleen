@@ -1,5 +1,6 @@
 package io.github.cymoo.colleen.ws
 
+import io.github.cymoo.colleen.PathSegment
 import io.github.cymoo.colleen.util.http.UrlPath
 import java.util.function.Consumer
 
@@ -32,11 +33,19 @@ fun interface WsHandler {
 class WsRouteNode private constructor(
     val path: String,
     val handler: Consumer<WsConnection>,
+    internal val segments: List<PathSegment>,
+    internal val priority: Long,
 ) {
     companion object {
         fun of(path: String, handler: Consumer<WsConnection>): WsRouteNode {
             val normalizedPath = UrlPath.normalize(path)
-            return WsRouteNode(path = normalizedPath, handler = handler)
+            val segments = PathSegment.parseAll(normalizedPath)
+            return WsRouteNode(
+                path = normalizedPath,
+                handler = handler,
+                segments = segments,
+                priority = PathSegment.priority(segments)
+            )
         }
     }
 

@@ -73,7 +73,7 @@ internal sealed class PathSegment {
         fun parseAll(path: String): List<PathSegment> {
             if (path == "/" || path.isEmpty()) return emptyList()
 
-            val segments = UrlPath.split(path).map { parse(it) }
+            val segments = UrlPath.splitNormalized(path).map { parse(it) }
 
             require(segments.size <= 31) { "Too many path segments" }
 
@@ -360,17 +360,23 @@ internal object PathMatcher {
         pathPattern: String,
         exactMatch: Boolean
     ): MatchResult {
+        return match(requestPath, PathSegment.parseAll(pathPattern), exactMatch)
+    }
+
+    fun match(
+        requestPath: String,
+        patternSegments: List<PathSegment>,
+        exactMatch: Boolean
+    ): MatchResult {
         // Fast-fail protections
         if (requestPath.length > MAX_PATH_LENGTH) {
             return MatchResult.NO_MATCH
         }
 
-        val requestSegments = UrlPath.split(requestPath)
+        val requestSegments = UrlPath.splitNormalized(requestPath)
         if (requestSegments.size > MAX_PATH_SEGMENTS) {
             return MatchResult.NO_MATCH
         }
-
-        val patternSegments = PathSegment.parseAll(pathPattern)
 
         // Empty pattern handling
         if (patternSegments.isEmpty()) {
@@ -447,7 +453,7 @@ internal object PathMatcher {
 
     /**
      * Matches a complex segment against a value.
-     * Uses greedy matching: each parameter captures until the next static delimiter.
+     * Each parameter captures until the first occurrence of the next static delimiter.
      *
      * Example: pattern "{name}-{version}.txt" matching "foo-1.2.3.txt"
      * - name = "foo"
@@ -479,7 +485,7 @@ internal object PathMatcher {
                     // Determine how much to capture for this parameter
                     val paramValue = when (val nextPart = segment.parts.getOrNull(index + 1)) {
                         is PathSegment.Complex.Part.Text -> {
-                            // Find next static text as delimiter (greedy match)
+                            // Find the first next static text occurrence as delimiter.
                             val delimiterIndex = value.indexOf(nextPart.value, pos)
                             if (delimiterIndex == -1) return null
                             value.substring(pos, delimiterIndex)
@@ -587,6 +593,7 @@ class RouteNode private constructor(
     val method: String,
     val path: String,
     val handler: RouteHandler,
+    private val segments: List<PathSegment>,
 ) {
     companion object {
         private val VALID_HTTP_METHODS = setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
@@ -594,8 +601,14 @@ class RouteNode private constructor(
         fun of(method: String, path: String, handler: RouteHandler): RouteNode {
             val normalizedMethod = normalizeMethod(method)
             val normalizedPath = UrlPath.normalize(path)
+            val segments = PathSegment.parseAll(normalizedPath)
 
-            return RouteNode(method = normalizedMethod, path = normalizedPath, handler = handler)
+            return RouteNode(
+                method = normalizedMethod,
+                path = normalizedPath,
+                handler = handler,
+                segments = segments
+            )
         }
 
         internal fun normalizeMethod(rawMethod: String): String {
@@ -612,16 +625,13 @@ class RouteNode private constructor(
     }
 
     // Routing priority (higher = more specific)
-    internal val priority: Long = run {
-        val segments = PathSegment.parseAll(path)
-        PathSegment.priority(segments)
-    }
+    internal val priority: Long = PathSegment.priority(segments)
 
     /**
      * Matches request path (exact match).
      */
     internal fun matchesPath(requestPath: String): MatchResult {
-        return PathMatcher.match(requestPath, path, exactMatch = true)
+        return PathMatcher.match(requestPath, segments, exactMatch = true)
     }
 
     /**
@@ -669,15 +679,21 @@ sealed class MiddlewareNode {
     class Prefix private constructor(
         val prefix: String,
         override val middleware: Middleware,
+        private val segments: List<PathSegment>,
     ) : MiddlewareNode() {
         companion object {
             fun of(prefix: String, middleware: Middleware): Prefix {
-                return Prefix(UrlPath.normalize(prefix), middleware)
+                val normalizedPrefix = UrlPath.normalize(prefix)
+                return Prefix(
+                    normalizedPrefix,
+                    middleware,
+                    PathSegment.parseAll(normalizedPrefix)
+                )
             }
         }
 
         override fun match(ctx: Context): MatchResult {
-            return PathMatcher.match(ctx.path, prefix, exactMatch = false)
+            return PathMatcher.match(ctx.path, segments, exactMatch = false)
         }
     }
 
@@ -688,18 +704,24 @@ sealed class MiddlewareNode {
         val method: String,
         val path: String,
         override val middleware: Middleware,
+        private val segments: List<PathSegment>,
     ) : MiddlewareNode() {
         companion object {
             fun of(method: String, path: String, middleware: Middleware): PerRoute {
                 val normalizedMethod = RouteNode.normalizeMethod(method)
                 val normalizedPath = UrlPath.normalize(path)
-                return PerRoute(normalizedMethod, normalizedPath, middleware)
+                return PerRoute(
+                    normalizedMethod,
+                    normalizedPath,
+                    middleware,
+                    PathSegment.parseAll(normalizedPath)
+                )
             }
         }
 
         override fun match(ctx: Context): MatchResult {
-            return if (method == ctx.method) {
-                PathMatcher.match(ctx.path, path, exactMatch = true)
+            return if (method == "*" || method == ctx.method) {
+                PathMatcher.match(ctx.path, segments, exactMatch = true)
             } else {
                 MatchResult.NO_MATCH
             }
@@ -732,9 +754,9 @@ sealed class MiddlewareNode {
 class MountNode private constructor(
     val prefix: String,
     val app: Colleen,
+    private val segments: List<PathSegment>,
 ) {
     init {
-        val segments = PathSegment.parseAll(prefix)
         require(segments.all { it is PathSegment.Static }) {
             "Mount path cannot contain parameters"
         }
@@ -742,7 +764,12 @@ class MountNode private constructor(
 
     companion object {
         fun of(prefix: String, app: Colleen): MountNode {
-            return MountNode(UrlPath.normalize(prefix), app)
+            val normalizedPrefix = UrlPath.normalize(prefix)
+            return MountNode(
+                normalizedPrefix,
+                app,
+                PathSegment.parseAll(normalizedPrefix)
+            )
         }
     }
 
@@ -750,7 +777,7 @@ class MountNode private constructor(
      * Matches request path by prefix.
      */
     internal fun match(ctx: Context): MatchResult {
-        return PathMatcher.match(ctx.path, prefix, exactMatch = false)
+        return PathMatcher.match(ctx.path, segments, exactMatch = false)
     }
 }
 
@@ -772,6 +799,12 @@ internal class Router {
 
     /** WebSocket-specific middlewares (run during WS handshake only). */
     internal val wsMiddlewares = CopyOnWriteArrayList<MiddlewareNode>()
+
+    private data class IndexedMountMatch(
+        val index: Int,
+        val mount: MountNode,
+        val matchResult: MatchResult,
+    )
 
     // ========================================================================
     // Registration
@@ -916,7 +949,8 @@ internal class Router {
         if (matchedMounts.isNotEmpty()) {
             executeMiddlewareChain(ctx, matchedMiddlewares) {
                 var notFound = false
-                var methodNotAllowed = false
+                val allowedMethods = findAllowedMethods(ctx.path).toMutableSet()
+                var methodNotAllowed = allowedMethods.isNotEmpty()
                 for ((mount, matchResult) in matchedMounts) {
                     try {
                         val subCtx = executeMount(ctx, mount, matchResult)
@@ -931,18 +965,18 @@ internal class Router {
                         break
                     } catch (_: NotFound) {
                         notFound = true
-                        methodNotAllowed = false
                         // This sub-app returned 404, try next mount
                         continue
-                    } catch (_: MethodNotAllowed) {
+                    } catch (e: MethodNotAllowed) {
                         notFound = false
                         methodNotAllowed = true
+                        allowedMethods.addAll(e.allowedMethods)
                         // This sub-app returned 405, try next mount
                         continue
                     }
                 }
                 if (methodNotAllowed) {
-                    throw RouteMethodNotAllowed(ctx.fullPath, ctx.method)
+                    throw RouteMethodNotAllowed(ctx.fullPath, ctx.method, allowedMethods)
                 }
                 if (notFound) {
                     throw RouteNotFound(ctx.fullPath, ctx.method)
@@ -999,10 +1033,15 @@ internal class Router {
      */
     private fun findMatchedMounts(ctx: Context): List<Pair<MountNode, MatchResult>> {
         return mounts
-            .mapNotNull { mount ->
+            .mapIndexedNotNull { index, mount ->
                 val result = mount.match(ctx)
-                if (result.matched) mount to result else null
+                if (result.matched) IndexedMountMatch(index, mount, result) else null
             }
+            .sortedWith(
+                compareByDescending<IndexedMountMatch> { it.matchResult.consumedSegments }
+                    .thenBy { it.index }
+            )
+            .map { it.mount to it.matchResult }
     }
 
     /**
@@ -1108,10 +1147,10 @@ internal class Router {
         var bestPriority = Long.MIN_VALUE
 
         for (wsRoute in wsRoutes) {
-            val matchResult = PathMatcher.match(ctx.path, wsRoute.path, exactMatch = true)
+            val matchResult = PathMatcher.match(ctx.path, wsRoute.segments, exactMatch = true)
             if (!matchResult.matched) continue
 
-            val priority = PathSegment.priority(PathSegment.parseAll(wsRoute.path))
+            val priority = wsRoute.priority
             if (best == null || priority > bestPriority) {
                 best = wsRoute to matchResult
                 bestPriority = priority
@@ -1229,7 +1268,7 @@ internal class Router {
      */
     private fun executeMount(ctx: Context, mount: MountNode, matchResult: MatchResult): Context {
         // Calculate sub-path by removing mount prefix
-        val pathSegments = UrlPath.split(ctx.path)
+        val pathSegments = UrlPath.splitNormalized(ctx.path)
         val subSegments = pathSegments.drop(matchResult.consumedSegments)
         val subPath = if (subSegments.isEmpty()) "/" else "/${subSegments.joinToString("/")}"
 

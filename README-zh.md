@@ -216,6 +216,10 @@ app.get("/files/{path...}") { ctx -> ctx.pathParam("path") }
 app.get("/images/{name}.{ext}") { ctx -> "${ctx.pathParam("name")}.${ctx.pathParam("ext")}" }
 ```
 
+在复合路径段中，参数会捕获到下一个静态分隔符首次出现的位置。例如
+`/files/{name}-{version}.txt` 匹配 `/files/foo-bar-1.txt` 时，
+`name = "foo"`，`version = "bar-1"`。
+
 路由匹配优先级是确定的：静态段、复合段、参数段、通配符段。
 
 ### Controller 风格路由
