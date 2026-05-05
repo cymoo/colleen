@@ -36,7 +36,6 @@
         <module>auto-reload</module>
         <module>middleware-showcase</module>
         <module>websocket</module>
-        <module>chat-room-app</module>
     </modules>
 
     <properties>
