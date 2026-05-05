@@ -26,7 +26,7 @@ A feature-rich, real-time chat room application built with the Colleen framework
 
 ## Technology Stack
 
-- **Framework**: Colleen 0.4.3
+- **Framework**: Colleen 0.4.6
 - **Language**: Kotlin
 - **Database**: SQLite
 - **Migrations**: Flyway
