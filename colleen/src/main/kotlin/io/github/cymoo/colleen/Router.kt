@@ -1046,13 +1046,14 @@ internal class Router {
 
     /**
      * Finds allowed HTTP methods for a given path (for 405 handling).
+     * If a wildcard ("*") route matches, all standard methods are allowed.
      */
     private fun findAllowedMethods(path: String): Set<String> {
-        return routes
-            .filter { it.matchesPath(path).matched }
-            .map { it.method }
-            .filter { it != "*" }
-            .toSet()
+        val matched = routes.filter { it.matchesPath(path).matched }
+        if (matched.any { it.method == "*" }) {
+            return setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+        }
+        return matched.map { it.method }.toSet()
     }
 
     // ========================================================================
