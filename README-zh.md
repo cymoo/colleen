@@ -62,14 +62,14 @@ app.post("/todos", ::createTodo)
 <dependency>
     <groupId>io.github.cymoo</groupId>
     <artifactId>colleen</artifactId>
-    <version>0.4.6</version>
+    <version>0.4.7</version>
 </dependency>
 ```
 
 **Gradle (Kotlin DSL)**
 
 ```kotlin
-implementation("io.github.cymoo:colleen:0.4.6")
+implementation("io.github.cymoo:colleen:0.4.7")
 ```
 
 ### Hello World
