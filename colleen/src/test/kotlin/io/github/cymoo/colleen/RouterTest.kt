@@ -1,6 +1,7 @@
 package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.util.http.Headers
+import io.github.cymoo.colleen.util.http.UrlPath
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
@@ -172,6 +173,31 @@ class RouterTest {
             router.handleRequest(ctx)
 
             assertEquals("", capturedPath)
+        }
+
+        @Test
+        fun `should not decode normalized path twice`() {
+            router.addRoute("GET", "/files/{name}") { ctx ->
+                ctx.pathParam("name")
+            }
+
+            val ctx = createTestContext("GET", UrlPath.normalize("/files/a%252Fb"))
+            router.handleRequest(ctx)
+
+            assertEquals("a%2Fb", ctx.pathParams["name"])
+        }
+
+        @Test
+        fun `complex segment should split at first delimiter`() {
+            router.addRoute("GET", "/files/{name}-{version}.txt") { ctx ->
+                "${ctx.pathParam("name")}:${ctx.pathParam("version")}"
+            }
+
+            val ctx = createTestContext("GET", "/files/foo-bar-1.txt")
+            router.handleRequest(ctx)
+
+            assertEquals("foo", ctx.pathParams["name"])
+            assertEquals("bar-1", ctx.pathParams["version"])
         }
     }
 
@@ -840,6 +866,58 @@ class RouterTest {
             app.handleRequest(ctx)
             assertEquals((ctx.response.body as ResponseBody.Text).value, "bar")
         }
+
+        @Test
+        fun `should prefer more specific mount over broader mount`() {
+            val app = Colleen()
+
+            val broadApp = Colleen()
+            broadApp.get("/v1/users") { "broad" }
+
+            val specificApp = Colleen()
+            specificApp.get("/users") { "specific" }
+
+            app.mount("/api", broadApp)
+            app.mount("/api/v1", specificApp)
+
+            val ctx = createTestContext("GET", "/api/v1/users")
+            app.handleRequest(ctx)
+
+            assertEquals("specific", (ctx.response.body as ResponseBody.Text).value)
+        }
+
+        @Test
+        fun `should prefer mounted 405 over later mounted 404`() {
+            val app = Colleen()
+
+            val methodMismatchApp = Colleen()
+            methodMismatchApp.get("/foo") { "foo" }
+
+            val notFoundApp = Colleen()
+            notFoundApp.get("/bar") { "bar" }
+
+            app.mount("/sub", methodMismatchApp)
+            app.mount("/sub", notFoundApp)
+
+            val ctx = createTestContext("POST", "/sub/foo")
+            app.handleRequest(ctx)
+
+            assertEquals(405, ctx.response.status)
+        }
+
+        @Test
+        fun `should include local route method mismatch when matched mount returns 404`() {
+            val app = Colleen()
+            val subApp = Colleen()
+
+            app.get("/api") { "local" }
+            app.mount("/api", subApp)
+
+            val ctx = createTestContext("POST", "/api")
+            app.handleRequest(ctx)
+
+            assertEquals(405, ctx.response.status)
+        }
     }
 }
 
@@ -929,6 +1007,25 @@ class RouteBuilderTest {
         val ctxAll = createTestContext("GET", "/api/all")
         app.handleRequest(ctxAll)
         assertTrue(ctxAll.response.isBodySet)
+    }
+
+    @Test
+    fun `all route middleware should run for every HTTP method`() {
+        val executedFor = mutableListOf<String>()
+
+        app.all("/all")
+            .use { ctx, next ->
+                executedFor.add(ctx.method)
+                next()
+            }
+            .handle { "ALL" }
+
+        listOf("GET", "POST").forEach { method ->
+            val ctx = createTestContext(method, "/all")
+            app.handleRequest(ctx)
+        }
+
+        assertEquals(listOf("GET", "POST"), executedFor)
     }
 }
 

@@ -221,6 +221,10 @@ app.get("/files/{path...}") { ctx -> ctx.pathParam("path") }
 app.get("/images/{name}.{ext}") { ctx -> "${ctx.pathParam("name")}.${ctx.pathParam("ext")}" }
 ```
 
+In complex segments, a parameter captures up to the first occurrence of the next
+static delimiter. For example, `/files/{name}-{version}.txt` matches
+`/files/foo-bar-1.txt` as `name = "foo"` and `version = "bar-1"`.
+
 Route priority is deterministic: static segments, complex segments, parameter segments,
 then wildcard segments.
 
