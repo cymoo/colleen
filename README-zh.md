@@ -222,6 +222,26 @@ app.get("/images/{name}.{ext}") { ctx -> "${ctx.pathParam("name")}.${ctx.pathPar
 
 路由匹配优先级是确定的：静态段、复合段、参数段、通配符段。
 
+### 路由组
+
+路由组会在注册路由时添加统一路径前缀，也可以为一组相关路由附加中间件。
+
+```kotlin
+app.group("/api") {
+    use(ApiKeyMiddleware())
+
+    get("/todos", ::listTodos)          // GET /api/todos
+    post("/todos", ::createTodo)        // POST /api/todos
+
+    group("/admin") {
+        use(AdminOnly())
+        get("/stats") { statsService.snapshot() }  // GET /api/admin/stats
+    }
+}
+```
+
+路由组用于组织路由声明。前缀中间件不同：它注册一次，并在运行时匹配该前缀下的请求。
+
 ### Controller 风格路由
 
 ```kotlin
@@ -293,6 +313,29 @@ app.use { ctx, next ->
     next()
 }
 ```
+
+#### 中间件可以应用在哪里
+
+| 作用域 | API | 执行时机 |
+|---|---|---|
+| 全局 | `app.use(middleware)` | 每个 HTTP 请求 |
+| 前缀 | `app.use("/api", middleware)` | `/api` 下的路径 |
+| 条件 | `app.use({ ctx -> ... }, middleware)` | predicate 返回 `true` 时 |
+| 路由级 | `app.get("/todos").use(middleware).handle { ... }` | 某个 method + path |
+| 路由组 | `app.group("/api") { use(middleware) }` | 组内注册的路由 |
+
+```kotlin
+app.use(RequestLogger())
+app.use("/api", ApiKeyMiddleware())
+app.use({ ctx -> ctx.accepts("json") }, JsonOnlyMiddleware())
+
+app.get("/todos/{id}")
+    .use(AuthMiddleware())
+    .handle(::getTodo)
+```
+
+使用路由组把相关路由放在一起；当同一个中间件需要覆盖多个位置注册的同前缀路径时，
+使用前缀中间件。
 
 ### 依赖注入
 
@@ -383,6 +426,9 @@ app.post("/todos") { ctx ->
 
 ### 子应用
 
+子应用可以把大型服务拆成多个相互隔离的 Colleen app。它适合 API 版本、管理后台、
+内部工具、功能模块或插件式组合。
+
 ```kotlin
 val api = Colleen()
 api.get("/todos", ::listTodos)
@@ -400,7 +446,39 @@ app.mount("/api", api)
 | `ctx.pattern` | `/todos` |
 | `ctx.fullPattern` | `/api/todos` |
 
-每个子应用都有独立的路由、中间件、服务、错误处理器和配置。
+每个子应用都有独立的路由、中间件、服务、错误处理器和配置。部分请求上下文会通过父子链共享。
+
+| 边界 | 行为 |
+|---|---|
+| 路由和中间件 | 每个 app 独立 |
+| 服务 | 先查当前 app，再查父 app |
+| 状态 | 子上下文可以读取父上下文状态 |
+| 错误处理器 | 子应用优先；未处理错误可交给父应用 |
+| 配置 | 每个 app 独立 |
+| 事件 | 执行事件可以向父应用冒泡 |
+
+```kotlin
+val root = Colleen()
+root.provide(Database())
+
+val admin = Colleen()
+admin.use(AdminOnly())
+admin.get("/stats") { ctx ->
+    ctx.getService<Database>().stats()
+}
+
+root.mount("/admin", admin)
+```
+
+默认情况下，子应用中未处理的异常可以向父应用传播。当子应用需要独立错误边界时可关闭：
+
+```kotlin
+admin.config {
+    propagateExceptions = false
+}
+```
+
+限制：子应用必须在启动前挂载；同一个 app 实例只能挂载一次。
 
 ### 事件
 
@@ -471,6 +549,51 @@ fun upload(file: UploadedFile): Map<String, Any?> =
 | `Query<Map<String, List<String>>>` | `emptyMap()` |
 
 自定义提取器实现 `ExtractorFactory`，也可以描述其 OpenAPI 表现。
+
+### 自定义参数提取器
+
+自定义提取器可以把请求解析逻辑从 handler 中移出，并变成可复用、类型安全的参数。
+
+```kotlin
+import io.github.cymoo.colleen.*
+import io.github.cymoo.colleen.openapi.*
+import java.lang.reflect.Parameter
+
+class BearerToken(value: String?) : ParamExtractor<String?>(value) {
+    companion object : ExtractorFactory<BearerToken> {
+        override fun build(paramName: String, param: Parameter): (Context) -> BearerToken {
+            return { ctx ->
+                val token = ctx.header("Authorization")
+                    ?.removePrefix("Bearer ")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+
+                BearerToken(token)
+            }
+        }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "Authorization",
+                    location = "header",
+                    schema = mapOf("type" to "string"),
+                    description = "Bearer token. Format: `Bearer <token>`",
+                )
+            )
+        )
+    }
+
+    fun require(): String =
+        value ?: throw Unauthorized("Bearer token is required")
+}
+
+fun me(token: BearerToken, service: UserService): UserProfile =
+    service.profile(token.require())
+```
+
+`build` 负责提取，`describeOpenApi` 让该提取器出现在生成的 API 文档中。当缺失必填值
+应由框架报告，而不是像 `require()` 这样在 handler 逻辑中处理时，再添加 `missingMessage`。
 
 ### Context API
 
@@ -572,11 +695,12 @@ app.ws("/chat/{room}") { conn ->
     val room = conn.pathParam("room")
     val name = conn.query("name") ?: "anonymous"
 
-    conn.onMessage { msg ->
-        when (msg) {
-            is WsMessage.Text -> conn.send("[$room] $name: ${msg.data}")
-            is WsMessage.Binary -> conn.send(msg.data)
-        }
+    conn.onMessage { text ->
+        conn.send("[$room] $name: $text")
+    }
+
+    conn.onBinary { bytes ->
+        conn.send(bytes)
     }
 }
 ```
@@ -827,30 +951,47 @@ app.config {
 
 建议从这里开始：
 
-| 想学习... | 示例 |
+### 入门
+
+| 示例 | 内容 |
 |---|---|
-| 最小应用 | `examples/hello-world` |
-| JSON CRUD API | `examples/todo-app` |
-| OpenAPI 注解 | `examples/openapi` |
-| 参数提取 | `examples/extractor` |
-| 自定义提取器 | `examples/custom-extractor` |
-| 测试 | `examples/testing` |
-| 内置中间件 | `examples/middleware-showcase` |
-| WebSocket | `examples/websocket` |
-| SSE | `examples/sse` |
-| 子应用 | `examples/sub-app` |
-| 错误处理 | `examples/error-handling` |
-| 事件 | `examples/event-system` |
-| 文件上传 | `examples/upload-app` |
-| 静态文件 | `examples/serve-static` |
-| HTML 渲染 | `examples/render-html` |
-| JDBC | `examples/jdbc` |
-| jOOQ + SQLite | `examples/jooq-sqlite` |
-| Redis 缓存 | `examples/redis` |
-| 数据验证 | `examples/validator` |
-| 自动重载 | `examples/auto-reload` |
-| 基准压测 | `examples/benchmark-api` |
-| 完整聊天室应用 | `examples/chat-room-app` |
+| [hello-world](examples/hello-world) | 最小可运行 Colleen 应用。 |
+| [todo-app](examples/todo-app) | 包含 validation 和 CORS 的 JSON CRUD API。 |
+| [testing](examples/testing) | 使用 `TestClient` 进行进程内请求测试。 |
+| [openapi](examples/openapi) | OpenAPI 注解和 Swagger UI。 |
+
+### 核心 API
+
+| 示例 | 内容 |
+|---|---|
+| [extractor](examples/extractor) | 内置 path、query、form、JSON、header、cookie 和 file 提取。 |
+| [custom-extractor](examples/custom-extractor) | Bearer token、分页等领域化参数提取器。 |
+| [validator](examples/validator) | 验证 DSL 和聚合字段错误。 |
+| [middleware-showcase](examples/middleware-showcase) | 内置中间件和常见中间件模式。 |
+| [auth-app](examples/auth-app) | 使用自定义中间件和服务注入实现认证。 |
+| [error-handling](examples/error-handling) | 全局错误处理器和子应用错误传播。 |
+| [sub-app](examples/sub-app) | 使用挂载子应用构建模块化应用。 |
+| [event-system](examples/event-system) | 生命周期和请求/响应事件。 |
+
+### 实时与文件
+
+| 示例 | 内容 |
+|---|---|
+| [websocket](examples/websocket) | WebSocket 路由、中间件和 controller 风格处理。 |
+| [sse](examples/sse) | 带 keep-alive 和关闭处理的 Server-Sent Events。 |
+| [upload-app](examples/upload-app) | Multipart 上传和文件下载。 |
+| [serve-static](examples/serve-static) | 带缓存和安全控制的静态文件服务。 |
+| [render-html](examples/render-html) | 使用 Pebble 模板渲染 HTML。 |
+
+### 集成与运维
+
+| 示例 | 内容 |
+|---|---|
+| [jdbc](examples/jdbc) | SQLite JDBC 集成和批量执行。 |
+| [jooq-sqlite](examples/jooq-sqlite) | jOOQ 代码生成和类型安全 SQLite 查询。 |
+| [redis](examples/redis) | Redis 支持的响应缓存中间件。 |
+| [auto-reload](examples/auto-reload) | 开发期自动重载流程。 |
+| [benchmark-api](examples/benchmark-api) | 可复现的基准压测配置和负载场景。 |
 
 ---
 

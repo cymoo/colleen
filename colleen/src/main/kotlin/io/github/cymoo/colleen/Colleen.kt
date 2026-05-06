@@ -454,11 +454,12 @@ class Colleen {
      * ### Example
      * ```kotlin
      * app.ws("/chat/{room}") { conn ->
-     *     conn.onMessage { msg ->
-     *         when (msg) {
-     *             is WsMessage.Text -> conn.send("Echo: ${msg.data}")
-     *             is WsMessage.Binary -> conn.send(msg.data)
-     *         }
+     *     conn.onMessage { text ->
+     *         conn.send("Echo: $text")
+     *     }
+     *
+     *     conn.onBinary { bytes ->
+     *         conn.send(bytes)
      *     }
      * }
      * ```

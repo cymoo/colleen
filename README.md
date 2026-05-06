@@ -228,6 +228,28 @@ static delimiter. For example, `/files/{name}-{version}.txt` matches
 Route priority is deterministic: static segments, complex segments, parameter segments,
 then wildcard segments.
 
+### Route Groups
+
+Groups add a common registration-time path prefix and can carry middleware for a set
+of related routes.
+
+```kotlin
+app.group("/api") {
+    use(ApiKeyMiddleware())
+
+    get("/todos", ::listTodos)          // GET /api/todos
+    post("/todos", ::createTodo)        // POST /api/todos
+
+    group("/admin") {
+        use(AdminOnly())
+        get("/stats") { statsService.snapshot() }  // GET /api/admin/stats
+    }
+}
+```
+
+Route groups are for organizing route declarations. Prefix middleware is different:
+it is registered once and matched at request time for any path under the prefix.
+
 ### Controller-Style Routing
 
 ```kotlin
@@ -299,6 +321,29 @@ app.use { ctx, next ->
     next()
 }
 ```
+
+#### Where Middleware Can Run
+
+| Scope | API | When it runs |
+|---|---|---|
+| Global | `app.use(middleware)` | every HTTP request |
+| Prefix | `app.use("/api", middleware)` | paths under `/api` |
+| Conditional | `app.use({ ctx -> ... }, middleware)` | when the predicate returns `true` |
+| Per-route | `app.get("/todos").use(middleware).handle { ... }` | one method + path |
+| Group-level | `app.group("/api") { use(middleware) }` | routes registered under the group |
+
+```kotlin
+app.use(RequestLogger())
+app.use("/api", ApiKeyMiddleware())
+app.use({ ctx -> ctx.accepts("json") }, JsonOnlyMiddleware())
+
+app.get("/todos/{id}")
+    .use(AuthMiddleware())
+    .handle(::getTodo)
+```
+
+Use route groups to keep route declarations together. Use prefix middleware when the
+same middleware should apply to paths that may be registered in different places.
 
 ### Dependency Injection
 
@@ -389,6 +434,9 @@ all field errors are collected into one `ValidationException`.
 
 ### Sub-Applications
 
+Sub-applications let you split a larger service into isolated Colleen apps. They are
+useful for API versions, admin/internal tools, feature modules, or plugin-style composition.
+
 ```kotlin
 val api = Colleen()
 api.get("/todos", ::listTodos)
@@ -407,6 +455,40 @@ Inside the sub-app, routes are written relative to the mount path:
 | `ctx.fullPattern` | `/api/todos` |
 
 Each sub-app has its own routes, middleware, services, error handlers, and config.
+Some request context is shared through the parent chain.
+
+| Boundary | Behavior |
+|---|---|
+| Routes and middleware | isolated per app |
+| Services | current app first, then parent apps |
+| State | child contexts can read parent state |
+| Error handlers | sub-app handlers first; parent handlers can handle propagated errors |
+| Config | each app has its own config |
+| Events | execution events can bubble to parent apps |
+
+```kotlin
+val root = Colleen()
+root.provide(Database())
+
+val admin = Colleen()
+admin.use(AdminOnly())
+admin.get("/stats") { ctx ->
+    ctx.getService<Database>().stats()
+}
+
+root.mount("/admin", admin)
+```
+
+By default, unhandled exceptions in a sub-app can propagate to the parent app. Disable
+that when a sub-app should own its error boundary:
+
+```kotlin
+admin.config {
+    propagateExceptions = false
+}
+```
+
+Restrictions: mount sub-apps before they are started, and mount each app instance only once.
 
 ### Events
 
@@ -478,6 +560,53 @@ Rules for `Query<T>` and `Form<T>`:
 | `Query<Map<String, List<String>>>` | `emptyMap()` |
 
 Custom extractors implement `ExtractorFactory` and can also describe themselves for OpenAPI.
+
+### Custom Parameter Extractors
+
+Custom extractors move request parsing out of handlers and turn it into a reusable,
+type-safe parameter.
+
+```kotlin
+import io.github.cymoo.colleen.*
+import io.github.cymoo.colleen.openapi.*
+import java.lang.reflect.Parameter
+
+class BearerToken(value: String?) : ParamExtractor<String?>(value) {
+    companion object : ExtractorFactory<BearerToken> {
+        override fun build(paramName: String, param: Parameter): (Context) -> BearerToken {
+            return { ctx ->
+                val token = ctx.header("Authorization")
+                    ?.removePrefix("Bearer ")
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+
+                BearerToken(token)
+            }
+        }
+
+        override fun describeOpenApi(paramName: String, param: Parameter) = OpenApiParamSpec(
+            parameters = listOf(
+                OpenApiParameter(
+                    name = "Authorization",
+                    location = "header",
+                    schema = mapOf("type" to "string"),
+                    description = "Bearer token. Format: `Bearer <token>`",
+                )
+            )
+        )
+    }
+
+    fun require(): String =
+        value ?: throw Unauthorized("Bearer token is required")
+}
+
+fun me(token: BearerToken, service: UserService): UserProfile =
+    service.profile(token.require())
+```
+
+`build` performs extraction, and `describeOpenApi` lets the extractor appear in
+generated API docs. Add `missingMessage` when the framework, rather than handler
+code like `require()`, should report missing required values for your extractor.
 
 ### Context API
 
@@ -580,11 +709,12 @@ app.ws("/chat/{room}") { conn ->
     val room = conn.pathParam("room")
     val name = conn.query("name") ?: "anonymous"
 
-    conn.onMessage { msg ->
-        when (msg) {
-            is WsMessage.Text -> conn.send("[$room] $name: ${msg.data}")
-            is WsMessage.Binary -> conn.send(msg.data)
-        }
+    conn.onMessage { text ->
+        conn.send("[$room] $name: $text")
+    }
+
+    conn.onBinary { bytes ->
+        conn.send(bytes)
     }
 }
 ```
@@ -844,30 +974,47 @@ See `examples/benchmark-api/README.md` for reproducible benchmark profiles.
 
 Start here:
 
-| If you want to learn... | Example |
+### Start Here
+
+| Example | What it shows |
 |---|---|
-| the smallest app | `examples/hello-world` |
-| JSON CRUD APIs | `examples/todo-app` |
-| OpenAPI annotations | `examples/openapi` |
-| parameter extraction | `examples/extractor` |
-| custom extractors | `examples/custom-extractor` |
-| testing | `examples/testing` |
-| built-in middleware | `examples/middleware-showcase` |
-| WebSocket | `examples/websocket` |
-| SSE | `examples/sse` |
-| sub-apps | `examples/sub-app` |
-| error handling | `examples/error-handling` |
-| events | `examples/event-system` |
-| file upload | `examples/upload-app` |
-| static files | `examples/serve-static` |
-| HTML rendering | `examples/render-html` |
-| JDBC | `examples/jdbc` |
-| jOOQ + SQLite | `examples/jooq-sqlite` |
-| Redis caching | `examples/redis` |
-| validation | `examples/validator` |
-| auto reload | `examples/auto-reload` |
-| benchmark profiles | `examples/benchmark-api` |
-| full chat application | `examples/chat-room-app` |
+| [hello-world](examples/hello-world) | The smallest runnable Colleen app. |
+| [todo-app](examples/todo-app) | JSON CRUD API with validation and CORS. |
+| [testing](examples/testing) | In-process requests with `TestClient`. |
+| [openapi](examples/openapi) | OpenAPI annotations and Swagger UI. |
+
+### Core APIs
+
+| Example | What it shows |
+|---|---|
+| [extractor](examples/extractor) | Built-in path, query, form, JSON, header, cookie, and file extraction. |
+| [custom-extractor](examples/custom-extractor) | Domain-specific extractors such as bearer tokens and pagination. |
+| [validator](examples/validator) | Validation DSL and aggregated field errors. |
+| [middleware-showcase](examples/middleware-showcase) | Built-in middleware and common middleware patterns. |
+| [auth-app](examples/auth-app) | Authentication with custom middleware and service injection. |
+| [error-handling](examples/error-handling) | Global error handlers and sub-app error propagation. |
+| [sub-app](examples/sub-app) | Modular applications with mounted sub-apps. |
+| [event-system](examples/event-system) | Lifecycle and request/response events. |
+
+### Realtime and Files
+
+| Example | What it shows |
+|---|---|
+| [websocket](examples/websocket) | WebSocket routes, middleware, and controller-style handlers. |
+| [sse](examples/sse) | Server-Sent Events with keep-alive and close handling. |
+| [upload-app](examples/upload-app) | Multipart upload and file download. |
+| [serve-static](examples/serve-static) | Static file serving with cache and security controls. |
+| [render-html](examples/render-html) | Pebble templates for HTML rendering. |
+
+### Integrations and Operations
+
+| Example | What it shows |
+|---|---|
+| [jdbc](examples/jdbc) | JDBC integration with SQLite and batch execution. |
+| [jooq-sqlite](examples/jooq-sqlite) | jOOQ code generation and type-safe SQLite queries. |
+| [redis](examples/redis) | Redis-backed response caching middleware. |
+| [auto-reload](examples/auto-reload) | Development-time auto reload workflow. |
+| [benchmark-api](examples/benchmark-api) | Reproducible benchmark profiles and load scenarios. |
 
 ---
 
