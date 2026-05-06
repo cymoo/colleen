@@ -800,12 +800,6 @@ internal class Router {
     /** WebSocket-specific middlewares (run during WS handshake only). */
     internal val wsMiddlewares = CopyOnWriteArrayList<MiddlewareNode>()
 
-    private data class IndexedMountMatch(
-        val index: Int,
-        val mount: MountNode,
-        val matchResult: MatchResult,
-    )
-
     // ========================================================================
     // Registration
     // ========================================================================
@@ -1035,13 +1029,13 @@ internal class Router {
         return mounts
             .mapIndexedNotNull { index, mount ->
                 val result = mount.match(ctx)
-                if (result.matched) IndexedMountMatch(index, mount, result) else null
+                if (result.matched) Triple(index, mount, result) else null
             }
             .sortedWith(
-                compareByDescending<IndexedMountMatch> { it.matchResult.consumedSegments }
-                    .thenBy { it.index }
+                compareByDescending<Triple<Int, MountNode, MatchResult>> { it.third.consumedSegments }
+                    .thenBy { it.first }
             )
-            .map { it.mount to it.matchResult }
+            .map { it.second to it.third }
     }
 
     /**
