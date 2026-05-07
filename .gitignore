@@ -42,6 +42,9 @@ failsafe-reports/
 # ==================================================
 .env
 .env.*
+!examples/postgres-jooq/.env.example
+!examples/postgres-jooq/.env.development
+!examples/postgres-jooq/.env.test
 settings.xml
 
 # ==================================================

@@ -27,6 +27,7 @@
         <module>validator</module>
         <module>serve-static</module>
         <module>jooq-sqlite</module>
+        <module>postgres-jooq</module>
         <module>custom-extractor</module>
         <module>extractor</module>
         <module>benchmark-api</module>
