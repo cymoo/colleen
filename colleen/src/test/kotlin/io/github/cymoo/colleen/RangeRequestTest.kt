@@ -238,6 +238,22 @@ class RangeRequestTest {
         }
 
         @Test
+        fun `explicit HEAD route using sendFile sends headers but no body`(@TempDir dir: Path) {
+            val file = dir.resolve("data.bin").toFile().apply { writeText("0123456789") }
+            val app = Colleen()
+            app.head("/download") { ctx -> ctx.sendFile(file.absolutePath) }
+
+            val response = TestClient(app).head("/download").send()
+
+            assertEquals(200, response.status)
+            assertEquals("10", response.header("Content-Length"))
+            assertTrue(
+                response.response.body is ResponseBody.Empty,
+                "HEAD must not produce a body (nor open the file stream)"
+            )
+        }
+
+        @Test
         fun `If-Modified-Since keeps precedence over Range`(@TempDir dir: Path) {
             val file = dir.resolve("data.bin").toFile().apply { writeText("0123456789") }
             val app = appServing(file)

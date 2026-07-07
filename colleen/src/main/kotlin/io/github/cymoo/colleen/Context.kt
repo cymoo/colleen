@@ -617,7 +617,13 @@ data class Context(
 
                 is RangeOutcome.Full -> {
                     if (resource.length >= 0) header("Content-Length", resource.length.toString())
-                    body = ResponseBody.Stream(resource.open())
+                    // HEAD carries the same headers (incl. Content-Length) but no
+                    // body — also avoids opening a stream nobody would consume
+                    body = if (this@Context.method == "HEAD") {
+                        ResponseBody.Empty
+                    } else {
+                        ResponseBody.Stream(resource.open())
+                    }
                 }
             }
         }
