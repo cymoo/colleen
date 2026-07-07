@@ -89,7 +89,8 @@ class CorsTest {
         // Assert
         assertTrue(nextCalled, "next() should be called")
         assertEquals("*", ctx.response.headers["Access-Control-Allow-Origin"])
-        assertEquals("GET,POST,PUT,DELETE,PATCH,OPTIONS", ctx.response.headers["Access-Control-Allow-Methods"])
+        // Allow-Methods is a preflight-response header; actual responses omit it
+        assertNull(ctx.response.headers["Access-Control-Allow-Methods"])
     }
 
     @Test
@@ -262,7 +263,8 @@ class CorsTest {
             allowOrigins = setOf("*"),
             allowMethods = "GET,POST"
         )
-        val ctx = createContext(headers = mapOf("origin" to "https://example.com"))
+        // Allow-Methods is only meaningful (and only sent) on preflight responses
+        val ctx = createContext(method = "OPTIONS", headers = mapOf("origin" to "https://example.com"))
 
         // Act
         middleware.invoke(ctx, ::next)
@@ -278,7 +280,8 @@ class CorsTest {
             allowOrigins = setOf("*"),
             allowHeaders = "Content-Type,X-Custom-Header"
         )
-        val ctx = createContext(headers = mapOf("origin" to "https://example.com"))
+        // Allow-Headers is only meaningful (and only sent) on preflight responses
+        val ctx = createContext(method = "OPTIONS", headers = mapOf("origin" to "https://example.com"))
 
         // Act
         middleware.invoke(ctx, ::next)

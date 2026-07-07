@@ -38,7 +38,11 @@ class RateLimiter @JvmOverloads constructor(
     private val capacity: Long = 100,
     private val refillRate: Double = 10.0,
     private val keyExtractor: (Context) -> String = { ctx -> ctx.request.ip },
-    private val onLimitExceeded: (Context) -> Unit = { _ -> throw TooManyRequests() },
+    // Default 429 carries Retry-After = time to earn one token (rounded up),
+    // which the framework's default error handler emits as a Retry-After header.
+    private val onLimitExceeded: (Context) -> Unit = { _ ->
+        throw TooManyRequests(retryAfter = kotlin.math.ceil(1.0 / refillRate).toInt().coerceAtLeast(1))
+    },
     private val bucketTtlSeconds: Long = 3600,
     private val cleanupProbability: Double = 0.01
 ) : Middleware {

@@ -680,11 +680,12 @@ class ColleenE2ETest {
         // Arrange
         val app = Colleen()
 
-        app.listen()
+        // Explicit port: the default 8000 may be taken by unrelated local processes
+        app.listen(9002)
 
         // Act & Assert
         val ex = assertThrows<IllegalStateException> {
-            app.listen()
+            app.listen(9002)
         }
 
         assertTrue(

@@ -84,6 +84,57 @@ class ServiceContainer {
     @PublishedApi
     internal val factories = ConcurrentHashMap<ServiceKey, () -> Any>()
 
+    /**
+     * Per-thread stack of keys currently being resolved, used to detect
+     * circular dependencies (A -> B -> A) and report the full chain instead
+     * of letting ConcurrentHashMap fail with a cryptic "Recursive update".
+     */
+    private val resolutionStack = ThreadLocal.withInitial { LinkedHashSet<ServiceKey>() }
+
+    /** One creation lock per singleton key (see [resolveSingleton]). */
+    private val singletonLocks = ConcurrentHashMap<ServiceKey, java.util.concurrent.locks.ReentrantLock>()
+
+    /**
+     * Runs a singleton [factory] exactly once and caches the result.
+     *
+     * The factory intentionally runs under a dedicated per-key lock rather than
+     * inside `instances.computeIfAbsent`: nested `computeIfAbsent` calls on the
+     * same map (service factories resolving other services) are undefined
+     * behavior in ConcurrentHashMap and can deadlock or throw a cryptic
+     * "Recursive update". Same-thread cycles (A -> B -> A) are detected via
+     * [resolutionStack] and reported with the full dependency chain.
+     */
+    @PublishedApi
+    internal fun resolveSingleton(key: ServiceKey, factory: () -> Any): Any {
+        instances[key]?.let { return it }
+
+        val stack = resolutionStack.get()
+        check(key !in stack) {
+            val chain = (stack.toList() + key).joinToString(" -> ") { it.type.simpleName ?: "?" }
+            "Circular service dependency detected: $chain"
+        }
+
+        val lock = singletonLocks.computeIfAbsent(key) { java.util.concurrent.locks.ReentrantLock() }
+        lock.lock()
+        try {
+            // Re-check after acquiring the lock: another thread may have won
+            instances[key]?.let { return it }
+
+            stack.add(key)
+            val created = try {
+                factory()
+            } finally {
+                stack.remove(key)
+                if (stack.isEmpty()) resolutionStack.remove()
+            }
+
+            instances[key] = created
+            return created
+        } finally {
+            lock.unlock()
+        }
+    }
+
     // Maps qualifier simple class name (case-insensitive) -> qualifier object
     // Built automatically whenever a non-String qualifier is registered.
     private val qualifierRegistry = ConcurrentHashMap<String, Any>()
@@ -124,7 +175,7 @@ class ServiceContainer {
     ): ServiceContainer {
         trackQualifier(qualifier)
         val key = ServiceKey(T::class, qualifier)
-        factories[key] = { instances.computeIfAbsent(key) { factory() } }
+        factories[key] = { resolveSingleton(key, factory) }
         return this
     }
 
@@ -376,7 +427,7 @@ class ServiceContainer {
     ): ServiceContainer {
         trackQualifier(qualifier)
         val key = ServiceKey(clazz.kotlin, qualifier)
-        factories[key] = { instances.computeIfAbsent(key) { factory() } }
+        factories[key] = { resolveSingleton(key, factory) }
         return this
     }
 

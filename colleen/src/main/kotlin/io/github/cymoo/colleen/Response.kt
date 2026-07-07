@@ -233,7 +233,17 @@ data class Response(
      * This is the core return-value-to-response mapping logic.
      */
     internal fun applyHandlerResult(result: Any?) {
-        if (result is Response) return
+        if (result is Response) {
+            // Returning ctx.response (fluent style) needs no processing, but a
+            // *different* Response instance carries intent — apply it instead of
+            // silently dropping it.
+            if (result !== this) {
+                status = result.status
+                result.headers.forEach { key, values -> headers[key] = values }
+                if (result.isBodySet) body = result.body
+            }
+            return
+        }
 
         if (result != null) forbidInternalTypes(result)
 
@@ -260,9 +270,11 @@ data class Response(
 
             // Numeric return value = HTTP status
             is Int, is Long -> {
-                // Validate RFC 7231 compliant status code range
-                require(result in 100..599) { "Invalid HTTP status code: $result" }
-                status(result as Int)
+                // Validate RFC 7231 compliant status code range.
+                // Compare as Long so a Long return value never hits a ClassCastException.
+                val code = (result as Number).toLong()
+                require(code in 100..599) { "Invalid HTTP status code: $result" }
+                status(code.toInt())
                 if (!isBodySet) body = ResponseBody.Empty
             }
 
@@ -300,7 +312,17 @@ data class Response(
                 result.headers.forEach { key, values ->
                     values.forEach { headers.add(key, it) }
                 }
-                applyHandlerResult(result.body)
+                when (val resultBody = result.body) {
+                    // Result carries an explicit status, so a numeric body is payload —
+                    // it must NOT be re-interpreted as a status code
+                    // (e.g. Result.ok(42) means "200 with JSON body 42").
+                    is Int, is Long -> {
+                        headers.putIfAbsent("Content-Type", "application/json; charset=utf-8")
+                        body = ResponseBody.Json(resultBody, false)
+                    }
+
+                    else -> applyHandlerResult(resultBody)
+                }
             }
 
             is ResponseBody -> body = result
@@ -350,20 +372,31 @@ sealed class ResponseBody {
      * JSON body.
      *
      * Serialization is deferred and uses the Context's JsonMapper.
+     *
+     * - `null` becomes the JSON literal `null`
+     * - [io.github.cymoo.colleen.json.RawJson] passes through verbatim
+     * - everything else (including plain Strings, which are QUOTED) goes
+     *   through the JsonMapper
      */
     class Json(val value: Any?, val stream: Boolean) : ResponseBody() {
         override fun materialize(ctx: Context): RawResponseBody {
             val mapper = ctx.jsonMapper
-            val data = value ?: "null"
 
             return if (stream) {
                 RawResponseBody.Stream(
-                    mapper.toJsonStream(data)
+                    when (value) {
+                        null -> "null".byteInputStream()
+                        is io.github.cymoo.colleen.json.RawJson -> value.json.byteInputStream()
+                        else -> mapper.toJsonStream(value)
+                    }
                 )
             } else {
-                val json = mapper.toJsonString(data)
-                val bytes = json.toByteArray(Charsets.UTF_8)
-                RawResponseBody.Bytes(bytes)
+                val json = when (value) {
+                    null -> "null"
+                    is io.github.cymoo.colleen.json.RawJson -> value.json
+                    else -> mapper.toJsonString(value)
+                }
+                RawResponseBody.Bytes(json.toByteArray(Charsets.UTF_8))
             }
         }
     }

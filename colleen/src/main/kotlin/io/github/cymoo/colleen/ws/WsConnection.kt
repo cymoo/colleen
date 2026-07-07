@@ -77,8 +77,11 @@ sealed class WsCloseReason {
  * Implementations bridge between the server adapter (e.g. Undertow)
  * and the framework-level [WsConnection].
  *
- * Implementations are NOT required to be thread-safe.
- * All concurrency control is handled by [WsConnection].
+ * Thread-safety contract: [WsConnection] serializes all `send*` calls behind
+ * its send lock, but deliberately calls [close] OUTSIDE that lock (to avoid
+ * holding it during blocking network I/O). Implementations must therefore
+ * tolerate `close` racing with an in-flight `send*`; sends themselves are
+ * never concurrent with each other. Undertow's blocking senders satisfy this.
  */
 interface WsChannel : AutoCloseable {
     @Throws(IOException::class)

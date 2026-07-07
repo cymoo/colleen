@@ -10,6 +10,7 @@ import io.github.cymoo.colleen.util.http.HttpStatus
 import io.github.cymoo.colleen.util.http.UrlPath
 import io.github.cymoo.colleen.ws.WsConnection
 import io.github.cymoo.colleen.ws.WsRouteNode
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Consumer
 import kotlin.reflect.KClass
@@ -156,9 +157,12 @@ class Colleen {
      * Map of exception handlers indexed by exception class.
      *
      * Handlers are looked up by walking up the exception class hierarchy.
+     *
+     * ConcurrentHashMap for consistency with the other registration containers:
+     * `onError` may legally be called after `listen()` from another thread.
      */
     @PublishedApi
-    internal val errorHandlers = mutableMapOf<KClass<*>, ErrorHandler<*>>()
+    internal val errorHandlers = ConcurrentHashMap<KClass<*>, ErrorHandler<*>>()
 
     /**
      * Underlying web server instance.
@@ -615,10 +619,23 @@ class Colleen {
             "Cannot mount app at '$prefix': target app is already mounted at '${app.mountPath}'"
         }
 
-        app.mountPath = prefix
-        app.parent = this
+        // Mounting an ancestor (or the app itself) would create a parent cycle and
+        // make fullMountPath loop forever.
+        var ancestor: Colleen? = this
+        while (ancestor != null) {
+            check(ancestor !== app) {
+                "Cannot mount app at '$prefix': mounting would create a cycle"
+            }
+            ancestor = ancestor.parent
+        }
+
+        // Validate the prefix BEFORE mutating the child; a failed validation must
+        // not leave the child half-mounted (it would then reject valid prefixes
+        // with "already mounted").
         val node = MountNode.of(prefix, app)
 
+        app.mountPath = prefix
+        app.parent = this
         router.addMount(node)
     }
 
@@ -669,9 +686,22 @@ class Colleen {
         val docsPath = uiPath?.let { UrlPath.normalize(it) }
         val excludedPaths = setOfNotNull(specPath, docsPath)
 
+        // The spec is rebuilt only when the number of registered routes changes
+        // (routes are normally all registered before listen()); rebuilding the
+        // whole spec reflectively on every request is wasteful.
+        val specCache = java.util.concurrent.atomic.AtomicReference<Pair<Int, Any>?>(null)
+
         get(specPath) {
-            val routes = collectRoutes(this@Colleen, "", excludedPaths)
-            buildSpec(routes, title, version, description, filter)
+            val fingerprint = countRoutes(this@Colleen)
+            val cached = specCache.get()
+            if (cached != null && cached.first == fingerprint) {
+                cached.second
+            } else {
+                val routes = collectRoutes(this@Colleen, "", excludedPaths)
+                val spec = buildSpec(routes, title, version, description, filter)
+                specCache.set(fingerprint to spec)
+                spec
+            }
         }
 
         if (docsPath != null) {
@@ -702,6 +732,13 @@ class Colleen {
     ) {
         check(parent == null) {
             "Cannot start server: this app is mounted at '$mountPath'"
+        }
+
+        // The lifecycle is one-shot: once stopped, an app cannot be restarted
+        // (listeners and executors are torn down). Give an accurate error
+        // instead of the misleading "already running".
+        check(!shuttingDown.get()) {
+            "Server has been stopped and cannot be restarted; create a new Colleen instance"
         }
 
         check(running.compareAndSet(false, true)) {
@@ -783,6 +820,10 @@ class Colleen {
                         ctx.response.materialize(ctx)
                     }
                 }
+                // Direct Throwable subclasses (neither Error nor Exception) are rare
+                // but legal; without this branch the `when` would fall through and the
+                // response would silently stay unmaterialized.
+                else -> throw e
             }
         }
     }
@@ -831,6 +872,9 @@ class Colleen {
                 @Suppress("UNCHECKED_CAST")
                 (handler as ErrorHandler<Exception>)(e, ctx)
             } catch (handlerError: Exception) {
+                // Keep the original exception attached; otherwise it disappears
+                // from the logs when the custom handler itself blows up.
+                if (handlerError !== e) handlerError.addSuppressed(e)
                 logger.error("Exception handler failed", handlerError)
                 handleErrorByDefault(handlerError, ctx)
             }
@@ -857,17 +901,32 @@ class Colleen {
             logger.error("Server error", err)
         }
 
+        // Protocol-mandated / advisory headers carried by specific exceptions:
+        // RFC 9110 requires 405 responses to include Allow.
+        if (err is MethodNotAllowed && err.allowedMethods.isNotEmpty()) {
+            ctx.response.header("Allow", err.allowedMethods.sorted().joinToString(", "))
+        }
+        val retryAfter = when (err) {
+            is TooManyRequests -> err.retryAfter
+            is ServiceUnavailable -> err.retryAfter
+            else -> null
+        }
+        retryAfter?.let { ctx.response.header("Retry-After", it.toString()) }
+
         if (ctx.accepts("html")) {
             ctx.status(status).html(
                 renderErrorHtml(status, statusText, message)
             )
         } else {
             ctx.status(status).json(
-                mapOf(
-                    "status" to status,
-                    "code" to (httpException?.code ?: "INTERNAL_SERVER_ERROR"),
-                    "message" to (message ?: statusText),
-                )
+                buildMap {
+                    put("status", status)
+                    put("code", httpException?.code ?: "INTERNAL_SERVER_ERROR")
+                    put("message", message ?: statusText)
+                    // Expose field-level validation details so clients don't have to
+                    // parse them back out of the flattened message string.
+                    if (err is ValidationException) put("errors", err.errors)
+                }
             )
         }
     }
@@ -903,6 +962,14 @@ class Colleen {
     }
 
     /**
+     * Counts routes across this app and all mounted sub-apps.
+     *
+     * Used as a cheap fingerprint to know when the cached OpenAPI spec is stale.
+     */
+    private fun countRoutes(app: Colleen): Int =
+        app.router.routes.size + app.router.mounts.sumOf { countRoutes(it.app) }
+
+    /**
      * Finds an exception handler by walking up the exception class hierarchy.
      *
      * @param exceptionClass the exception class to find a handler for
@@ -910,8 +977,10 @@ class Colleen {
      */
     private fun findErrorHandler(exceptionClass: KClass<*>): ErrorHandler<*>? {
         var current: KClass<*>? = exceptionClass
-        while (current != null && current != Throwable::class) {
+        while (current != null) {
             errorHandlers[current]?.let { return it }
+            // Check Throwable itself before stopping, so onError<Throwable> works.
+            if (current == Throwable::class) break
             current = current.java.superclass?.kotlin
         }
         return null

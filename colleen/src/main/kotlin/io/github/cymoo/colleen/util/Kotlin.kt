@@ -71,3 +71,36 @@ internal fun <T> lazyLoom(
     LazyThreadSafetyMode.SYNCHRONIZED -> ReentrantLazy(initializer)
     else -> lazy(threadSafetyMode, initializer)
 }
+
+/**
+ * A thread-safe compute-once cell whose initializer is supplied at access time.
+ *
+ * Unlike [Lazy], the computation is not bound at construction, which lets the
+ * cell itself be shared between object copies (see `Request.copy` — every copy
+ * passes an equivalent computation, and whichever accesses first wins).
+ *
+ * A failed computation is not cached; the next access retries.
+ * Loom-friendly (uses [ReentrantLock], never `synchronized`).
+ */
+internal class OnceCell<T> {
+    private val lock = ReentrantLock()
+
+    @Volatile
+    private var initialized = false
+    private var value: T? = null
+
+    fun getOrCompute(compute: () -> T): T {
+        if (initialized) {
+            @Suppress("UNCHECKED_CAST")
+            return value as T
+        }
+        return lock.withLock {
+            if (!initialized) {
+                value = compute()
+                initialized = true
+            }
+            @Suppress("UNCHECKED_CAST")
+            value as T
+        }
+    }
+}

@@ -1,10 +1,10 @@
 package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.json.JsonMapper
+import io.github.cymoo.colleen.util.OnceCell
 import io.github.cymoo.colleen.util.TypeRef
 import io.github.cymoo.colleen.util.http.*
 import io.github.cymoo.colleen.util.http.Cookie
-import io.github.cymoo.colleen.util.lazyLoom
 import java.io.InputStream
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets.UTF_8
@@ -33,7 +33,7 @@ import java.nio.file.Paths
  * - Either the request is treated as a regular body (JSON / form),
  * - Or it is parsed as multipart, but never both.
  */
-data class Request(
+data class Request @JvmOverloads constructor(
     val method: String,
     val path: String,
     val queryString: String = "",
@@ -41,7 +41,30 @@ data class Request(
     val stream: InputStream? = null,
     val serverInfo: ServerInfo = ServerInfo(),
     private val multipartSupplier: () -> List<Part> = { emptyList() },
+    private val bodyCache: BodyCache = BodyCache(),
 ) {
+    /**
+     * Caches for everything derived from the one-shot request [stream].
+     *
+     * This is a constructor parameter (not a class-body property) on purpose:
+     * `copy()` then shares the SAME cache between the original and the copy.
+     * Mounted sub-apps rewrite the path via `request.copy(path=...)`, and since
+     * the underlying stream can only be consumed once, parent and child must
+     * see one shared body — otherwise whichever side reads second would get an
+     * already-closed, empty stream.
+     *
+     * [OnceCell] is also thread-safe, so a request captured by an asynchronous
+     * consumer (SSE/WS handler) cannot double-initialize these caches.
+     *
+     * The class itself is public only because the (public) data-class
+     * constructor must reference it; the internal constructor keeps it opaque.
+     */
+    class BodyCache internal constructor() {
+        internal val body = OnceCell<ByteArray?>()
+        internal val forms = OnceCell<Map<String, List<String>>>()
+        internal val parts = OnceCell<List<Part>>()
+    }
+
     /** Full request URI (path + query string). */
     val uri: String by lazy { if (queryString.isEmpty()) path else "$path?$queryString" }
 
@@ -53,20 +76,22 @@ data class Request(
      *
      * This property lazily consumes the underlying request [stream] and
      * caches the result. The stream is closed after reading.
+     * The cache is shared with copies of this request (see [BodyCache]).
      *
      * Not available for `multipart/form-data` requests.
      *
      * @throws IllegalStateException if accessed for multipart requests.
      */
-    val body: ByteArray? by lazyLoom {
-        if (isMultipart) {
-            throw IllegalStateException(
-                "Cannot access body for multipart/form-data requests. " +
-                        "Use parts(), file(), or files() instead."
-            )
+    val body: ByteArray?
+        get() = bodyCache.body.getOrCompute {
+            if (isMultipart) {
+                throw IllegalStateException(
+                    "Cannot access body for multipart/form-data requests. " +
+                            "Use parts(), file(), or files() instead."
+                )
+            }
+            stream?.use { it.readBytes() }
         }
-        stream?.use { it.readBytes() }
-    }
 
     /** Request body as text using the given charset. */
     fun text(charset: Charset = UTF_8) = body?.toString(charset)
@@ -235,28 +260,30 @@ data class Request(
      * Parsed form parameters.
      *
      * Supports both application/x-www-form-urlencoded and multipart/form-data.
+     * The cache is shared with copies of this request (see [BodyCache]).
      */
-    val forms: Map<String, List<String>> by lazyLoom {
-        val contentType = this.contentType ?: ""
-        when {
-            contentType.startsWith("application/x-www-form-urlencoded") -> {
-                val formString = text() ?: ""
-                QueryString.parse(formString)
-            }
-
-            contentType.startsWith("multipart/form-data") -> {
-                val map = mutableMapOf<String, MutableList<String>>()
-                parts.forEach { part ->
-                    if (part is FormField) {
-                        map.computeIfAbsent(part.name) { mutableListOf() }.add(part.value)
-                    }
+    val forms: Map<String, List<String>>
+        get() = bodyCache.forms.getOrCompute {
+            val contentType = this.contentType ?: ""
+            when {
+                contentType.startsWith("application/x-www-form-urlencoded") -> {
+                    val formString = text() ?: ""
+                    QueryString.parse(formString)
                 }
-                map
-            }
 
-            else -> emptyMap()
+                contentType.startsWith("multipart/form-data") -> {
+                    val map = mutableMapOf<String, MutableList<String>>()
+                    parts.forEach { part ->
+                        if (part is FormField) {
+                            map.computeIfAbsent(part.name) { mutableListOf() }.add(part.value)
+                        }
+                    }
+                    map
+                }
+
+                else -> emptyMap()
+            }
         }
-    }
 
     /** Maps form parameters to a typed object. */
     inline fun <reified T> forms(mapper: JsonMapper): T? = mapToClass(forms, T::class.java, mapper)
@@ -281,8 +308,9 @@ data class Request(
     // Multipart File
     // ========================================================================
 
-    /** Parsed multipart parts (evaluated lazily). */
-    private val parts: List<Part> by lazyLoom { multipartSupplier.invoke() }
+    /** Parsed multipart parts (evaluated lazily, cache shared with copies). */
+    private val parts: List<Part>
+        get() = bodyCache.parts.getOrCompute { multipartSupplier.invoke() }
 
     /** Returns all uploaded files with the given field name. */
     fun files(name: String): List<FilePart> = parts
@@ -308,8 +336,19 @@ data class Request(
     /** Remote address reported by the underlying server. */
     val remoteAddr = serverInfo.remoteAddr
 
-    /** Client IP address, resolved via proxy headers if present. */
-    val ip: String by lazy { getRealIp(headers) ?: remoteAddr }
+    /**
+     * Client IP address.
+     *
+     * By default this is simply [remoteAddr]: `X-Forwarded-For` is client-supplied
+     * and trivially forged, so it is only consulted when the server is explicitly
+     * configured with a trusted proxy count
+     * ([io.github.cymoo.colleen.ServerConfig.trustedProxyCount]). Otherwise
+     * rate limiting / audit logging keyed on this value could be bypassed by a
+     * spoofed header.
+     */
+    val ip: String by lazy {
+        resolveClientIp(headers, remoteAddr, serverInfo.trustedProxyCount)
+    }
 
     data class ServerInfo(
         val remoteAddr: String = "",
@@ -319,7 +358,9 @@ data class Request(
         val serverName: String = "localhost",
         val serverPort: Int = 8080,
         val isSecure: Boolean = false,
-        val protocol: String = "HTTP/1.1"
+        val protocol: String = "HTTP/1.1",
+        /** Number of trusted reverse proxies in front of the server (0 = trust none). */
+        val trustedProxyCount: Int = 0,
     )
 
     // ========================================================================
@@ -362,31 +403,42 @@ data class Request(
 
     companion object {
         /**
-         * Returns the client's real IP address.
+         * Resolves the client IP address, honoring at most [trustedProxyCount]
+         * reverse proxies.
          *
-         * The following headers are checked in order of priority:
-         * 1. X-Forwarded-For — standard proxy header, may contain multiple IPs (use the first one)
-         * 2. X-Real-IP — commonly used by Nginx
+         * Algorithm (standard "strip trusted proxies from the right"):
+         * 1. Build the hop chain: X-Forwarded-For entries + the direct peer address.
+         *    Each trusted proxy appends the address of ITS peer, so only the
+         *    rightmost [trustedProxyCount] entries are trustworthy — everything
+         *    to the left is client-controlled.
+         * 2. Remove [trustedProxyCount] entries from the right; the rightmost
+         *    remaining entry is the client address as seen by the outermost
+         *    trusted proxy.
+         *
+         * Falls back to X-Real-IP (commonly set by Nginx) when no X-Forwarded-For
+         * is present, and to [remoteAddr] when nothing else applies.
+         * With [trustedProxyCount] <= 0 the headers are ignored entirely — they
+         * are client-supplied and trivially forged.
          */
-        internal fun getRealIp(headers: Headers): String? {
-            val xForwardedFor = headers["x-forwarded-for"]
-            if (!xForwardedFor.isNullOrBlank()) {
-                // X-Forwarded-For may contain multiple IPs, e.g. "client, proxy1, proxy2"
-                // Use the first non-"unknown" IP
-                val firstIp = xForwardedFor.split(",")
+        internal fun resolveClientIp(headers: Headers, remoteAddr: String, trustedProxyCount: Int): String {
+            if (trustedProxyCount <= 0) return remoteAddr
+
+            val forwardedFor = headers["x-forwarded-for"]
+            if (!forwardedFor.isNullOrBlank()) {
+                val chain = forwardedFor.split(',')
                     .map { it.trim() }
-                    .firstOrNull { it.isNotBlank() && it != "unknown" }
-                if (!firstIp.isNullOrBlank()) {
-                    return firstIp
-                }
+                    .filter { it.isNotEmpty() && it != "unknown" } + remoteAddr
+
+                val clientIndex = (chain.size - 1 - trustedProxyCount).coerceAtLeast(0)
+                return chain[clientIndex]
             }
 
-            val ip = headers["x-real-ip"]
-            if (!ip.isNullOrBlank() && ip != "unknown") {
-                return ip
+            val realIp = headers["x-real-ip"]
+            if (!realIp.isNullOrBlank() && realIp != "unknown") {
+                return realIp
             }
 
-            return null
+            return remoteAddr
         }
     }
 
@@ -458,8 +510,10 @@ data class FilePart(
         consumed = true
 
         val target = Paths.get(path).normalize()
-        Files.createDirectories(target.parent)
-        
+        // parent is null for bare filenames like "upload.bin" (current directory)
+        target.parent?.let { Files.createDirectories(it) }
+
+
         try {
             inputStream.use { ins ->
                 Files.newOutputStream(target).use { out ->

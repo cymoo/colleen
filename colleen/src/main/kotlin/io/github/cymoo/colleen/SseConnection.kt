@@ -25,6 +25,9 @@ sealed class SseCloseReason {
     /** Client disconnected (IO error, broken pipe, etc.) */
     object ClientDisconnected : SseCloseReason()
 
+    /** Server is shutting down gracefully */
+    object ServerShutdown : SseCloseReason()
+
     /** Connection closed due to server-side error */
     data class Error(val cause: Throwable) : SseCloseReason()
 }
@@ -68,6 +71,9 @@ class SseConnection(private val writer: SseWriter) : AutoCloseable {
 
     @Volatile
     private var keepAliveTask: ScheduledFuture<*>? = null
+
+    /** True while a keep-alive write is in flight (see [keepAlive]). */
+    private val keepAlivePinging = AtomicBoolean(false)
 
     // ========================================================================
     // Send
@@ -148,7 +154,21 @@ class SseConnection(private val writer: SseWriter) : AutoCloseable {
 
             keepAliveTask = SseKeepAliveScheduler.scheduleAtFixedRate(
                 {
-                    if (!isClosed) runCatching { comment() }
+                    // comment() is a BLOCKING flush with backpressure. The scheduler
+                    // is a small pool shared by every SSE connection in the JVM, so
+                    // the write must run on a disposable virtual thread — a few stuck
+                    // clients would otherwise starve all other connections' pings.
+                    // Skip the tick if the previous ping is still in flight.
+                    if (isClosed) return@scheduleAtFixedRate
+                    if (!keepAlivePinging.compareAndSet(false, true)) return@scheduleAtFixedRate
+
+                    Thread.startVirtualThread {
+                        try {
+                            if (!isClosed) runCatching { comment() }
+                        } finally {
+                            keepAlivePinging.set(false)
+                        }
+                    }
                 },
                 interval.toMillis(),
                 interval.toMillis(),

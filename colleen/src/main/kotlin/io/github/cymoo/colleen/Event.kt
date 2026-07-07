@@ -240,6 +240,20 @@ class EventBus(val owner: Colleen) {
     }
 
     /**
+     * Returns true if emitting an event of [eventType] could reach any listener
+     * (exact type, catch-all `Event` listeners, or a parent bus via bubbling).
+     *
+     * This is a fast path allowing hot call sites to skip constructing event
+     * objects (and timing measurements) when nobody is listening. It may
+     * over-approximate for non-bubbling events, which only costs a no-op emit.
+     */
+    fun hasListeners(eventType: Class<out Event>): Boolean {
+        if (listeners[eventType]?.isNotEmpty() == true) return true
+        if (listeners[Event::class.java]?.isNotEmpty() == true) return true
+        return parentBus?.hasListeners(eventType) ?: false
+    }
+
+    /**
      * Emits an event on the current EventBus and optionally bubbles it to parent buses.
      *
      * Dispatch order:

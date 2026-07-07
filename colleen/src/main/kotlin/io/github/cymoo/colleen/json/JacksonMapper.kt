@@ -61,15 +61,17 @@ class JacksonMapper(
         config.dateFormat?.let { mapper.dateFormat = SimpleDateFormat(it) }
     }
 
+    // Strings are serialized as JSON string values (quoted + escaped), like any
+    // other type. Pre-serialized JSON must be wrapped in [RawJson] — the old
+    // pass-through-any-String behavior made it impossible to return a plain
+    // string as valid JSON (`ctx.json("hi")` produced the illegal body `hi`).
     override fun toJsonString(obj: Any): String = when (obj) {
-        // the default mapper treats strings as if they are already JSON
-        is String -> obj
+        is RawJson -> obj.json
         else -> mapper.writeValueAsString(obj)
     }
 
     override fun toJsonStream(obj: Any): InputStream = when (obj) {
-        // the default mapper treats strings as if they are already JSON
-        is String -> obj.byteInputStream()
+        is RawJson -> obj.json.byteInputStream()
         else -> inputStreamFactory.open { outputStream ->
             mapper.factory.createGenerator(outputStream).writeObject(obj)
         }
@@ -284,7 +286,8 @@ class JacksonMapper(
  * @param block Configuration block with ObjectMapper as receiver
  */
 fun Config.jackson(block: ObjectMapper.() -> Unit) {
-    val jacksonMapper =
+    val jacksonMapper = withJsonMapperLock {
         (jsonMapperInstance as? JacksonMapper) ?: createDefaultJsonMapper().also { jsonMapperInstance = it }
+    }
     jacksonMapper.mapper.block()
 }

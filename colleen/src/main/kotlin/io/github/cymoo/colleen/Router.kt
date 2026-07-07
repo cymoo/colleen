@@ -278,27 +278,69 @@ internal sealed class PathSegment {
         }
 
         /**
-         * Calculates priority for route matching.
-         * Higher priority = more specific match.
+         * Compares two patterns by matching specificity, segment by segment
+         * (lexicographically, from left to right).
          *
-         * Priority order: Static > Complex > Param > Wildcard
+         * Per-segment rank: Static > Complex > Param > END > Wildcard, where END
+         * means "the pattern has no segment at this position".
          *
-         * Examples:
-         * - /users/admin -> higher priority
-         * - /users/{id} -> lower priority
-         * - /files/{name}.txt -> higher than /files/{name}
+         * Ranking END above Wildcard is deliberate: patterns of different lengths
+         * can only both match the same request when the longer one ends in a
+         * wildcard that consumed zero segments, and in that case the exact-length
+         * route must win. E.g. with both `GET /users` and `GET /users/{path...}`
+         * registered, `GET /users` is served by the exact route.
+         *
+         * (A single folded number, weighted by pattern length, cannot express
+         * this — a longer wildcard pattern would always outrank a shorter exact
+         * one.)
+         *
+         * @return positive if [a] is more specific, negative if [b] is, 0 on a tie
          */
-        fun priority(segments: List<PathSegment>): Long {
-            var priority = 0L
-            for (segment in segments) {
-                priority = priority * 4 + when (segment) {
-                    is Static -> 3
-                    is Complex -> 2
-                    is Param -> 1
-                    is Wildcard -> 0
+        fun compareSpecificity(a: List<PathSegment>, b: List<PathSegment>): Int {
+            val length = maxOf(a.size, b.size)
+            for (i in 0 until length) {
+                val rankA = rank(a.getOrNull(i))
+                val rankB = rank(b.getOrNull(i))
+                if (rankA != rankB) return rankA.compareTo(rankB)
+            }
+            return 0
+        }
+
+        private fun rank(segment: PathSegment?): Int = when (segment) {
+            is Static -> 4
+            is Complex -> 3
+            is Param -> 2
+            null -> 1 // pattern ends here — beats a zero-segment wildcard match
+            is Wildcard -> 0
+        }
+
+        /**
+         * Checks whether two patterns have an equivalent matching shape,
+         * i.e. they accept exactly the same set of request paths
+         * (parameter names are irrelevant for matching).
+         *
+         * Used to warn about duplicate route registrations.
+         */
+        fun sameShape(a: List<PathSegment>, b: List<PathSegment>): Boolean {
+            if (a.size != b.size) return false
+            return a.zip(b).all { (x, y) ->
+                when (x) {
+                    is Static -> y is Static && x.value == y.value
+                    is Param -> y is Param
+                    is Wildcard -> y is Wildcard
+                    is Complex -> y is Complex && sameComplexShape(x, y)
                 }
             }
-            return priority
+        }
+
+        private fun sameComplexShape(a: Complex, b: Complex): Boolean {
+            if (a.parts.size != b.parts.size) return false
+            return a.parts.zip(b.parts).all { (x, y) ->
+                when (x) {
+                    is Complex.Part.Text -> y is Complex.Part.Text && x.value == y.value
+                    is Complex.Part.Param -> y is Complex.Part.Param
+                }
+            }
         }
 
         private data class ParamRange(val start: Int, val end: Int)
@@ -593,7 +635,7 @@ class RouteNode private constructor(
     val method: String,
     val path: String,
     val handler: RouteHandler,
-    private val segments: List<PathSegment>,
+    internal val segments: List<PathSegment>,
 ) {
     companion object {
         private val VALID_HTTP_METHODS = setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
@@ -623,9 +665,6 @@ class RouteNode private constructor(
             return method
         }
     }
-
-    // Routing priority (higher = more specific)
-    internal val priority: Long = PathSegment.priority(segments)
 
     /**
      * Matches request path (exact match).
@@ -789,7 +828,6 @@ class MountNode private constructor(
  * Core router that handles request dispatching.
  */
 internal class Router {
-    internal val controllers = CopyOnWriteArrayList<Pair<String, Any>>()
     internal val middlewares = CopyOnWriteArrayList<MiddlewareNode>()
     internal val routes = CopyOnWriteArrayList<RouteNode>()
     internal val mounts = CopyOnWriteArrayList<MountNode>()
@@ -810,8 +848,22 @@ internal class Router {
 
     /**
      * Registers a route handler.
+     *
+     * Warns when a route with an equivalent method + path shape already exists:
+     * the earlier registration always wins, so the new one would be unreachable.
      */
-    fun addRoute(node: RouteNode) = routes.add(node)
+    fun addRoute(node: RouteNode) {
+        routes.firstOrNull {
+            it.method == node.method && PathSegment.sameShape(it.segments, node.segments)
+        }?.let {
+            logger.warn(
+                "Route {} {} matches the same requests as the earlier route {} {}; " +
+                        "the earlier registration wins and the new handler is unreachable",
+                node.method, node.path, it.method, it.path
+            )
+        }
+        routes.add(node)
+    }
 
     /**
      * Registers a WebSocket route.
@@ -841,28 +893,30 @@ internal class Router {
      * @param obj the controller instance to register
      */
     fun addController(prefix: String, obj: Any) {
-        controllers.add(prefix to obj)
-
         val isKotlin = isKotlinInstance(obj)
         val controllerMeta = ControllerScanner.scan(obj)
 
         // Combine global prefix and controller-level base path
         val basePath = UrlPath.join(prefix, controllerMeta.basePath)
-        val obj = controllerMeta.obj
+        val controller = controllerMeta.obj
 
-        // Register controller-level middlewares
-        // NOTE: Middlewares registered as Prefix middlewares, affecting unrelated routes.
-        // Use PerRoute middleware registration instead?
-        controllerMeta.middlewares.forEach {
-            addMiddleware(MiddlewareNode.Prefix.of(basePath) { ctx, next ->
-                it.invoke(obj, ctx, next)
-            })
+        // Register controller-level middlewares (from @Use), scoped to the
+        // controller's own routes via PerRoute registration. A basePath-prefix
+        // registration would also affect unrelated routes that happen to share
+        // the prefix (e.g. two controllers mounted at the same base path).
+        controllerMeta.middlewares.forEach { middleware ->
+            controllerMeta.routes.forEach { route ->
+                val path = UrlPath.join(basePath, route.path)
+                addMiddleware(MiddlewareNode.PerRoute.of(route.method, path) { ctx, next ->
+                    middleware.invoke(controller, ctx, next)
+                })
+            }
         }
 
         // Register controller-level WebSocket middlewares (from @WsUse)
         controllerMeta.wsMiddlewares.forEach {
             addWsMiddleware(MiddlewareNode.Prefix.of(basePath) { ctx, next ->
-                it.invoke(obj, ctx, next)
+                it.invoke(controller, ctx, next)
             })
         }
 
@@ -874,7 +928,7 @@ internal class Router {
                     RouteNode.of(
                         it.method,
                         path,
-                        RouteHandler.KFunction(it.handler.kotlinFunction!!, obj)
+                        RouteHandler.KFunction(it.handler.kotlinFunction!!, controller)
                     )
                 )
             } else {
@@ -882,7 +936,7 @@ internal class Router {
                     RouteNode.of(
                         it.method,
                         path,
-                        RouteHandler.JavaMethod(it.handler, obj)
+                        RouteHandler.JavaMethod(it.handler, controller)
                     )
                 )
             }
@@ -892,7 +946,7 @@ internal class Router {
         controllerMeta.wsRoutes.forEach {
             val path = UrlPath.join(basePath, it.path)
             addWsRoute(WsRouteNode.of(path) { conn ->
-                it.handler.invoke(obj, conn)
+                it.handler.invoke(controller, conn)
             })
         }
     }
@@ -942,9 +996,9 @@ internal class Router {
 
         if (matchedMounts.isNotEmpty()) {
             executeMiddlewareChain(ctx, matchedMiddlewares) {
-                var notFound = false
-                val allowedMethods = findAllowedMethods(ctx.path).toMutableSet()
-                var methodNotAllowed = allowedMethods.isNotEmpty()
+                var handled = false
+                var sawMethodNotAllowed = false
+                val allowedFromMounts = mutableSetOf<String>()
                 for ((mount, matchResult) in matchedMounts) {
                     try {
                         val subCtx = executeMount(ctx, mount, matchResult)
@@ -953,26 +1007,26 @@ internal class Router {
                         if (subPattern != null) {
                             ctx.pattern = UrlPath.join(mount.prefix, subPattern)
                         }
-                        notFound = false
-                        methodNotAllowed = false
                         // This sub-app handled successfully
+                        handled = true
                         break
                     } catch (_: NotFound) {
-                        notFound = true
                         // This sub-app returned 404, try next mount
                         continue
                     } catch (e: MethodNotAllowed) {
-                        notFound = false
-                        methodNotAllowed = true
-                        allowedMethods.addAll(e.allowedMethods)
+                        sawMethodNotAllowed = true
+                        allowedFromMounts.addAll(e.allowedMethods)
                         // This sub-app returned 405, try next mount
                         continue
                     }
                 }
-                if (methodNotAllowed) {
-                    throw RouteMethodNotAllowed(ctx.fullPath, ctx.method, allowedMethods)
-                }
-                if (notFound) {
+                if (!handled) {
+                    // Computed lazily: most requests are served by a mount and never
+                    // need this full route-table scan.
+                    val localAllowed = findAllowedMethods(ctx.path)
+                    if (sawMethodNotAllowed || localAllowed.isNotEmpty()) {
+                        throw RouteMethodNotAllowed(ctx.fullPath, ctx.method, localAllowed + allowedFromMounts)
+                    }
                     throw RouteNotFound(ctx.fullPath, ctx.method)
                 }
             }
@@ -1014,7 +1068,8 @@ internal class Router {
             val matchResult = route.matchesPathAndMethod(ctx)
             if (!matchResult.matched) continue
 
-            if (best == null || route.priority > best.first.priority) {
+            // Strictly-greater keeps the first-registered route on a tie
+            if (best == null || PathSegment.compareSpecificity(route.segments, best.first.segments) > 0) {
                 best = route to matchResult
             }
         }
@@ -1139,16 +1194,13 @@ internal class Router {
      */
     private fun findBestMatchedWsRoute(ctx: Context): Pair<WsRouteNode, MatchResult>? {
         var best: Pair<WsRouteNode, MatchResult>? = null
-        var bestPriority = Long.MIN_VALUE
 
         for (wsRoute in wsRoutes) {
             val matchResult = PathMatcher.match(ctx.path, wsRoute.segments, exactMatch = true)
             if (!matchResult.matched) continue
 
-            val priority = wsRoute.priority
-            if (best == null || priority > bestPriority) {
+            if (best == null || PathSegment.compareSpecificity(wsRoute.segments, best.first.segments) > 0) {
                 best = wsRoute to matchResult
-                bestPriority = priority
             }
         }
 
@@ -1209,9 +1261,18 @@ internal class Router {
             }
 
             return runCatching {
-                ctx.app.eventBus.emit(Event.MiddlewareExecuting(ctx, node))
-                val duration = measureTime { node.middleware(ctx, next) }
-                ctx.app.eventBus.emit(Event.MiddlewareExecuted(ctx, node, duration))
+                // Skip event construction and timing entirely when nobody listens —
+                // this runs once per middleware per request.
+                val bus = ctx.app.eventBus
+                if (bus.hasListeners(Event.MiddlewareExecuting::class.java) ||
+                    bus.hasListeners(Event.MiddlewareExecuted::class.java)
+                ) {
+                    bus.emit(Event.MiddlewareExecuting(ctx, node))
+                    val duration = measureTime { node.middleware(ctx, next) }
+                    bus.emit(Event.MiddlewareExecuted(ctx, node, duration))
+                } else {
+                    node.middleware(ctx, next)
+                }
             }.exceptionOrNull().let { currentError ->
                 val downstream = downstreamErrorState
 
@@ -1243,13 +1304,22 @@ internal class Router {
         }
 
         // Execute handler
-        ctx.app.eventBus.emit(Event.HandlerExecuting(ctx, route))
+        val bus = ctx.app.eventBus
+        val emitEvents = bus.hasListeners(Event.HandlerExecuting::class.java) ||
+                bus.hasListeners(Event.HandlerExecuted::class.java)
+
+        if (emitEvents) bus.emit(Event.HandlerExecuting(ctx, route))
         try {
-            val duration = measureTime {
+            if (emitEvents) {
+                val duration = measureTime {
+                    val result = route.handler(ctx)
+                    ctx.response.applyHandlerResult(result)
+                }
+                bus.emit(Event.HandlerExecuted(ctx, route, duration))
+            } else {
                 val result = route.handler(ctx)
                 ctx.response.applyHandlerResult(result)
             }
-            ctx.app.eventBus.emit(Event.HandlerExecuted(ctx, route, duration))
         } catch (err: ExtractionException) {
             throw BadRequest(message = err.message ?: "Bad Request", cause = err)
         }
@@ -1270,10 +1340,17 @@ internal class Router {
         // Create sub-context
         val subCtx = ctx.createSubContext(path = subPath, app = mount.app)
 
-        ctx.app.eventBus.emit(Event.SubAppExecuting(ctx, mount))
-        // Recursively call sub-app
-        val duration = measureTime { mount.app.handleRequest(subCtx) }
-        ctx.app.eventBus.emit(Event.SubAppExecuted(ctx, mount, duration))
+        val bus = ctx.app.eventBus
+        if (bus.hasListeners(Event.SubAppExecuting::class.java) ||
+            bus.hasListeners(Event.SubAppExecuted::class.java)
+        ) {
+            bus.emit(Event.SubAppExecuting(ctx, mount))
+            // Recursively call sub-app
+            val duration = measureTime { mount.app.handleRequest(subCtx) }
+            bus.emit(Event.SubAppExecuted(ctx, mount, duration))
+        } else {
+            mount.app.handleRequest(subCtx)
+        }
 
         return subCtx
     }
@@ -1294,7 +1371,22 @@ class RouteBuilder internal constructor(
     fun use(prefix: String, middleware: Middleware) =
         app.use(UrlPath.join(this@RouteBuilder.prefix, prefix), middleware)
 
-    fun use(predicate: (Context) -> Boolean, middleware: Middleware) = app.use(predicate, middleware)
+    /**
+     * Registers a conditional middleware scoped to this group's prefix,
+     * consistent with the other `use` overloads — the middleware never runs
+     * for requests outside the group.
+     */
+    fun use(predicate: (Context) -> Boolean, middleware: Middleware) {
+        if (prefix.isEmpty() || prefix == "/") {
+            app.use(predicate, middleware)
+            return
+        }
+        val prefixSegments = PathSegment.parseAll(UrlPath.normalize(prefix))
+        app.use(
+            { ctx -> PathMatcher.match(ctx.path, prefixSegments, exactMatch = false).matched && predicate(ctx) },
+            middleware
+        )
+    }
 
     fun addController(obj: Any) = app.addController(prefix, obj)
     fun addController(prefix: String, obj: Any) = app.addController(UrlPath.join(this@RouteBuilder.prefix, prefix), obj)

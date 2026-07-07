@@ -65,7 +65,8 @@ class CookieTest {
         }
 
         @Test
-        fun `should not decode URL-encoded cookie values`() {
+        fun `should decode URL-encoded cookie values`() {
+            // buildSetCookie percent-encodes values; parse mirrors that
             // Arrange
             val cookieHeader = "message=hello%20world; data=foo%3Dbar"
 
@@ -73,8 +74,8 @@ class CookieTest {
             val result = Cookie.parse(cookieHeader)
 
             // Assert
-            assertEquals("hello%20world", result["message"])
-            assertEquals("foo%3Dbar", result["data"])
+            assertEquals("hello world", result["message"])
+            assertEquals("foo=bar", result["data"])
         }
 
         @Test
@@ -222,7 +223,9 @@ class CookieTest {
         }
 
         @Test
-        fun `should not URL-encode cookie value`() {
+        fun `should URL-encode cookie value`() {
+            // Raw spaces are illegal in a Set-Cookie value (RFC 6265); the
+            // builder percent-encodes so arbitrary strings round-trip safely
             // Arrange
             val name = "message"
             val value = "hello world"
@@ -240,7 +243,7 @@ class CookieTest {
             )
 
             // Assert
-            assertTrue(result.startsWith("message=hello world"))
+            assertTrue(result.startsWith("message=hello%20world"))
         }
 
         @Test
@@ -746,14 +749,21 @@ class CookieTest {
         }
 
         @Test
-        fun `should reject value with semicolon`() {
+        fun `should accept value with semicolon (encoded on write)`() {
+            // Semicolons no longer need rejecting: buildSetCookie encodes them
+            // so they can never act as a cookie-pair delimiter
             // Arrange
             val value = "hello;world"
 
             // Act & Assert
-            assertThrows<IllegalArgumentException> {
-                Cookie.validateValue(value)
-            }
+            Cookie.validateValue(value) // must not throw
+
+            val header = Cookie.buildSetCookie(
+                name = "k", value = value, maxAge = null, path = null,
+                domain = null, secure = false, httpOnly = false, sameSite = null
+            )
+            assertTrue(header.startsWith("k=hello%3Bworld"))
+            assertEquals("hello;world", Cookie.parse("k=hello%3Bworld")["k"])
         }
 
         @ParameterizedTest

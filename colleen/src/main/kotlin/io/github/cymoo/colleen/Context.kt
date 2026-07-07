@@ -99,13 +99,15 @@ data class Context(
     /**
      * Returns the state value for the given key.
      *
-     * It requires the state value to be non-null due to the type constraint.
-     * Use [getStateOrNull] if you need to retrieve nullable state values.
+     * The type constraint requires a non-null value; note however that due to
+     * generic type erasure, a key stored with a null value is returned as null
+     * at the call site rather than failing here (the unchecked cast cannot
+     * detect it). Use [getStateOrNull] when null values are expected, and
+     * [hasState] to distinguish "absent" from "present but null".
      *
      * @param key the state key
-     * @return the non-null state value
+     * @return the state value
      * @throws NoSuchElementException if the state key does not exist
-     * @throws NullPointerException if the value is null
      */
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> getState(key: String): T {
@@ -569,6 +571,10 @@ data class Context(
         val resource = resolveFileStream(path, classpathOnly, baseDir)
 
         if (resource.notModifiedSince(header("if-modified-since"))) {
+            // RFC 9110 §15.4.5: a 304 should carry the same validator/caching
+            // headers the 200 would have had.
+            resource.lastModifiedHeader()?.let { header("Last-Modified", it) }
+            if (maxAge > 0) header("Cache-Control", "public, max-age=$maxAge")
             status(304).empty()
             return
         }
@@ -628,8 +634,13 @@ data class Context(
      */
     internal fun createSubContext(path: String, app: Colleen): Context {
         return Context(
+            // copy() shares the body cache on purpose — see Request.BodyCache
             request = request.copy(path = path),
-            response = response.copy(),
+            // Headers must be deep-copied: a data-class copy() shares the Headers
+            // reference, so headers written by a sub-app that later fails with 404
+            // (mount fallthrough) would leak into the parent response. On success
+            // the sub-response is merged back explicitly (Response.merge).
+            response = response.copy(headers = response.headers.copy()),
             app = app,
             parentContext = this,
         )
