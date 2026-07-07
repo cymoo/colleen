@@ -32,8 +32,12 @@ import java.nio.file.Paths
  * Framework integrators must ensure that:
  * - Either the request is treated as a regular body (JSON / form),
  * - Or it is parsed as multipart, but never both.
+ *
+ * Deliberately a plain class (not a data class): the one-shot [stream] and the
+ * shared body cache make structural `equals`/`copy` semantics meaningless or
+ * dangerous — the only sanctioned copy is the internal [copyWithPath].
  */
-data class Request @JvmOverloads constructor(
+class Request @JvmOverloads constructor(
     val method: String,
     val path: String,
     val queryString: String = "",
@@ -47,23 +51,73 @@ data class Request @JvmOverloads constructor(
      * Caches for everything derived from the one-shot request [stream].
      *
      * This is a constructor parameter (not a class-body property) on purpose:
-     * `copy()` then shares the SAME cache between the original and the copy.
-     * Mounted sub-apps rewrite the path via `request.copy(path=...)`, and since
-     * the underlying stream can only be consumed once, parent and child must
-     * see one shared body — otherwise whichever side reads second would get an
-     * already-closed, empty stream.
+     * [copyWithPath] passes it along, sharing the SAME cache between the
+     * original and the copy. Mounted sub-apps rewrite the path that way, and
+     * since the underlying stream can only be consumed once, parent and child
+     * must see one shared body — otherwise whichever side reads second would
+     * get an already-closed, empty stream.
      *
      * [OnceCell] is also thread-safe, so a request captured by an asynchronous
      * consumer (SSE/WS handler) cannot double-initialize these caches.
      *
-     * The class itself is public only because the (public) data-class
-     * constructor must reference it; the internal constructor keeps it opaque.
+     * The class itself is public only because the public constructor must
+     * reference it; the internal constructor keeps it opaque.
      */
     class BodyCache internal constructor() {
         internal val body = OnceCell<ByteArray?>()
         internal val forms = OnceCell<Map<String, List<String>>>()
         internal val parts = OnceCell<List<Part>>()
     }
+
+    /**
+     * Creates a copy of this request with a rewritten [path], used when a
+     * mounted sub-app takes over (the mount prefix is stripped).
+     *
+     * This is THE single place defining what is shared vs. copied:
+     * - Shared by reference: [headers], [stream], [serverInfo],
+     *   [multipartSupplier] and [bodyCache] — the stream is one-shot, so all
+     *   copies must observe the same cached body/forms/parts.
+     * - Replaced: [path]. Everything else is immutable.
+     */
+    internal fun copyWithPath(newPath: String): Request = Request(
+        method = method,
+        path = newPath,
+        queryString = queryString,
+        headers = headers,
+        stream = stream,
+        serverInfo = serverInfo,
+        multipartSupplier = multipartSupplier,
+        bodyCache = bodyCache,
+    )
+
+    /**
+     * Returns a copy of this request with a different HTTP [method] (uppercased),
+     * sharing everything else — headers, stream, server info and the one-shot
+     * body cache — with the original.
+     *
+     * This is the supported way to implement method-override middleware, e.g.
+     * honoring `X-HTTP-Method-Override` by replacing the request inside an
+     * [Event.RequestReceived] listener:
+     *
+     * ```kotlin
+     * app.on<Event.RequestReceived> { event ->
+     *     val override = event.request.header("x-http-method-override")
+     *     if (override != null) event.request = event.request.withMethod(override)
+     * }
+     * ```
+     */
+    fun withMethod(newMethod: String): Request = Request(
+        method = newMethod.uppercase(),
+        path = path,
+        queryString = queryString,
+        headers = headers,
+        stream = stream,
+        serverInfo = serverInfo,
+        multipartSupplier = multipartSupplier,
+        bodyCache = bodyCache,
+    )
+
+    override fun toString() = "Request(method=$method, path=$path)"
 
     /** Full request URI (path + query string). */
     val uri: String by lazy { if (queryString.isEmpty()) path else "$path?$queryString" }

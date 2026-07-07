@@ -35,7 +35,7 @@ fun Colleen.httpMethodOverride(
         ) ?: return@on
 
         logger.debug("HTTP method overridden: {} -> {}", request.method, overriddenMethod)
-        event.request = event.request.copy(method = overriddenMethod)
+        event.request = event.request.withMethod(overriddenMethod)
     }
 }
 

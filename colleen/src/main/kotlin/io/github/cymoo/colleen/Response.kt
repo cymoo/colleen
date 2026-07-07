@@ -34,14 +34,39 @@ import kotlin.time.Duration
  *   fully controlled by the handler.
  *
  * This type is mutable and not thread-safe.
+ *
+ * Deliberately a plain class (not a data class): a response has identity and
+ * mutable state, so structural `equals`/`copy` semantics would be misleading —
+ * the only sanctioned copy is the internal [copyForSubApp].
  */
-data class Response(
+class Response @JvmOverloads constructor(
     var status: Int = 200,
     val headers: Headers = Headers(),
     var body: ResponseBody = ResponseBody.Unset,
 ) {
     /** Whether the response body has been explicitly set */
     val isBodySet get() = body !is ResponseBody.Unset
+
+    /**
+     * Copy handed to a mounted sub-app.
+     *
+     * This is THE single place defining what is shared vs. copied:
+     * - [status] is copied by value; the [body] REFERENCE is carried over
+     *   as-is (the sub-app starts from the parent's view and typically
+     *   replaces the body wholesale rather than mutating its contents).
+     * - Deep-copied: [headers] — a sub-app that fails with 404 (mount
+     *   fallthrough) must not leak headers into the parent response; on
+     *   success the sub-response is merged back explicitly via [merge].
+     * - NOT carried over: [materializedBody] and [onResponseSent] — those
+     *   belong to the write phase of the parent exchange.
+     */
+    internal fun copyForSubApp(): Response = Response(
+        status = status,
+        headers = headers.copy(),
+        body = body,
+    )
+
+    override fun toString() = "Response(status=$status, body=${body::class.simpleName})"
 
     /** Materialized response body, ready to be written by the server adapter. */
     var materializedBody: RawResponseBody? = null
