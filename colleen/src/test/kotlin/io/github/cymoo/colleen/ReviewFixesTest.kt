@@ -45,7 +45,8 @@ class ReviewFixesTest {
             val response = TestClient(app).post("/resource").send()
 
             assertEquals(405, response.status)
-            assertEquals("GET, PUT", response.header("Allow"))
+            // HEAD/OPTIONS are served automatically, so they appear in Allow too
+            assertEquals("GET, HEAD, OPTIONS, PUT", response.header("Allow"))
         }
 
         @Test

@@ -157,6 +157,7 @@ class IngressE2ETest {
         val response = client.send(request, HttpResponse.BodyHandlers.ofString())
 
         assertEquals(405, response.statusCode())
-        assertEquals("GET", response.headers().firstValue("Allow").orElse(null))
+        // HEAD/OPTIONS are served automatically, so they appear in Allow too
+        assertEquals("GET, HEAD, OPTIONS", response.headers().firstValue("Allow").orElse(null))
     }
 }

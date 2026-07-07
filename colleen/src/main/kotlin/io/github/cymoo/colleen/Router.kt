@@ -675,9 +675,12 @@ class RouteNode private constructor(
 
     /**
      * Matches both path and HTTP method.
+     *
+     * @param requestMethod the method to match against; defaults to the request's
+     *        own method, but can be overridden (e.g. HEAD falling back to GET)
      */
-    internal fun matchesPathAndMethod(ctx: Context): MatchResult {
-        if (method != "*" && method != ctx.method) {
+    internal fun matchesPathAndMethod(ctx: Context, requestMethod: String = ctx.method): MatchResult {
+        if (method != "*" && method != requestMethod) {
             return MatchResult.NO_MATCH
         }
 
@@ -979,8 +982,12 @@ internal class Router {
         // 1. Collect matching middlewares
         val matchedMiddlewares = findMatchedMiddlewares(ctx)
 
-        // 2. Try to match routes
+        // 2. Try to match routes.
+        // RFC 9110 §9.3.2: HEAD is GET without a response body, so when no
+        // explicit HEAD route exists the GET route serves it — the server layer
+        // suppresses the body at write time.
         val matchedRoute = findBestMatchedRoute(ctx)
+            ?: if (ctx.method == "HEAD") findBestMatchedRoute(ctx, "GET") else null
 
         if (matchedRoute != null) {
             val (route, matchResult) = matchedRoute
@@ -1025,7 +1032,12 @@ internal class Router {
                     // need this full route-table scan.
                     val localAllowed = findAllowedMethods(ctx.path)
                     if (sawMethodNotAllowed || localAllowed.isNotEmpty()) {
-                        throw RouteMethodNotAllowed(ctx.fullPath, ctx.method, localAllowed + allowedFromMounts)
+                        val allowed = localAllowed + allowedFromMounts
+                        if (ctx.method == "OPTIONS") {
+                            respondAutoOptions(ctx, allowed)
+                            return@executeMiddlewareChain
+                        }
+                        throw RouteMethodNotAllowed(ctx.fullPath, ctx.method, allowed)
                     }
                     throw RouteNotFound(ctx.fullPath, ctx.method)
                 }
@@ -1036,12 +1048,30 @@ internal class Router {
                 //  Check for 405: path matches but method doesn't
                 val allowedMethods = findAllowedMethods(ctx.path)
                 if (allowedMethods.isNotEmpty()) {
+                    if (ctx.method == "OPTIONS") {
+                        respondAutoOptions(ctx, allowedMethods)
+                        return@executeMiddlewareChain
+                    }
                     throw RouteMethodNotAllowed(ctx.fullPath, ctx.method, allowedMethods)
                 } else {
                     throw RouteNotFound(ctx.fullPath, ctx.method)
                 }
             }
         }
+    }
+
+    /**
+     * Answers an OPTIONS request for a path that has registered routes but no
+     * explicit OPTIONS handler: 204 with the Allow header (RFC 9110 §9.3.7).
+     *
+     * Explicit OPTIONS routes always win (they match before this fallback), and
+     * middleware that handles OPTIONS itself (e.g. CORS preflight short-circuits
+     * without calling next()) never reaches this point.
+     */
+    private fun respondAutoOptions(ctx: Context, allowedMethods: Set<String>) {
+        ctx.response.status(204)
+        ctx.response.header("Allow", allowedMethods.sorted().joinToString(", "))
+        ctx.response.body = ResponseBody.Empty
     }
 
     // ========================================================================
@@ -1060,12 +1090,14 @@ internal class Router {
 
     /**
      * Finds the first and most specific matching route.
+     *
+     * @param method the HTTP method to match; defaults to the request's method
      */
-    private fun findBestMatchedRoute(ctx: Context): Pair<RouteNode, MatchResult>? {
+    private fun findBestMatchedRoute(ctx: Context, method: String = ctx.method): Pair<RouteNode, MatchResult>? {
         var best: Pair<RouteNode, MatchResult>? = null
 
         for (route in routes) {
-            val matchResult = route.matchesPathAndMethod(ctx)
+            val matchResult = route.matchesPathAndMethod(ctx, method)
             if (!matchResult.matched) continue
 
             // Strictly-greater keeps the first-registered route on a tie
@@ -1094,15 +1126,26 @@ internal class Router {
     }
 
     /**
-     * Finds allowed HTTP methods for a given path (for 405 handling).
+     * Finds allowed HTTP methods for a given path (for 405 handling and the
+     * automatic OPTIONS response).
      * If a wildcard ("*") route matches, all standard methods are allowed.
+     *
+     * Methods served automatically are included: HEAD whenever GET is present
+     * (HEAD falls back to the GET route) and OPTIONS whenever anything matches
+     * (answered with this very Allow set).
      */
     private fun findAllowedMethods(path: String): Set<String> {
         val matched = routes.filter { it.matchesPath(path).matched }
         if (matched.any { it.method == "*" }) {
             return setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
         }
-        return matched.map { it.method }.toSet()
+
+        val methods = matched.mapTo(mutableSetOf()) { it.method }
+        if (methods.isEmpty()) return methods
+
+        if ("GET" in methods) methods.add("HEAD")
+        methods.add("OPTIONS")
+        return methods
     }
 
     // ========================================================================
