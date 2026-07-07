@@ -2,6 +2,8 @@ package io.github.cymoo.colleen
 
 import io.github.cymoo.colleen.util.TypeRef
 import io.github.cymoo.colleen.util.http.FileResponse
+import io.github.cymoo.colleen.util.http.RangeOutcome
+import io.github.cymoo.colleen.util.http.RangeSupport
 import io.github.cymoo.colleen.util.http.UrlPath
 import io.github.cymoo.colleen.util.lastModifiedHeader
 import io.github.cymoo.colleen.util.notModifiedSince
@@ -581,15 +583,43 @@ data class Context(
 
         val ct = contentType ?: FileResponse.inferContentType(resource.name)
         val name = filename ?: resource.name
+        val lastModified = resource.lastModifiedHeader()
 
         response.apply {
             header("Content-Type", ct)
             header("Content-Disposition", FileResponse.buildContentDisposition(name, attachment))
             header("X-Content-Type-Options", "nosniff")
-            if (resource.length >= 0) header("Content-Length", resource.length.toString())
-            resource.lastModifiedHeader()?.let { header("Last-Modified", it) }
+            lastModified?.let { header("Last-Modified", it) }
             if (maxAge > 0) header("Cache-Control", "public, max-age=$maxAge")
-            body = ResponseBody.Stream(resource.open())
+            if (resource.length >= 0) header("Accept-Ranges", "bytes")
+
+            when (val outcome = RangeSupport.evaluate(
+                method = this@Context.method,
+                rangeHeader = this@Context.header("range"),
+                ifRangeHeader = this@Context.header("if-range"),
+                lastModifiedHeader = lastModified,
+                totalLength = resource.length,
+            )) {
+                is RangeOutcome.Partial -> {
+                    status = 206
+                    header("Content-Range", outcome.contentRange)
+                    header("Content-Length", outcome.length.toString())
+                    body = ResponseBody.Stream(
+                        RangeSupport.openSlice(resource.open, outcome.start, outcome.length)
+                    )
+                }
+
+                is RangeOutcome.Unsatisfiable -> {
+                    status = 416
+                    header("Content-Range", outcome.contentRange)
+                    body = ResponseBody.Empty
+                }
+
+                is RangeOutcome.Full -> {
+                    if (resource.length >= 0) header("Content-Length", resource.length.toString())
+                    body = ResponseBody.Stream(resource.open())
+                }
+            }
         }
     }
 

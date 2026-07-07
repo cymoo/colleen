@@ -3,6 +3,8 @@ package io.github.cymoo.colleen.middleware
 import io.github.cymoo.colleen.*
 import io.github.cymoo.colleen.util.ResolvedResource
 import io.github.cymoo.colleen.util.http.FileResponse
+import io.github.cymoo.colleen.util.http.RangeOutcome
+import io.github.cymoo.colleen.util.http.RangeSupport
 import io.github.cymoo.colleen.util.lastModifiedHeader
 import io.github.cymoo.colleen.util.notModifiedSince
 import java.io.File
@@ -102,6 +104,7 @@ private fun classPathResolver(base: String, classLoader: ClassLoader): Resolver 
  *
  * Features:
  * - GET / HEAD support with correct 304 Not Modified handling
+ * - Single-range requests (`Range: bytes=...`) with 206/416 and If-Range support
  * - Dot-file access control ([DotFilesPolicy])
  * - Automatic directory index resolution
  * - Extension probing (e.g. serve `/about` as `about.html`)
@@ -195,14 +198,45 @@ class ServeStatic @JvmOverloads constructor(
     /** Sets response headers and streams the resource body (omitted for HEAD requests). */
     private fun serveResource(ctx: Context, resource: ResolvedResource) {
         val contentType = FileResponse.inferContentType(resource.name)
+        val lastModified = resource.lastModifiedHeader()
+
         ctx.response.apply {
             header("Content-Type", contentType)
-            if (resource.length >= 0) header("Content-Length", resource.length.toString())
             header("X-Content-Type-Options", "nosniff")
             if (maxAge > 0) header("Cache-Control", "public, max-age=$maxAge")
-            resource.lastModifiedHeader()?.let { header("Last-Modified", it) }
+            lastModified?.let { header("Last-Modified", it) }
+            if (resource.length >= 0) header("Accept-Ranges", "bytes")
         }
-        if (ctx.method != "HEAD") ctx.stream(resource.open(), contentType)
+
+        when (val outcome = RangeSupport.evaluate(
+            method = ctx.method,
+            rangeHeader = ctx.header("range"),
+            ifRangeHeader = ctx.header("if-range"),
+            lastModifiedHeader = lastModified,
+            totalLength = resource.length,
+        )) {
+            is RangeOutcome.Partial -> {
+                ctx.response.status = 206
+                ctx.response.header("Content-Range", outcome.contentRange)
+                ctx.response.header("Content-Length", outcome.length.toString())
+                ctx.response.body = ResponseBody.Stream(
+                    RangeSupport.openSlice(resource.open, outcome.start, outcome.length)
+                )
+            }
+
+            is RangeOutcome.Unsatisfiable -> {
+                ctx.response.status = 416
+                ctx.response.header("Content-Range", outcome.contentRange)
+                ctx.response.body = ResponseBody.Empty
+            }
+
+            is RangeOutcome.Full -> {
+                ctx.response.apply {
+                    if (resource.length >= 0) header("Content-Length", resource.length.toString())
+                }
+                if (ctx.method != "HEAD") ctx.stream(resource.open(), contentType)
+            }
+        }
     }
 
     private fun handleNotFound(next: Next) = if (fallthrough) next() else throw NotFound()

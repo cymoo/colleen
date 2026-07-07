@@ -961,6 +961,9 @@ app.config {
 - **全局中间件**：每个全局中间件都会处理每个请求。能使用前缀中间件时优先使用前缀。
 - **结构化日志**：需要最终状态码、耗时、发送字节数时，优先使用 `Event.ResponseSent`。
 - **静态文件**：路径包含用户输入时，使用 `sendFile(..., baseDir = "...")` 或 `ServeStatic`。
+  两者都支持单一范围请求（`Range: bytes=...`），含 206/416 与 `If-Range`，并通过
+  `Accept-Ranges: bytes` 声明——视频拖动与断点续传开箱即用。多范围请求按 RFC 9110
+  允许的方式回退为完整响应。
 - **TLS / HTTP/2**：Colleen 有意只提供纯 HTTP。请在 Nginx、Caddy 等反向代理上终结
   TLS（及 HTTP/2），并设置 `server { trustedProxyCount = 1 }`（你所控制的代理层数），
   这样 `Request.ip`、`isSecure` 与 HSTS 才能基于 `X-Forwarded-For` /
