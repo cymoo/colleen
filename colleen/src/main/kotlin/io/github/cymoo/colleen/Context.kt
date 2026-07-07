@@ -29,8 +29,12 @@ import kotlin.reflect.KClass
  *     ctx.json(mapOf("id" to id))
  * }
  * ```
+ *
+ * Deliberately a plain class (not a data class): a context has identity and
+ * request-scoped mutable state, so structural `equals`/`copy` would be
+ * misleading — sub-contexts are created via the internal [createSubContext].
  */
-data class Context(
+class Context(
     /**
      * The HTTP request object containing method, path, headers, and body.
      */
@@ -633,14 +637,13 @@ data class Context(
      * @return a new context with the current context as parent
      */
     internal fun createSubContext(path: String, app: Colleen): Context {
+        // The share-vs-copy semantics live with the classes themselves:
+        // Request.copyWithPath shares the one-shot body cache, and
+        // Response.copyForSubApp deep-copies headers so a failing sub-app
+        // cannot leak them into the parent response.
         return Context(
-            // copy() shares the body cache on purpose — see Request.BodyCache
-            request = request.copy(path = path),
-            // Headers must be deep-copied: a data-class copy() shares the Headers
-            // reference, so headers written by a sub-app that later fails with 404
-            // (mount fallthrough) would leak into the parent response. On success
-            // the sub-response is merged back explicitly (Response.merge).
-            response = response.copy(headers = response.headers.copy()),
+            request = request.copyWithPath(path),
+            response = response.copyForSubApp(),
             app = app,
             parentContext = this,
         )

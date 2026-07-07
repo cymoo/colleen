@@ -103,7 +103,7 @@
 | 1.10 / 1.11 | 路由匹配热路径优化（split 复用、索引） | **不做**：性能优化类，当前无瓶颈 |
 | 1.19 / 1.22 | WS 与 HTTP 中间件时序、尾斜杠策略、复杂段非回溯语义、单次解码约定 | **已完成**：README / README-zh 已补充（路由约定小节 + WS 时序小节 + 生产建议） |
 | 1.21 | 自动 HEAD / 自动 OPTIONS | **待办**：本 PR 提交后新开独立 PR |
-| 2.10 | Context/Request/Response 改普通 class | **暂不动**：data class 隐患点已消除大半，后续要改也方便 |
+| 2.10 | Context/Request/Response 改普通 class | **已完成**：三个类改为普通 class，共享/复制语义集中在 `Request.copyWithPath` / `Response.copyForSubApp` 两处并注释；公开的 copy/equals/componentN 移除（breaking） |
 | 2.11(部分) | SSE `Connection: keep-alive` 对 h2 不合法 | **暂不动**（当前仅 HTTP/1.1 无实际影响）；h2 改造思路见 PR 讨论。cookie `secure`/`httpOnly` 默认值确定**不改** |
 | 2.13 / 5.8 | Range / 206 断点续传 | **待办**：本 PR 提交后新开独立 PR |
 | 3.4 | SSE `close()` 可能被卡死的 write 拖住 | **已提 issue [#25](https://github.com/cymoo/colleen/issues/25)**（含两个候选方案：XNIO WRITE_TIMEOUT / close 与 write 解耦） |
