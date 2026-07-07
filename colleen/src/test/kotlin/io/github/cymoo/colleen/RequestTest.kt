@@ -658,6 +658,29 @@ class RequestTest {
     }
 
     @Nested
+    inner class WithMethodTest {
+
+        @Test
+        fun `withMethod uppercases and shares the one-shot body cache`() {
+            val original = Request(
+                method = "POST",
+                path = "/submit",
+                stream = "payload".byteInputStream(),
+            )
+
+            val overridden = original.withMethod("put")
+
+            assertEquals("PUT", overridden.method)
+            assertEquals("/submit", overridden.path)
+
+            // The stream is one-shot: reading through one copy must populate
+            // the shared cache so the other copy sees the same body
+            assertEquals("payload", original.text())
+            assertEquals("payload", overridden.text())
+        }
+    }
+
+    @Nested
     inner class IpAddressTest {
 
         @Test

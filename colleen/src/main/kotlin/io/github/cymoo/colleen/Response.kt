@@ -51,8 +51,9 @@ class Response @JvmOverloads constructor(
      * Copy handed to a mounted sub-app.
      *
      * This is THE single place defining what is shared vs. copied:
-     * - Copied by value: [status], [body] (the sub-app starts from the
-     *   parent's view and may overwrite freely).
+     * - [status] is copied by value; the [body] REFERENCE is carried over
+     *   as-is (the sub-app starts from the parent's view and typically
+     *   replaces the body wholesale rather than mutating its contents).
      * - Deep-copied: [headers] — a sub-app that fails with 404 (mount
      *   fallthrough) must not leak headers into the parent response; on
      *   success the sub-response is merged back explicitly via [merge].

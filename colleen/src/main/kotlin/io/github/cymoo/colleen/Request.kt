@@ -90,6 +90,33 @@ class Request @JvmOverloads constructor(
         bodyCache = bodyCache,
     )
 
+    /**
+     * Returns a copy of this request with a different HTTP [method] (uppercased),
+     * sharing everything else — headers, stream, server info and the one-shot
+     * body cache — with the original.
+     *
+     * This is the supported way to implement method-override middleware, e.g.
+     * honoring `X-HTTP-Method-Override` by replacing the request inside an
+     * [Event.RequestReceived] listener:
+     *
+     * ```kotlin
+     * app.on<Event.RequestReceived> { event ->
+     *     val override = event.request.header("x-http-method-override")
+     *     if (override != null) event.request = event.request.withMethod(override)
+     * }
+     * ```
+     */
+    fun withMethod(newMethod: String): Request = Request(
+        method = newMethod.uppercase(),
+        path = path,
+        queryString = queryString,
+        headers = headers,
+        stream = stream,
+        serverInfo = serverInfo,
+        multipartSupplier = multipartSupplier,
+        bodyCache = bodyCache,
+    )
+
     override fun toString() = "Request(method=$method, path=$path)"
 
     /** Full request URI (path + query string). */

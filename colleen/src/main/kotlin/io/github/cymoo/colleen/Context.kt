@@ -636,6 +636,8 @@ class Context(
      * @param app the mounted sub-app
      * @return a new context with the current context as parent
      */
+    override fun toString() = "Context(method=${request.method}, path=${request.path})"
+
     internal fun createSubContext(path: String, app: Colleen): Context {
         // The share-vs-copy semantics live with the classes themselves:
         // Request.copyWithPath shares the one-shot body cache, and
