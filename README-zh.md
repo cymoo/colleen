@@ -914,6 +914,7 @@ app.config {
         fileSizeThreshold = 256 * 1024
         shutdownTimeout = 30_000
         idleTimeout = 30_000
+        requestTimeout = 0
         trustedProxyCount = 0
     }
 
@@ -959,6 +960,11 @@ app.config {
 - **限制**：公网服务建议显式设置 `maxConcurrentRequests`、`maxRequestSize` 和 `maxFileSize`。
 - **流式 JSON**：大响应可用 `ctx.json(data, stream = true)`；小响应无需启用。
 - **全局中间件**：每个全局中间件都会处理每个请求。能使用前缀中间件时优先使用前缀。
+- **请求超时**：设置 `server { requestTimeout = 10_000 }` 后，handler 超过时限即返回 503
+  （错误码 `REQUEST_TIMEOUT`，可用 `onError<RequestTimeout>` 自定义）。机制是协作式的
+  （线程中断）：能唤醒 sleep、锁等待和可中断 IO，但无法停止纯 CPU 循环或不可中断 IO——
+  这类操作请配置自身的超时（如 JDBC socket timeout）。流式/SSE/WebSocket 阶段由
+  `idleTimeout` 管辖。
 - **结构化日志**：需要最终状态码、耗时、发送字节数时，优先使用 `Event.ResponseSent`。
 - **静态文件**：路径包含用户输入时，使用 `sendFile(..., baseDir = "...")` 或 `ServeStatic`。
 - **TLS / HTTP/2**：Colleen 有意只提供纯 HTTP。请在 Nginx、Caddy 等反向代理上终结

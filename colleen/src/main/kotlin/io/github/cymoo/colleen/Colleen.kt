@@ -803,7 +803,7 @@ class Colleen {
      */
     internal fun handleRequest(ctx: Context) {
         try {
-            router.handleRequest(ctx)
+            routeWithTimeout(ctx)
             // Materialize the response body once routing and error handling are complete.
             // This binds the high-level ResponseBody to a concrete RawResponseBody
             ctx.response.materialize(ctx)
@@ -826,6 +826,69 @@ class Colleen {
                 else -> throw e
             }
         }
+    }
+
+    /**
+     * Runs the router under [ServerConfig.requestTimeout] when configured.
+     *
+     * Only the root application arms the watchdog — mounted sub-apps execute
+     * within the parent's deadline. On timeout the worker thread is interrupted
+     * (cooperative — see the config KDoc for limitations) and whatever exception
+     * escapes is translated into [RequestTimeout], which then flows through the
+     * normal error-handling pipeline (`onError<RequestTimeout>` / default 503).
+     */
+    private fun routeWithTimeout(ctx: Context) {
+        val timeoutMillis = config.server.requestTimeout
+        if (timeoutMillis <= 0 || parent != null) {
+            router.handleRequest(ctx)
+            return
+        }
+
+        val worker = Thread.currentThread()
+        val timedOut = AtomicBoolean(false)
+        val watchdog = RequestWatchdog.schedule(timeoutMillis) {
+            timedOut.set(true)
+            worker.interrupt()
+        }
+
+        try {
+            router.handleRequest(ctx)
+            // Completed despite a late-firing watchdog: the response is intact,
+            // serve it — the finally block clears the pending interrupt.
+        } catch (e: Exception) {
+            if (timedOut.get()) {
+                // The deadline passed; attribute whatever escaped (typically an
+                // InterruptedException from a blocking call) to the timeout.
+                throw RequestTimeout(timeoutMillis, e)
+            }
+            throw e
+        } finally {
+            watchdog.cancel(false)
+            if (timedOut.get()) {
+                // Clear the interrupt flag so response writing isn't poisoned
+                // by a leftover interrupted status.
+                Thread.interrupted()
+            }
+        }
+    }
+
+    /**
+     * Shared daemon scheduler whose only job is interrupting request threads
+     * when their deadline passes. One thread suffices: tasks are O(1) and the
+     * common case (request finishes in time) cancels before firing.
+     */
+    private object RequestWatchdog {
+        private val scheduler by lazy {
+            java.util.concurrent.ScheduledThreadPoolExecutor(1) { runnable ->
+                Thread(runnable, "request-timeout-watchdog").apply { isDaemon = true }
+            }.apply {
+                // Cancelled tasks (the common case) must not linger in the queue
+                removeOnCancelPolicy = true
+            }
+        }
+
+        fun schedule(delayMillis: Long, task: () -> Unit): java.util.concurrent.ScheduledFuture<*> =
+            scheduler.schedule(task, delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     // ========================================================================
