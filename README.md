@@ -454,6 +454,28 @@ app.post("/todos") { ctx ->
 Validation rules are optional by default, `.required()` makes a value mandatory, and
 all field errors are collected into one `ValidationException`.
 
+For automatic validation, let the bound DTO implement `Validatable` — the framework
+calls `validate()` right after binding succeeds (for `Json<T>` / `Query<T>` / `Form<T>`
+extractors and the manual `ctx.json<T>()` family), answering 422 with structured
+errors before the handler runs:
+
+```kotlin
+data class CreateTodo(val title: String = "") : Validatable {
+    override fun validate() = expect {
+        field("title", title).required().notBlank().maxSize(100)
+    }
+}
+
+fun create(req: Json<CreateTodo>): Result<Todo> {
+    // reaching here implies req.value is valid
+    return Result.created(todoService.create(req.value.title))
+}
+```
+
+Only the top-level bound object is validated automatically; validate nested objects
+from the parent's `validate()`, and wrap top-level lists in a DTO when element
+validation is needed.
+
 ### Sub-Applications
 
 Sub-applications let you split a larger service into isolated Colleen apps. They are

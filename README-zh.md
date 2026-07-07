@@ -438,6 +438,26 @@ app.post("/todos") { ctx ->
 验证规则默认是可选的，`.required()` 表示必填，所有字段错误会聚合到一个
 `ValidationException` 中。
 
+如需自动验证，让绑定的 DTO 实现 `Validatable` 接口——框架在绑定成功后立即调用
+`validate()`（覆盖 `Json<T>` / `Query<T>` / `Form<T>` 提取器与手动的 `ctx.json<T>()`
+一族），无效输入在 handler 执行前即返回 422 与结构化 errors：
+
+```kotlin
+data class CreateTodo(val title: String = "") : Validatable {
+    override fun validate() = expect {
+        field("title", title).required().notBlank().maxSize(100)
+    }
+}
+
+fun create(req: Json<CreateTodo>): Result<Todo> {
+    // 执行到这里说明 req.value 已通过验证
+    return Result.created(todoService.create(req.value.title))
+}
+```
+
+自动验证只作用于顶层绑定对象；嵌套对象请在父级 `validate()` 中调用，顶层 List
+需要元素级验证时请包一层 DTO。
+
 ### 子应用
 
 子应用可以把大型服务拆成多个相互隔离的 Colleen app。它适合 API 版本、管理后台、

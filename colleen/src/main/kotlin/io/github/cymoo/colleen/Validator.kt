@@ -665,3 +665,62 @@ fun validate(consumer: Consumer<ValidationContext>): ValidationResult {
 fun expect(consumer: Consumer<ValidationContext>) {
     expect { consumer.accept(this) }
 }
+
+// ========================================================================
+// Automatic post-binding validation
+// ========================================================================
+
+/**
+ * Opt-in hook for automatic validation after request binding.
+ *
+ * When an object bound from the request — via the `Json<T>` / `Query<T>` /
+ * `Form<T>` extractors or the manual `ctx.json<T>()` / `ctx.queries<T>()` /
+ * `ctx.forms<T>()` APIs — implements this interface, the framework invokes
+ * [Validatable.validate] immediately after binding succeeds, before the handler runs.
+ *
+ * Implementations should throw [ValidationException] on failure (the
+ * `expect { }` DSL does exactly that), which the default error handler turns
+ * into a 422 response with a structured `errors` field.
+ *
+ * Only the top-level bound object is validated automatically. For nested
+ * structures, call the children's validation from the parent's [Validatable.validate]
+ * (a top-level `List`/`Map` is never validated automatically — wrap it in a
+ * DTO when element validation is needed).
+ *
+ * ```kotlin
+ * data class CreateUser(val name: String, val email: String) : Validatable {
+ *     override fun validate() = expect {
+ *         field("name", name).required().notBlank()
+ *         field("email", email).required().email()
+ *     }
+ * }
+ *
+ * fun create(req: Json<CreateUser>): User {
+ *     // reaching here implies req.value passed validation; invalid input
+ *     // was already answered with 422
+ * }
+ * ```
+ */
+interface Validatable {
+    /**
+     * Validates this object's state.
+     *
+     * @throws ValidationException when the state is invalid
+     */
+    fun validate()
+}
+
+/**
+ * Runs automatic validation on a freshly bound value (no-op for objects that
+ * do not implement [Validatable]).
+ *
+ * Deliberately invoked OUTSIDE the binding try/catch blocks: a
+ * [ValidationException] must reach the error pipeline as-is (422) and never be
+ * re-classified as a 400 binding failure.
+ */
+@PublishedApi
+internal fun autoValidate(value: Any?) {
+    if (value is Validatable) {
+        value.validate()
+    }
+}
