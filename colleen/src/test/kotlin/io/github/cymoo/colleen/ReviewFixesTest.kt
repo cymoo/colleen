@@ -74,7 +74,9 @@ class ReviewFixesTest {
             app.get("/outside") { "out" }
 
             val client = TestClient(app)
-            client.get("/inside").send() // group() joins prefix: /api/inside
+            // /inside does not exist (the grouped route is /api/inside) — this 404
+            // request verifies the middleware does NOT run outside the group prefix
+            client.get("/inside").send()
             client.get("/api/inside").send()
             client.get("/outside").send()
 

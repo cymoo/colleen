@@ -42,8 +42,8 @@ class IngressE2ETest {
         app.get("/big") { ctx -> ctx.bytes(ByteArray(64 * 1024) { 'a'.code.toByte() }, "text/plain") }
         app.get("/only-get") { "ok" }
 
+        // listen() starts Undertow synchronously — the port is bound on return
         app.listen(port = port, host = "127.0.0.1")
-        Thread.sleep(300)
     }
 
     @AfterAll

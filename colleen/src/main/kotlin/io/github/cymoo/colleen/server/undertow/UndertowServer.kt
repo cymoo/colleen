@@ -172,8 +172,21 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
         // 7. Signal all active SSE connections to close, then shut down the executor.
         // Closing first lets handler loops (`while (!conn.isClosed) ...`) exit
         // cooperatively instead of waiting for shutdownNow() interruption.
-        ArrayList(activeSseConnections).forEach { conn ->
-            runCatching { conn.close(SseCloseReason.ServerShutdown) }
+        //
+        // Each close() runs on its own virtual thread with a bounded wait:
+        // close() contends with in-flight blocking writes (see issue #25), so a
+        // single stuck client must not be able to hang stop(). Connections that
+        // miss the deadline are torn down by Undertow's stop below.
+        val sseCloseThreads = ArrayList(activeSseConnections).map { conn ->
+            Thread.startVirtualThread {
+                runCatching { conn.close(SseCloseReason.ServerShutdown) }
+            }
+        }
+        val sseCloseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        for (thread in sseCloseThreads) {
+            val remainingMs = (sseCloseDeadline - System.nanoTime()) / 1_000_000
+            if (remainingMs <= 0) break
+            runCatching { thread.join(remainingMs) }
         }
         if (lazySseExecutor.isInitialized()) {
             sseExecutor.shutdown()
