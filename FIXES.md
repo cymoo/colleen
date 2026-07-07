@@ -102,14 +102,14 @@
 |---|---|---|
 | 1.10 / 1.11 | 路由匹配热路径优化（split 复用、索引） | **不做**：性能优化类，当前无瓶颈 |
 | 1.19 / 1.22 | WS 与 HTTP 中间件时序、尾斜杠策略、复杂段非回溯语义、单次解码约定 | **已完成**：README / README-zh 已补充（路由约定小节 + WS 时序小节 + 生产建议） |
-| 1.21 | 自动 HEAD / 自动 OPTIONS | **待办**：本 PR 提交后新开独立 PR |
-| 2.10 | Context/Request/Response 改普通 class | **已完成**：三个类改为普通 class，共享/复制语义集中在 `Request.copyWithPath` / `Response.copyForSubApp` 两处并注释；公开的 copy/equals/componentN 移除（breaking） |
+| 1.21 | 自动 HEAD / 自动 OPTIONS | **已完成**（[#27](https://github.com/cymoo/colleen/pull/27)）：HEAD 由 GET 路由服务（写出层抑制 body），OPTIONS 自动回 204 + Allow |
+| 2.10 | Context/Request/Response 改普通 class | **已完成**（[#31](https://github.com/cymoo/colleen/pull/31)）：三个类改为普通 class，共享/复制语义集中在 `Request.copyWithPath` / `Response.copyForSubApp` 两处并注释；公开的 copy/equals/componentN 移除（breaking） |
 | 2.11(部分) | SSE `Connection: keep-alive` 对 h2 不合法 | **暂不动**（当前仅 HTTP/1.1 无实际影响）；h2 改造思路见 PR 讨论。cookie `secure`/`httpOnly` 默认值确定**不改** |
-| 2.13 / 5.8 | Range / 206 断点续传 | **待办**：本 PR 提交后新开独立 PR |
+| 2.13 / 5.8 | Range / 206 断点续传 | **已完成**（[#28](https://github.com/cymoo/colleen/pull/28)）：sendFile/ServeStatic 支持单一 bytes 范围、416、If-Range、Accept-Ranges |
 | 3.4 | SSE `close()` 可能被卡死的 write 拖住 | **已提 issue [#25](https://github.com/cymoo/colleen/issues/25)**（含两个候选方案：XNIO WRITE_TIMEOUT / close 与 write 解耦） |
-| 3.10 | 请求处理超时 | **待办**：本 PR 提交后新开独立 PR |
+| 3.10 | 请求处理超时 | **已完成**（[#29](https://github.com/cymoo/colleen/pull/29)）：`server.requestTimeout`（默认关闭），协作式中断 → 503 REQUEST_TIMEOUT |
 | 3.11 | HTTP/2 / TLS 配置入口 | **设计取舍，不做**：轻量框架定位，TLS/h2 交由 Nginx 等反代终结；已写入 README 生产建议（含 `trustedProxyCount` 配合说明） |
-| 4.10 | 校验自动接入提取管线 | **待讨论**：属 API 设计取舍，说明见 PR 讨论 |
+| 4.10 | 校验自动接入提取管线 | **已完成**（[#30](https://github.com/cymoo/colleen/pull/30)）：`Validatable` 接口，绑定成功后自动 `validate()` → 422 |
 | 4.11 | Scanner 不扫继承的注解方法 | **已修**（见阶段 4） |
 | 5.3 | after-next 设头对流式响应无效 | **复核为误报，不提 issue**。已用真实服务器验证：`use { next(); ctx.response.header(...) }` 设置的头在 SSE 响应中正常出现。原因是本框架中 SSE/Stream body 只是"描述"，实际写出发生在 `UndertowServer.writeResponse`——即整条中间件链结束**之后**，因此 after-next 设头总是先于任何字节写出。review 的推断（"handler 在 next() 内已开始写出"）不符合本框架的执行模型 |
 | 5.7(部分) | RateLimiter `X-RateLimit-Reset` 语义 | **保留现语义并文档化**：令牌桶下"桶满时刻"是 window-reset 的合理对应且单调有信息量；"何时可重试"已由 429 的 Retry-After 承担；改动只会破坏两个刻意编写的测试。已在代码处注释明确语义 |
