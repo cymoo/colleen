@@ -998,7 +998,10 @@ app.config {
 - **Structured logging**: prefer `Event.ResponseSent` when logs need final status,
   duration, and bytes sent.
 - **Static files**: use `sendFile(..., baseDir = "...")` or `ServeStatic` when paths
-  include user input.
+  include user input. Both support single-range requests (`Range: bytes=...`) with
+  206/416 and `If-Range`, advertised via `Accept-Ranges: bytes` — video seeking and
+  resumed downloads work out of the box. Multi-range requests are answered with the
+  full body (permitted by RFC 9110).
 - **TLS / HTTP/2**: Colleen intentionally ships plain HTTP only. Terminate TLS (and
   HTTP/2) at a reverse proxy such as Nginx or Caddy, and set
   `server { trustedProxyCount = 1 }` (the number of proxy layers you control) so
