@@ -676,14 +676,14 @@ fun expect(consumer: Consumer<ValidationContext>) {
  * When an object bound from the request — via the `Json<T>` / `Query<T>` /
  * `Form<T>` extractors or the manual `ctx.json<T>()` / `ctx.queries<T>()` /
  * `ctx.forms<T>()` APIs — implements this interface, the framework invokes
- * [validate] immediately after binding succeeds, before the handler runs.
+ * [Validatable.validate] immediately after binding succeeds, before the handler runs.
  *
  * Implementations should throw [ValidationException] on failure (the
  * `expect { }` DSL does exactly that), which the default error handler turns
  * into a 422 response with a structured `errors` field.
  *
  * Only the top-level bound object is validated automatically. For nested
- * structures, call the children's validation from the parent's [validate]
+ * structures, call the children's validation from the parent's [Validatable.validate]
  * (a top-level `List`/`Map` is never validated automatically — wrap it in a
  * DTO when element validation is needed).
  *

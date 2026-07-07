@@ -468,6 +468,8 @@ data class Context(
      *
      * @return the parsed object, or `null` if not present
      * @throws BadRequest if parsing fails
+     * @throws ValidationException if the bound value implements [Validatable]
+     *         and its automatic validation fails (422)
      */
     inline fun <reified T> json(): T? = request.json<T>(jsonMapper)
 

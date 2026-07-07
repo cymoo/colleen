@@ -225,6 +225,8 @@ data class Request @JvmOverloads constructor(
      *
      * Returns null if the body is empty.
      * Throws [BadRequest] if parsing fails.
+     * When the bound value implements [Validatable], [Validatable.validate] is
+     * invoked automatically and may throw [ValidationException] (422).
      */
     inline fun <reified T> json(mapper: JsonMapper): T? {
         val data = text() ?: return null
