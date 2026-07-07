@@ -10,6 +10,7 @@ import io.undertow.server.HttpServerExchange
 import io.undertow.server.handlers.GracefulShutdownHandler
 import io.undertow.server.handlers.RequestLimitingHandler
 import io.undertow.util.HttpString
+import io.undertow.util.Methods
 import org.xnio.Options
 import java.io.IOException
 import java.util.concurrent.ExecutorService
@@ -405,6 +406,11 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
         val body = response.materializedBody
             ?: throw IllegalStateException("Response body not materialized")
 
+        // RFC 9110 §9.3.2: a HEAD response carries the same headers as GET
+        // (including Content-Length) but MUST NOT include a body. This covers
+        // both explicit HEAD handlers and HEAD served from a GET route.
+        val isHead = exchange.requestMethod.equals(Methods.HEAD)
+
         when (body) {
             is RawResponseBody.Empty -> {
                 exchange.endExchange()
@@ -417,19 +423,33 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
                 if (!response.headers.has("Content-Length")) {
                     exchange.setResponseContentLength(body.bytes.size.toLong())
                 }
-                exchange.outputStream.use { it.write(body.bytes) }
+                if (isHead) {
+                    exchange.endExchange()
+                } else {
+                    exchange.outputStream.use { it.write(body.bytes) }
+                }
             }
 
             is RawResponseBody.Stream -> {
-                body.input.use { input ->
-                    exchange.outputStream.use { output ->
-                        input.copyTo(output)
+                if (isHead) {
+                    runCatching { body.input.close() }
+                    exchange.endExchange()
+                } else {
+                    body.input.use { input ->
+                        exchange.outputStream.use { output ->
+                            input.copyTo(output)
+                        }
                     }
                 }
             }
 
             is RawResponseBody.Sse -> {
-                handleSseResponse(body.handler, exchange)
+                if (isHead) {
+                    // Headers only — the long-lived SSE handler must not run
+                    exchange.endExchange()
+                } else {
+                    handleSseResponse(body.handler, exchange)
+                }
             }
 
             is RawResponseBody.WebSocket -> {

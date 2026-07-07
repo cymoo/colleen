@@ -242,6 +242,12 @@ A few path conventions to be aware of:
   route (empty segments are removed during normalization).
 - Requests whose decoded path contains `.` or `..` segments are rejected
   with `400 Bad Request`.
+- **HEAD and OPTIONS are automatic.** A `HEAD` request is served by the
+  matching `GET` route (the body is suppressed at the server layer, headers
+  including `Content-Length` are kept), and `OPTIONS` answers `204` with an
+  `Allow` header listing the registered methods. Explicitly registered
+  `HEAD`/`OPTIONS` routes always take precedence, and middleware that handles
+  `OPTIONS` itself (e.g. CORS preflight) is unaffected.
 
 ### Route Groups
 

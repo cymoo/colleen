@@ -231,6 +231,10 @@ app.get("/images/{name}.{ext}") { ctx -> "${ctx.pathParam("name")}.${ctx.pathPar
   百分号解码，因此请求中的 `%2F` 始终是段内的普通内容，不会改变路径结构。
 - **尾斜杠等价**：`/users/` 与 `/users` 匹配同一路由（规范化时移除空段）。
 - 解码后路径中含 `.` 或 `..` 段的请求会被拒绝为 `400 Bad Request`。
+- **HEAD 与 OPTIONS 自动处理。** `HEAD` 请求由匹配的 `GET` 路由服务（body 在
+  服务器层被抑制，`Content-Length` 等响应头保留）；`OPTIONS` 自动应答 `204` 并携带
+  列出已注册方法的 `Allow` 头。显式注册的 `HEAD`/`OPTIONS` 路由始终优先，自行处理
+  `OPTIONS` 的中间件（如 CORS 预检）不受影响。
 
 ### 路由组
 
