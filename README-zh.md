@@ -216,11 +216,21 @@ app.get("/files/{path...}") { ctx -> ctx.pathParam("path") }
 app.get("/images/{name}.{ext}") { ctx -> "${ctx.pathParam("name")}.${ctx.pathParam("ext")}" }
 ```
 
-在复合路径段中，参数会捕获到下一个静态分隔符首次出现的位置。例如
+在复合路径段中，参数会捕获到下一个静态分隔符首次出现的位置，且**不回溯**。例如
 `/files/{name}-{version}.txt` 匹配 `/files/foo-bar-1.txt` 时，
-`name = "foo"`，`version = "bar-1"`。
+`name = "foo"`，`version = "bar-1"`；而 `/{a}x{b}` **不能**匹配 `xaxb`
+（`a` 在第一个 `x` 前捕获不到任何内容）。
 
-路由匹配优先级是确定的：静态段、复合段、参数段、通配符段。
+路由匹配优先级是确定的，按段逐一比较：静态段、复合段、参数段、通配符段。
+当精确路由与"通配符匹配零段"的更长路由同时命中时，精确路由获胜——同时注册
+`GET /users` 和 `GET /users/{path...}` 时，`GET /users` 由精确路由处理。
+
+几条路径约定：
+
+- **解码在服务器层恰好发生一次。** 路由模式以已解码形式书写，框架内部不再做
+  百分号解码，因此请求中的 `%2F` 始终是段内的普通内容，不会改变路径结构。
+- **尾斜杠等价**：`/users/` 与 `/users` 匹配同一路由（规范化时移除空段）。
+- 解码后路径中含 `.` 或 `..` 段的请求会被拒绝为 `400 Bad Request`。
 
 ### 路由组
 
@@ -719,6 +729,14 @@ app.wsUse("/chat") { ctx, next ->
 
 `WsConnection` 可以访问路径参数、查询参数、握手请求头、服务，以及中间件阶段捕获的状态。
 
+两个值得了解的时序细节：
+
+- **HTTP 中间件看不到 WebSocket 握手。** 升级请求在收集 HTTP 中间件链之前就被
+  路由，全局 `use(...)` 中间件（日志、限流等）不会对握手执行——只有 `wsUse(...)`
+  链会执行。WS 相关的关注点请用 `wsUse` 注册。
+- **WS 的路径参数更早可用。** HTTP 路由的路径参数在 handler 执行前注入；WS 路由
+  则在 `wsUse` 中间件链之前注入，因此 WS 中间件里就能读取 `ctx.pathParam(...)`。
+
 也支持 controller 风格 WebSocket：
 
 ```kotlin
@@ -896,6 +914,7 @@ app.config {
         fileSizeThreshold = 256 * 1024
         shutdownTimeout = 30_000
         idleTimeout = 30_000
+        trustedProxyCount = 0
     }
 
     ws {
@@ -942,6 +961,11 @@ app.config {
 - **全局中间件**：每个全局中间件都会处理每个请求。能使用前缀中间件时优先使用前缀。
 - **结构化日志**：需要最终状态码、耗时、发送字节数时，优先使用 `Event.ResponseSent`。
 - **静态文件**：路径包含用户输入时，使用 `sendFile(..., baseDir = "...")` 或 `ServeStatic`。
+- **TLS / HTTP/2**：Colleen 有意只提供纯 HTTP。请在 Nginx、Caddy 等反向代理上终结
+  TLS（及 HTTP/2），并设置 `server { trustedProxyCount = 1 }`（你所控制的代理层数），
+  这样 `Request.ip`、`isSecure` 与 HSTS 才能基于 `X-Forwarded-For` /
+  `X-Forwarded-Proto` 正确工作。默认 `trustedProxyCount = 0` 时这些头会被忽略——
+  它们由客户端提供、极易伪造。
 
 可复现的基准压测配置见 `examples/benchmark-api/README.md`。
 

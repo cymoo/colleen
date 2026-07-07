@@ -15,6 +15,10 @@ class Headers {
         /** Creates a Headers instance with a single header entry. */
         @JvmStatic
         fun of(key: String, value: String) = Headers().apply { add(key, value) }
+
+        // RFC 9110 field-name = token; tchar = "!" / "#" / "$" / "%" / "&" / "'"
+        //   / "*" / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~" / DIGIT / ALPHA
+        private val TOKEN_REGEX = Regex("^[!#\$%&'*+.^_`|~0-9A-Za-z-]+$")
     }
 
     /** Adds a header value without replacing existing ones. */
@@ -92,11 +96,13 @@ class Headers {
     /**
      * Validates header name format.
      *
-     * Restricts to a safe subset for compatibility.
+     * Accepts the full RFC 9110 token character set. Anything outside of it
+     * (control characters, separators such as ':', spaces, CR/LF) is rejected,
+     * which also guards against header injection on the response side.
      */
     private fun validateHeaderName(name: String) {
         require(name.isNotBlank()) { "Header name cannot be blank" }
-        require(name.matches(Regex("^[a-zA-Z0-9_-]+$"))) {
+        require(TOKEN_REGEX.matches(name)) {
             "Invalid header name: '$name'"
         }
     }

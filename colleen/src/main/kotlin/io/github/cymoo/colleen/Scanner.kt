@@ -63,8 +63,10 @@ internal object ControllerScanner {
         // Extract base path from @Controller annotation, default to "/"
         val basePath = klass.findAnnotation<Controller>()?.value ?: "/"
 
-        // Use Java reflection to get all methods (works for both Kotlin and Java classes)
-        val allMethods = javaClass.declaredMethods
+        // Collect methods across the class hierarchy (works for both Kotlin and
+        // Java classes) so that annotated methods inherited from a base
+        // controller are discovered too.
+        val allMethods = collectMethods(javaClass)
 
         // Scan for middleware methods annotated with @Use
         val middlewares = allMethods
@@ -106,6 +108,57 @@ internal object ControllerScanner {
 
         return ControllerInfo(basePath, middlewares, wsMiddlewares, routes, wsRoutes, obj)
     }
+
+    /**
+     * Collects declared methods of [javaClass] and all its superclasses
+     * (excluding [Any]/[Object]).
+     *
+     * Override handling: Java method annotations are NOT inherited, so for each
+     * override chain we keep the most-derived declaration that actually carries
+     * scanner annotations. An un-annotated override therefore does not hide the
+     * annotated base method — the route stays registered, and reflective
+     * invocation still virtual-dispatches to the override. A re-annotated
+     * override fully replaces the base declaration (no duplicate routes or
+     * doubly-applied middleware).
+     *
+     * Compiler-generated bridge/synthetic methods are skipped; they carry
+     * copied annotations and would otherwise duplicate routes.
+     */
+    private fun collectMethods(javaClass: Class<*>): List<Method> {
+        // signature -> declarations ordered from most-derived to base
+        val bySignature = LinkedHashMap<String, MutableList<Method>>()
+
+        var current: Class<*>? = javaClass
+        while (current != null && current != Any::class.java) {
+            for (method in current.declaredMethods) {
+                if (method.isBridge || method.isSynthetic) continue
+                val signature = method.name +
+                        method.parameterTypes.joinToString(",", "(", ")") { it.name }
+                bySignature.getOrPut(signature) { mutableListOf() }.add(method)
+            }
+            current = current.superclass
+        }
+
+        return bySignature.values.map { chain ->
+            chain.firstOrNull { it.hasScannerAnnotations() } ?: chain.first()
+        }
+    }
+
+    /**
+     * True if the method carries any annotation this scanner cares about.
+     * Uses [Method.getAnnotationsByType] because repeatable annotations
+     * (e.g. two @Get on one method) hide behind a container annotation and
+     * `isAnnotationPresent` would miss them.
+     */
+    private fun Method.hasScannerAnnotations(): Boolean =
+        getAnnotationsByType(Get::class.java).isNotEmpty() ||
+                getAnnotationsByType(Post::class.java).isNotEmpty() ||
+                getAnnotationsByType(Put::class.java).isNotEmpty() ||
+                getAnnotationsByType(Delete::class.java).isNotEmpty() ||
+                getAnnotationsByType(Patch::class.java).isNotEmpty() ||
+                getAnnotation(Use::class.java) != null ||
+                getAnnotation(WsUse::class.java) != null ||
+                getAnnotation(Ws::class.java) != null
 
     /**
      * Validates that a middleware method has the correct signature:

@@ -68,8 +68,22 @@ internal object UndertowRequestAdapter {
 
         val isMultipart = contentType?.startsWith("multipart/form-data") == true
 
+        // Behind a trusted TLS-terminating proxy the exchange scheme is always
+        // "http"; X-Forwarded-Proto (set by the proxy) carries the original
+        // scheme. Only honored when trustedProxyCount > 0 — the header is
+        // client-forgeable otherwise.
+        val forwardedProto = if (config.trustedProxyCount > 0) {
+            headers["x-forwarded-proto"]?.split(',')?.firstOrNull()?.trim()?.lowercase()
+                ?.takeIf { it == "http" || it == "https" }
+        } else {
+            null
+        }
+        val scheme = forwardedProto ?: exchange.requestScheme
+
         val request = Request(
             method = exchange.requestMethod.toString(),
+            // Undertow has already percent-decoded requestPath exactly once
+            // (DECODE_URL); normalize() must not decode again (see UrlPath docs).
             path = UrlPath.normalize(exchange.requestPath),
             queryString = exchange.queryString ?: "",
             headers = headers,
@@ -79,11 +93,12 @@ internal object UndertowRequestAdapter {
                 remoteHost = exchange.sourceAddress.hostName
                     ?: exchange.sourceAddress.address.hostAddress,
                 remotePort = exchange.sourceAddress.port,
-                scheme = exchange.requestScheme,
+                scheme = scheme,
                 serverName = exchange.hostName ?: "localhost",
                 serverPort = exchange.hostPort,
-                isSecure = exchange.requestScheme == "https",
-                protocol = exchange.protocol.toString()
+                isSecure = scheme == "https",
+                protocol = exchange.protocol.toString(),
+                trustedProxyCount = config.trustedProxyCount,
             ),
             multipartSupplier = if (isMultipart) {
                 { parseMultipart(exchange, config) }
@@ -217,7 +232,13 @@ internal object UndertowRequestAdapter {
         val headers = Headers()
         for (headerValues: HeaderValues in exchange.requestHeaders) {
             val name = headerValues.headerName.toString()
-            headerValues.forEach { headers.add(name, it) }
+            // Undertow has already parsed these as valid tokens; skip (rather than
+            // fail the whole request) if a name still doesn't pass validation.
+            try {
+                headerValues.forEach { headers.add(name, it) }
+            } catch (e: IllegalArgumentException) {
+                logger.debug("Skipping request header with invalid name '{}': {}", name, e.message)
+            }
         }
         return headers
     }

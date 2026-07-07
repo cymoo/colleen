@@ -73,15 +73,17 @@ private fun getCapturedInstance(fn: Any): Any? {
  * JVM lambdas provide a hidden `writeReplace()` method that returns a
  * `java.lang.invoke.SerializedLambda`, which contains:
  * - The internal class name of the implementation
- * - The method name backing the lambda
+ * - The method name and descriptor backing the lambda
  *
  * This method:
  * 1. Calls `writeReplace()` reflectively
- * 2. Extracts implementation class and method name
+ * 2. Extracts implementation class, method name and signature
  * 3. Loads the target class
- * 4. Locates the declared method
+ * 4. Locates the declared method (signature disambiguates overloads)
  *
- * @return the resolved Method, or null if resolution fails
+ * @return the resolved Method, or null if the class declares no such method
+ * @throws IllegalArgumentException if lambda introspection fails, with the
+ *         original exception attached as cause
  */
 private fun findImplMethod(fn: Any): Method? {
     try {
@@ -93,21 +95,49 @@ private fun findImplMethod(fn: Any): Method? {
         // Extract implementation metadata
         val getImplClass = serializedLambda.javaClass.getDeclaredMethod("getImplClass")
         val getImplMethodName = serializedLambda.javaClass.getDeclaredMethod("getImplMethodName")
+        val getImplMethodSignature = serializedLambda.javaClass.getDeclaredMethod("getImplMethodSignature")
 
         val implClass = (getImplClass.invoke(serializedLambda) as String).replace('/', '.')
         val implMethodName = getImplMethodName.invoke(serializedLambda) as String
+        val implMethodSignature = getImplMethodSignature.invoke(serializedLambda) as String
 
-        // Load the implementation class and find the method
+        // Load the implementation class and find the method. Matching by name
+        // alone would pick an arbitrary overload; the JVM descriptor is exact.
         val targetClass = Class.forName(implClass)
-        return targetClass.declaredMethods
-            .firstOrNull { it.name == implMethodName }
+        val candidates = targetClass.declaredMethods.filter { it.name == implMethodName }
+        return (candidates.firstOrNull { methodDescriptor(it) == implMethodSignature }
+            ?: candidates.firstOrNull())
             ?.apply { isAccessible = true }
 
     } catch (e: Exception) {
-        // Resolution failures are non-fatal and reported as null
-        e.printStackTrace()
-        return null
+        // Surface the original failure instead of printing to stderr and
+        // returning null (which produced a context-free error downstream).
+        throw IllegalArgumentException(
+            "Cannot resolve implementation method for lambda ${fn.javaClass.name}", e
+        )
     }
+}
+
+/** Builds the JVM method descriptor, e.g. `(ILjava/lang/String;)V`. */
+private fun methodDescriptor(method: Method): String = buildString {
+    append('(')
+    method.parameterTypes.forEach { append(typeDescriptor(it)) }
+    append(')')
+    append(typeDescriptor(method.returnType))
+}
+
+private fun typeDescriptor(clazz: Class<*>): String = when {
+    clazz === Void.TYPE -> "V"
+    clazz === Integer.TYPE -> "I"
+    clazz === java.lang.Long.TYPE -> "J"
+    clazz === java.lang.Double.TYPE -> "D"
+    clazz === java.lang.Float.TYPE -> "F"
+    clazz === java.lang.Boolean.TYPE -> "Z"
+    clazz === java.lang.Byte.TYPE -> "B"
+    clazz === Character.TYPE -> "C"
+    clazz === java.lang.Short.TYPE -> "S"
+    clazz.isArray -> "[" + typeDescriptor(clazz.componentType)
+    else -> "L" + clazz.name.replace('.', '/') + ";"
 }
 
 // Fn0 ... Fn21 and Do0 ... Do21

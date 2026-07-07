@@ -168,6 +168,13 @@ internal class UndertowWsHandler(
         val channel = UndertowWsChannel(wsChannel)
         val connection = WsConnection(channel, pathParams, queryParams, app, states.toMutableMap(), headers)
         activeWsConnections.add(connection)
+        // Register the tracking-removal callback IMMEDIATELY after adding.
+        // If it were registered later (e.g. in registerCloseHandlers) and the user
+        // handler threw during setup, the early close() would never remove the
+        // connection — permanently leaking a maxConnections slot.
+        connection.onClose {
+            activeWsConnections.remove(connection)
+        }
         return connection
     }
 
@@ -209,13 +216,16 @@ internal class UndertowWsHandler(
     private fun setupHeartbeat(wsChannel: WebSocketChannel, connection: WsConnection): HeartbeatResult {
         if (wsConfig.pingIntervalMs <= 0) return HeartbeatResult(null, null)
 
-        val lastPong = AtomicLong(System.currentTimeMillis())
+        // nanoTime: heartbeat timing must use a monotonic clock — wall-clock
+        // (currentTimeMillis) jumps on NTP adjustment and could kill healthy
+        // connections or keep dead ones alive.
+        val lastPong = AtomicLong(System.nanoTime())
 
         val pingFuture = pingScheduler.scheduleAtFixedRate({
             try {
                 if (connection.isClosed) return@scheduleAtFixedRate
 
-                val sinceLastPong = System.currentTimeMillis() - lastPong.get()
+                val sinceLastPong = (System.nanoTime() - lastPong.get()) / 1_000_000
                 if (sinceLastPong > wsConfig.pingIntervalMs + wsConfig.pingTimeoutMs) {
                     // No pong received within the allowed window — treat as dead.
                     connection.close(WsCloseReason.GoingAway)
@@ -285,7 +295,7 @@ internal class UndertowWsHandler(
             }
 
             override fun onFullPongMessage(channel: WebSocketChannel, message: BufferedBinaryMessage) {
-                lastPong?.set(System.currentTimeMillis())
+                lastPong?.set(System.nanoTime())
                 message.data.free()
             }
         })
@@ -295,7 +305,8 @@ internal class UndertowWsHandler(
      * Registers two complementary close hooks:
      *
      * 1. **[WsConnection.onClose]** — application-level cleanup: cancels the ping
-     *    task and removes the connection from tracking structures.
+     *    task. (Removal from [activeWsConnections] is registered earlier, in
+     *    [createConnection], so it also covers setup failures.)
      * 2. **[WebSocketChannel.addCloseTask]** — transport-level fallback: ensures
      *    the connection is closed if the underlying channel is torn down without a
      *    proper WebSocket close handshake (e.g. abrupt TCP disconnect).
@@ -307,7 +318,6 @@ internal class UndertowWsHandler(
     ) {
         connection.onClose {
             pingFuture?.cancel(false)
-            activeWsConnections.remove(connection)
         }
         wsChannel.addCloseTask {
             connection.close(WsCloseReason.ClientDisconnected)

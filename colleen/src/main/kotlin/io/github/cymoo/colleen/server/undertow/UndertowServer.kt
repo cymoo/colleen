@@ -99,6 +99,15 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
     private val wsHandler = UndertowWsHandler(config, wsConfig)
 
     /**
+     * Active SSE connections, tracked so graceful shutdown can signal them to
+     * close (symmetric with WebSocket handling). Without this, long-lived SSE
+     * handlers would only learn about shutdown via thread interruption after
+     * the executor timeout.
+     */
+    private val activeSseConnections: MutableSet<SseConnection> =
+        java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
      * Starts the HTTP server.
      *
      * This:
@@ -160,7 +169,25 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
         // 6. Shut down WebSocket infrastructure
         wsHandler.shutdown(config.shutdownTimeout)
 
-        // 7. Gracefully shut down SSE executor if initialized
+        // 7. Signal all active SSE connections to close, then shut down the executor.
+        // Closing first lets handler loops (`while (!conn.isClosed) ...`) exit
+        // cooperatively instead of waiting for shutdownNow() interruption.
+        //
+        // Each close() runs on its own virtual thread with a bounded wait:
+        // close() contends with in-flight blocking writes (see issue #25), so a
+        // single stuck client must not be able to hang stop(). Connections that
+        // miss the deadline are torn down by Undertow's stop below.
+        val sseCloseThreads = ArrayList(activeSseConnections).map { conn ->
+            Thread.startVirtualThread {
+                runCatching { conn.close(SseCloseReason.ServerShutdown) }
+            }
+        }
+        val sseCloseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        for (thread in sseCloseThreads) {
+            val remainingMs = (sseCloseDeadline - System.nanoTime()) / 1_000_000
+            if (remainingMs <= 0) break
+            runCatching { thread.join(remainingMs) }
+        }
         if (lazySseExecutor.isInitialized()) {
             sseExecutor.shutdown()
             if (!sseExecutor.awaitTermination(config.shutdownTimeout, TimeUnit.MILLISECONDS)) {
@@ -206,7 +233,9 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
 
             // Core server options
             setServerOption(UndertowOptions.URL_CHARSET, "UTF-8")
-            setServerOption(UndertowOptions.IDLE_TIMEOUT, config.idleTimeout.toInt())
+            // IDLE_TIMEOUT is an Int option; clamp to avoid silent overflow for
+            // extreme Long configs (> ~24.8 days)
+            setServerOption(UndertowOptions.IDLE_TIMEOUT, config.idleTimeout.coerceIn(0, Int.MAX_VALUE.toLong()).toInt())
             setServerOption(UndertowOptions.MAX_ENTITY_SIZE, config.maxRequestSize)
 
             // Socket options
@@ -263,8 +292,28 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
                 // Enable blocking API (required for reading body, etc.)
                 exchange.startBlocking()
 
-                val request = UndertowRequestAdapter.adapt(exchange, config)
-                val response = requestHandler(request)
+                // Request adaptation happens before the framework's error handling
+                // is available; malformed ingress data (e.g. a path containing ".."
+                // segments) must be rejected here as 400, not surface as a 500.
+                val request = try {
+                    UndertowRequestAdapter.adapt(exchange, config)
+                } catch (e: IllegalArgumentException) {
+                    logger.debug("Rejected malformed request: {}", e.message)
+                    writeBadRequest(exchange)
+                    return@dispatchToWorker
+                }
+
+                // The framework handles Exceptions itself; anything escaping here
+                // (Errors, direct Throwable subclasses) must still be logged and
+                // answered, otherwise the exchange would hang until timeout.
+                val response = try {
+                    requestHandler(request)
+                } catch (e: Throwable) {
+                    logger.error("Unhandled throwable escaped request handling", e)
+                    writeInternalError(exchange)
+                    if (e is Error) throw e
+                    return@dispatchToWorker
+                }
 
                 val responseWriteStartNano = System.nanoTime()
 
@@ -362,6 +411,12 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
             }
 
             is RawResponseBody.Bytes -> {
+                // The length is known; set Content-Length explicitly, otherwise
+                // Undertow falls back to chunked encoding for bodies larger than
+                // its internal buffer (8KB).
+                if (!response.headers.has("Content-Length")) {
+                    exchange.setResponseContentLength(body.bytes.size.toLong())
+                }
                 exchange.outputStream.use { it.write(body.bytes) }
             }
 
@@ -398,6 +453,9 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
         val writer = UndertowSseWriter(exchange)
         val connection = SseConnection(writer)
 
+        activeSseConnections.add(connection)
+        connection.onClose { activeSseConnections.remove(connection) }
+
         sseExecutor.execute {
             connection.use {
                 try {
@@ -419,6 +477,16 @@ class UndertowServer(private val config: ServerConfig, private val wsConfig: WsC
         exchange.statusCode = 500
         exchange.outputStream.bufferedWriter().use {
             it.write("Internal server error")
+        }
+    }
+
+    private fun writeBadRequest(exchange: HttpServerExchange) {
+        if (exchange.isResponseStarted) {
+            return
+        }
+        exchange.statusCode = 400
+        exchange.outputStream.bufferedWriter().use {
+            it.write("Bad Request")
         }
     }
 }

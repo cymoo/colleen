@@ -181,7 +181,10 @@ class RouterTest {
                 ctx.pathParam("name")
             }
 
-            val ctx = createTestContext("GET", UrlPath.normalize("/files/a%252Fb"))
+            // The server layer decodes exactly once: the wire path /files/a%252Fb
+            // reaches the router as /files/a%2Fb, and the router must NOT decode
+            // it again (a%2Fb would otherwise become a/b and change the structure).
+            val ctx = createTestContext("GET", UrlPath.normalize(UrlPath.decodePath("/files/a%252Fb")))
             router.handleRequest(ctx)
 
             assertEquals("a%2Fb", ctx.pathParams["name"])

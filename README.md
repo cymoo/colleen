@@ -222,11 +222,26 @@ app.get("/images/{name}.{ext}") { ctx -> "${ctx.pathParam("name")}.${ctx.pathPar
 ```
 
 In complex segments, a parameter captures up to the first occurrence of the next
-static delimiter. For example, `/files/{name}-{version}.txt` matches
-`/files/foo-bar-1.txt` as `name = "foo"` and `version = "bar-1"`.
+static delimiter, without backtracking. For example, `/files/{name}-{version}.txt`
+matches `/files/foo-bar-1.txt` as `name = "foo"` and `version = "bar-1"` — and
+`/{a}x{b}` does NOT match `xaxb` (`a` captures nothing before the first `x`).
 
-Route priority is deterministic: static segments, complex segments, parameter segments,
-then wildcard segments.
+Route priority is deterministic, compared segment by segment: static segments,
+complex segments, parameter segments, then wildcard segments. A route that ends
+exactly where the request ends beats a wildcard route matching zero extra
+segments, so with both `GET /users` and `GET /users/{path...}` registered,
+`GET /users` is served by the exact route.
+
+A few path conventions to be aware of:
+
+- **Decoding happens exactly once, in the server layer.** Route patterns are
+  written in decoded form; the framework never percent-decodes again, so
+  `%2F` in a request stays an opaque part of one segment and can never change
+  the path structure.
+- **Trailing slashes are equivalent**: `/users/` and `/users` match the same
+  route (empty segments are removed during normalization).
+- Requests whose decoded path contains `.` or `..` segments are rejected
+  with `400 Bad Request`.
 
 ### Route Groups
 
@@ -734,6 +749,17 @@ app.wsUse("/chat") { ctx, next ->
 `WsConnection` can access path params, query params, handshake headers, services, and
 state captured during middleware.
 
+Two timing details worth knowing:
+
+- **HTTP middleware does not see WebSocket handshakes.** Upgrade requests are
+  routed before the HTTP middleware chain is collected, so global `use(...)`
+  middleware (logging, rate limiting, ...) never runs for them — only the
+  `wsUse(...)` chain does. Apply WS-specific concerns with `wsUse`.
+- **Path parameters are available earlier for WS.** For HTTP routes they are
+  injected right before the handler; for WS routes they are injected before
+  the `wsUse` middleware chain, so WS middleware can already read
+  `ctx.pathParam(...)`.
+
 Controller-style WebSocket routes are also supported:
 
 ```kotlin
@@ -914,6 +940,7 @@ app.config {
         fileSizeThreshold = 256 * 1024
         shutdownTimeout = 30_000
         idleTimeout = 30_000
+        trustedProxyCount = 0
     }
 
     ws {
@@ -965,6 +992,12 @@ app.config {
   duration, and bytes sent.
 - **Static files**: use `sendFile(..., baseDir = "...")` or `ServeStatic` when paths
   include user input.
+- **TLS / HTTP/2**: Colleen intentionally ships plain HTTP only. Terminate TLS (and
+  HTTP/2) at a reverse proxy such as Nginx or Caddy, and set
+  `server { trustedProxyCount = 1 }` (the number of proxy layers you control) so
+  `Request.ip`, `isSecure`, and HSTS work from `X-Forwarded-For` /
+  `X-Forwarded-Proto`. With the default `trustedProxyCount = 0` these headers are
+  ignored — they are client-supplied and trivially forged.
 
 See `examples/benchmark-api/README.md` for reproducible benchmark profiles.
 

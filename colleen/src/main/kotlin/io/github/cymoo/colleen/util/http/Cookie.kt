@@ -1,5 +1,8 @@
 package io.github.cymoo.colleen.util.http
 
+import java.net.URLDecoder
+import java.net.URLEncoder
+
 /**
  * Cookie utilities with a focus on simplicity and security.
  *
@@ -7,6 +10,12 @@ package io.github.cymoo.colleen.util.http
  * - Simple validation (reject obviously bad input)
  * - Automatic encoding (handle special characters transparently)
  * - Sensible defaults (secure by convention)
+ *
+ * Values are percent-encoded on write ([buildSetCookie]) and decoded on read
+ * ([parse]), so arbitrary strings (spaces, commas, semicolons, non-ASCII)
+ * round-trip safely. Cookies produced by other systems that contain a literal
+ * un-encoded `%` may decode differently — such values are kept as-is when
+ * decoding fails.
  */
 object Cookie {
 
@@ -14,6 +23,9 @@ object Cookie {
      * Parse Cookie header from HTTP request.
      *
      * Format: name1=value1; name2=value2
+     *
+     * Values are percent-decoded (mirroring [buildSetCookie]'s encoding).
+     * Values that are not valid percent-encoding are returned unchanged.
      *
      * @param cookieHeader Cookie header value
      * @return Map of cookie names to decoded values
@@ -31,7 +43,7 @@ object Cookie {
                 if (name.isEmpty()) return@mapNotNull null
 
                 val rawValue = trimmed.substring(index + 1).trim()
-                val value =
+                val unquoted =
                     if (rawValue.length >= 2 &&
                         rawValue.startsWith('"') &&
                         rawValue.endsWith('"')
@@ -41,17 +53,31 @@ object Cookie {
                         rawValue
                     }
 
-                name to value
+                name to decodeValue(unquoted)
             }
             .toMap()
     }
+
+    private fun decodeValue(value: String): String {
+        // '+' must survive as a literal plus: cookie values are not
+        // form-encoded, and encodeValue never emits '+'.
+        if ('%' !in value) return value
+        return try {
+            URLDecoder.decode(value.replace("+", "%2B"), Charsets.UTF_8)
+        } catch (_: IllegalArgumentException) {
+            value // foreign cookie with a literal '%' — leave untouched
+        }
+    }
+
+    private fun encodeValue(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
 
 
     /**
      * Build Set-Cookie header value.
      *
      * @param name Cookie name
-     * @param value Cookie value (will be URL-encoded)
+     * @param value Cookie value (percent-encoded automatically; [parse] decodes)
      * @param maxAge Lifetime in seconds (null=session, 0=delete, >0=persistent)
      * @param path Cookie path
      * @param domain Cookie domain
@@ -78,8 +104,13 @@ object Cookie {
         validateMaxAge(maxAge)
         validateSameSiteSecure(sameSite, secure, maxAge)
 
+        // Encode AFTER validation: raw control chars are rejected above, and the
+        // encoded form contains only RFC 6265 cookie-octets (no spaces/commas
+        // that would produce an invalid Set-Cookie header).
+        val encodedValue = encodeValue(value)
+
         return buildString {
-            append("$name=$value")
+            append("$name=$encodedValue")
 
             maxAge?.let {
                 append("; Max-Age=$it")
@@ -113,26 +144,21 @@ object Cookie {
     }
 
     /**
-     * Validate cookie value.
+     * Validate a raw (not yet encoded) cookie value.
      *
-     * Rules (RFC 6265):
+     * Rules:
      * - Control characters are not allowed.
-     * - The semicolon (';') is not allowed, as it is used to delimit cookie pairs.
      * - Empty values are allowed.
      *
-     * Note:
-     * This method validates a *raw* cookie value. No automatic escaping or
-     * encoding is performed by this library. Callers must ensure the value
-     * complies with RFC 6265.
+     * Everything else is acceptable because [buildSetCookie] percent-encodes
+     * the value before emitting it (so `;`, spaces, commas etc. can never
+     * corrupt the Set-Cookie header).
      *
      * @throws IllegalArgumentException if the value is not a valid cookie value
      */
     fun validateValue(value: String) {
         require(!value.any { it.isISOControl() }) {
             "Cookie value must not contain control characters"
-        }
-        require(!value.contains(';')) {
-            "Cookie value must not contain ';' (cookie-pair delimiter)"
         }
     }
 

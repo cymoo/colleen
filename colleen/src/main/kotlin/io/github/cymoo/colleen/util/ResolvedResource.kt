@@ -51,7 +51,11 @@ internal fun resolveFileStream(
         }
     }
 
+    // contextClassLoader may legally be null (e.g. threads created by some
+    // containers); fall back to this class's loader, then the system loader.
     val cl = Thread.currentThread().contextClassLoader
+        ?: ResolvedResource::class.java.classLoader
+        ?: ClassLoader.getSystemClassLoader()
     val url = cl.getResource(path)
         ?: if (fromClasspath) error("Classpath resource not found: $path")
         else error("File not found on filesystem or classpath: $path")

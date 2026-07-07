@@ -60,6 +60,14 @@ class Cors @JvmOverloads constructor(
     override fun invoke(ctx: Context, next: Next) {
         val origin = ctx.header("origin")
 
+        // For non-wildcard configs the response depends on the Origin header —
+        // shared caches must be told regardless of whether THIS origin is
+        // allowed, or a cached allowed-origin response could be served to a
+        // disallowed origin (and vice versa).
+        if (!isWildcard) {
+            ctx.response.header("Vary", "Origin")
+        }
+
         // Determine if the origin is allowed
         val isAllowed = origin != null && (isWildcard || allowOrigins.contains(origin))
 
@@ -68,31 +76,26 @@ class Cors @JvmOverloads constructor(
             val allowOriginValue = if (isWildcard) "*" else origin
             ctx.response.header("Access-Control-Allow-Origin", allowOriginValue)
 
-            // Set Vary header for non-wildcard origins to ensure proper caching
-            if (!isWildcard) {
-                ctx.response.header("Vary", "Origin")
-            }
-
             // Set credentials header if enabled
             if (allowCredentials) {
                 ctx.response.header("Access-Control-Allow-Credentials", "true")
             }
 
-            // Set allowed methods and headers
-            ctx.response.header("Access-Control-Allow-Methods", allowMethods)
-            ctx.response.header("Access-Control-Allow-Headers", allowHeaders)
-
-            // Set exposed headers if configured
-            if (exposeHeaders.isNotEmpty()) {
-                ctx.response.header("Access-Control-Expose-Headers", exposeHeaders)
-            }
-
             // Handle preflight OPTIONS request
             if (ctx.method == "OPTIONS") {
+                // Allow-Methods / Allow-Headers / Max-Age are preflight-response
+                // headers; browsers ignore them on actual responses.
+                ctx.response.header("Access-Control-Allow-Methods", allowMethods)
+                ctx.response.header("Access-Control-Allow-Headers", allowHeaders)
                 ctx.response.header("Access-Control-Max-Age", maxAge.toString())
                 ctx.status(204)
                 // Don't call next() - preflight should not trigger business logic
                 return
+            }
+
+            // Expose-Headers applies to actual (non-preflight) responses
+            if (exposeHeaders.isNotEmpty()) {
+                ctx.response.header("Access-Control-Expose-Headers", exposeHeaders)
             }
         }
 

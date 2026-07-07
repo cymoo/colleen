@@ -914,28 +914,28 @@ class TypeRefJsonMapperIntegrationTest {
         }
 
         @Test
-        fun `should handle String input directly in toJsonString`() {
-            // Arrange
+        fun `should quote plain String and pass RawJson through in toJsonString`() {
+            // Plain strings are JSON string VALUES and must be quoted; only
+            // RawJson marks pre-serialized JSON to be passed through verbatim.
             val jsonString = """{"id":1,"name":"Test"}"""
 
-            // Act
-            val result = mapper.toJsonString(jsonString)
-
-            // Assert
-            assertEquals(jsonString, result, "String should be returned as-is")
+            // Act & Assert
+            assertEquals("\"hello\"", mapper.toJsonString("hello"))
+            assertEquals(jsonString, mapper.toJsonString(RawJson(jsonString)))
         }
 
         @Test
-        fun `should handle String input directly in toJsonStream`() {
+        fun `should quote plain String and pass RawJson through in toJsonStream`() {
             // Arrange
             val jsonString = """{"id":1,"name":"Test"}"""
 
             // Act
-            val stream = mapper.toJsonStream(jsonString)
-            val result = stream.bufferedReader().use { it.readText() }
+            val quoted = mapper.toJsonStream("hello").bufferedReader().use { it.readText() }
+            val raw = mapper.toJsonStream(RawJson(jsonString)).bufferedReader().use { it.readText() }
 
             // Assert
-            assertEquals(jsonString, result, "String should be returned as-is in stream")
+            assertEquals("\"hello\"", quoted)
+            assertEquals(jsonString, raw)
         }
 
         @Test
@@ -1057,36 +1057,23 @@ class TypeRefJsonMapperIntegrationTest {
         }
 
         @Test
-        fun `should handle null value serialization - returns JSON null`() {
-            // Arrange
-            val data: Any? = null
-            val value = data ?: "null"  // value becomes the String "null"
-
-            // Act
-            val json = mapper.toJsonString(value)
-
-            // Assert
-            // String "null" is treated as already-JSON by JacksonMapper (see toJsonString implementation)
-            assertEquals("null", json) // The literal string "null" is returned as-is, not quoted
+        fun `should handle null value serialization - framework emits JSON null literal`() {
+            // ResponseBody.Json handles null itself (emitting the literal `null`);
+            // a String "null" reaching the mapper is a string VALUE and gets quoted.
+            assertEquals("\"null\"", mapper.toJsonString("null"))
+            // Pre-serialized null passes through via RawJson
+            assertEquals("null", mapper.toJsonString(RawJson("null")))
         }
 
         @Test
         fun `should compare null handling strategies`() {
-            // Strategy 1: Use "null" string (current implementation)
-            val data1: Any? = null
-            val value1 = data1 ?: "null"
-            val json1 = mapper.toJsonString(value1)
-            assertEquals("null", json1) // String is passed through
+            // Strategy 1: RawJson "null" literal
+            assertEquals("null", mapper.toJsonString(RawJson("null")))
 
-            // Strategy 2: Serialize actual null
+            // Strategy 2: Serialize an empty object instead of null
             val data2: Any? = null
-            val value2 = data2 ?: mapOf<String, Any?>()  // Use empty object instead
-            val json2 = mapper.toJsonString(value2)
-            assertEquals("{}", json2)
-
-            // Strategy 3: Direct null JSON string
-            val json3 = "null"
-            assertEquals("null", json3)
+            val value2 = data2 ?: mapOf<String, Any?>()
+            assertEquals("{}", mapper.toJsonString(value2))
         }
 
         @Test
@@ -1103,8 +1090,8 @@ class TypeRefJsonMapperIntegrationTest {
 
             // Assert
             assertEquals("42", jsonNumber)
-            // String is treated as already-JSON by JacksonMapper, so no quotes added
-            assertEquals("Hello", jsonText)
+            // Strings are serialized as JSON string values (quoted)
+            assertEquals("\"Hello\"", jsonText)
             assertEquals("true", jsonFlag)
         }
 
@@ -1116,11 +1103,11 @@ class TypeRefJsonMapperIntegrationTest {
 
             // Act
             val result1 = mapper.toJsonString(plainString)
-            val result2 = mapper.toJsonString(jsonString)
+            val result2 = mapper.toJsonString(RawJson(jsonString))
 
             // Assert
-            // Both are treated as already-JSON by JacksonMapper
-            assertEquals("Hello", result1)
+            // Plain strings are quoted; RawJson passes through untouched
+            assertEquals("\"Hello\"", result1)
             assertEquals("""{"message":"Hello"}""", result2)
         }
 
@@ -1200,21 +1187,21 @@ class TypeRefJsonMapperIntegrationTest {
 
         @Test
         fun `should demonstrate ResponseBody Json class scenario - with null handling`() {
-            // Scenario 1: data is null
-            val data1: Any? = null
-            val value1 = data1 ?: "null"  // becomes String "null"
-            val json1 = mapper.toJsonString(value1)
-            assertEquals("null", json1) // String "null" is treated as already-JSON
+            // Scenario 1: null is handled by ResponseBody.Json itself, which
+            // emits the JSON literal `null` without calling the mapper
 
             // Scenario 2: data is an object
             val data2: Any = SimpleUser(1, "Alice")
             val json2 = mapper.toJsonString(data2)
             assertTrue(json2.contains("\"name\":\"Alice\""))
 
-            // Scenario 3: data is already a JSON string
-            val data3: Any = """{"status":"ok"}"""
+            // Scenario 3: pre-serialized JSON must be wrapped in RawJson
+            val data3: Any = RawJson("""{"status":"ok"}""")
             val json3 = mapper.toJsonString(data3)
             assertEquals("""{"status":"ok"}""", json3) // Passed through as-is
+
+            // Scenario 4: a plain string is a JSON string VALUE
+            assertEquals("\"ok\"", mapper.toJsonString("ok"))
         }
 
         @Test

@@ -34,7 +34,6 @@ class WsRouteNode private constructor(
     val path: String,
     val handler: Consumer<WsConnection>,
     internal val segments: List<PathSegment>,
-    internal val priority: Long,
 ) {
     companion object {
         fun of(path: String, handler: Consumer<WsConnection>): WsRouteNode {
@@ -44,7 +43,6 @@ class WsRouteNode private constructor(
                 path = normalizedPath,
                 handler = handler,
                 segments = segments,
-                priority = PathSegment.priority(segments)
             )
         }
     }

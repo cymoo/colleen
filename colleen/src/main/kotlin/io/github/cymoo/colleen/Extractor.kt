@@ -78,6 +78,31 @@ internal fun cx(fn: KFunction<*>, instance: Any? = null): Handler {
 
     // === EXECUTION PHASE: runtime execution ===
 
+    // Fast path: without optional (default-valued) parameters we can use the
+    // positional `call`, which avoids the per-request KParameter map allocation
+    // and the much slower default-value machinery of `callBy`.
+    val anyOptional = valueParams.any { it.isOptional }
+
+    if (!anyOptional) {
+        return Handler { ctx ->
+            val args = arrayOfNulls<Any?>(paramMetas.size)
+            for (i in paramMetas.indices) {
+                val meta = paramMetas[i]
+                args[i] = meta.resolve(meta.extract(ctx))
+            }
+
+            try {
+                if (instanceParam != null && instance != null) {
+                    fn.call(instance, *args)
+                } else {
+                    fn.call(*args)
+                }
+            } catch (e: InvocationTargetException) {
+                throw e.cause ?: e
+            }
+        }
+    }
+
     return Handler { ctx ->
         val args = buildMap(paramMetas.size + 1) {
             if (instanceParam != null && instance != null) {
@@ -329,6 +354,12 @@ class Path<T : Any>(value: T) : ParamExtractor<T>(value) {
             val targetClass = innerType.getRawClass()
 
             requireParamName("Path", paramName)
+            // Fail at registration time — otherwise the first request would hit
+            // an unconvertible type and produce a confusing runtime error.
+            require(targetClass.isScalar()) {
+                "Path<${targetClass.simpleName}> is not supported: the target type must be a scalar " +
+                        "(String, numbers, Boolean, UUID, BigDecimal/BigInteger, java.time types, or an enum)"
+            }
 
             return { ctx ->
                 val value = ctx.pathParam(paramName)
@@ -603,6 +634,7 @@ class Query<T>(value: T) : ParamExtractor<T>(value) {
     companion object : ExtractorFactory<Query<*>> {
         override fun build(paramName: String, param: Parameter): (Context) -> Query<*> {
             return buildCollectionExtractor(
+                label = "Query",
                 paramName = paramName,
                 innerType = param.unwrapGeneric(),
                 getSingleValue = { ctx, name -> ctx.query(name) },
@@ -643,6 +675,7 @@ class Form<T>(value: T) : ParamExtractor<T>(value) {
     companion object : ExtractorFactory<Form<*>> {
         override fun build(paramName: String, param: Parameter): (Context) -> Form<*> {
             return buildCollectionExtractor(
+                label = "Form",
                 paramName = paramName,
                 innerType = param.unwrapGeneric(),
                 getSingleValue = { ctx, name -> ctx.form(name) },
@@ -770,21 +803,23 @@ private fun buildResolver(kParam: KParameter, jParam: Parameter, paramName: Stri
     }
 }
 
-private val extractorFactoryCache = HashMap<Class<*>, ExtractorFactory<*>>(16)
+// ConcurrentHashMap: lookups also happen on the request path (missing-parameter
+// handling) and routes may be registered from any thread.
+private val extractorFactoryCache = java.util.concurrent.ConcurrentHashMap<Class<*>, ExtractorFactory<*>>(16)
 
 /**
  * Resolves the ExtractorFactory for a ParamExtractor type.
  *
- * Results are cached in [extractorFactoryCache] since this is called during
- * the build phase (route registration) on the main thread only.
+ * Results are cached in [extractorFactoryCache]; the reflection-based lookup
+ * runs at most once per class.
  *
  * Supported strategies:
  * 1. Kotlin: companion object implementing ExtractorFactory
  * 2. Java: public static FACTORY field implementing ExtractorFactory
  */
 internal fun getExtractorFactory(wrapperClass: Class<*>): ExtractorFactory<*> {
-    return extractorFactoryCache.getOrPut(wrapperClass) {
-        resolveExtractorFactory(wrapperClass)
+    return extractorFactoryCache.computeIfAbsent(wrapperClass) {
+        resolveExtractorFactory(it)
     }
 }
 
@@ -898,6 +933,7 @@ internal fun missingMessageByTargetType(source: String, paramName: String, targe
  * to avoid duplication between Query and Form.
  */
 private fun <T : ParamExtractor<*>> buildCollectionExtractor(
+    label: String,
     paramName: String,
     innerType: Type,
     getAllValues: (Context, String) -> List<String>,
@@ -935,6 +971,13 @@ private fun <T : ParamExtractor<*>> buildCollectionExtractor(
             "Type '$innerType' is not supported: List missing element type"
         }
         val elementClass = elementTypeInfo.getRawClass()
+        require(elementClass.isScalar()) {
+            "Type '$innerType' is not supported: List element type must be a scalar"
+        }
+
+        // Name-based extraction requires a resolvable parameter name (Java needs
+        // @Param or -parameters); catch this at registration, not on first request.
+        requireParamName(label, paramName)
 
         return { ctx ->
             val values = getAllValues(ctx, paramName)
@@ -944,6 +987,8 @@ private fun <T : ParamExtractor<*>> buildCollectionExtractor(
 
     // Handle simple types (Int, String, etc.)
     if (targetClass.isScalar()) {
+        requireParamName(label, paramName)
+
         return { ctx ->
             val value = getSingleValue(ctx, paramName)
             when {
@@ -1153,19 +1198,24 @@ internal fun Parameter.hasAnnotation(vararg simpleNames: String): Boolean {
 }
 
 /**
- * Converts a string value to a supported primitive or wrapper type.
+ * Converts a string value to a supported scalar type.
  *
- * Supported target types:
- * - String
- * - Int / Long / Double / Float
- * - Boolean (lenient parsing)
+ * Supported target types (kept in sync with the OpenAPI schema generator so
+ * that documented parameter types are actually bindable):
+ * - String / Char
+ * - Int / Long / Short / Byte / Double / Float
+ * - Boolean (strict parsing, see [toStrictBoolean])
+ * - BigDecimal / BigInteger
+ * - UUID
+ * - LocalDate / LocalTime / LocalDateTime / Instant / OffsetDateTime / ZonedDateTime / Date (ISO-8601)
+ * - Enums (matched by constant name, case-insensitive fallback)
  *
  * Used by Path, Query, and Form extractors.
  *
  * Conversion rules:
  * - null is allowed for non-primitive targets
  * - null for primitive targets results in an error
- * - invalid formats result in [TypeConversionFailed]
+ * - invalid formats result in [TypeConversionFailed] (mapped to HTTP 400)
  */
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 internal fun String?.convertTo(targetClass: Class<*>): Any? {
@@ -1178,6 +1228,10 @@ internal fun String?.convertTo(targetClass: Class<*>): Any? {
             )
         }
         return null
+    }
+
+    if (targetClass.isEnum) {
+        return toEnumConstant(targetClass)
     }
 
     return when (targetClass) {
@@ -1194,31 +1248,95 @@ internal fun String?.convertTo(targetClass: Class<*>): Any? {
         Float::class.java, java.lang.Float::class.java ->
             toFloatOrNull() ?: throw TypeConversionFailed(this, "Float")
 
+        Short::class.java, java.lang.Short::class.java ->
+            toShortOrNull() ?: throw TypeConversionFailed(this, "Short")
+
+        Byte::class.java, java.lang.Byte::class.java ->
+            toByteOrNull() ?: throw TypeConversionFailed(this, "Byte")
+
+        Char::class.java, Character::class.java ->
+            singleOrNull() ?: throw TypeConversionFailed(this, "Char")
+
         Boolean::class.java, java.lang.Boolean::class.java ->
-            toLenientBoolean()
+            toStrictBoolean()
+
+        java.util.UUID::class.java ->
+            convertOrFail("UUID") { java.util.UUID.fromString(it) }
+
+        java.math.BigDecimal::class.java ->
+            convertOrFail("BigDecimal") { java.math.BigDecimal(it) }
+
+        java.math.BigInteger::class.java ->
+            convertOrFail("BigInteger") { java.math.BigInteger(it) }
+
+        java.time.LocalDate::class.java ->
+            convertOrFail("LocalDate") { java.time.LocalDate.parse(it) }
+
+        java.time.LocalTime::class.java ->
+            convertOrFail("LocalTime") { java.time.LocalTime.parse(it) }
+
+        java.time.LocalDateTime::class.java ->
+            convertOrFail("LocalDateTime") { java.time.LocalDateTime.parse(it) }
+
+        java.time.Instant::class.java ->
+            convertOrFail("Instant") { java.time.Instant.parse(it) }
+
+        java.time.OffsetDateTime::class.java ->
+            convertOrFail("OffsetDateTime") { java.time.OffsetDateTime.parse(it) }
+
+        java.time.ZonedDateTime::class.java ->
+            convertOrFail("ZonedDateTime") { java.time.ZonedDateTime.parse(it) }
+
+        java.util.Date::class.java ->
+            convertOrFail("Date") { java.util.Date.from(java.time.Instant.parse(it)) }
 
         else ->
-            throw IllegalArgumentException("Type '${targetClass.simpleName}' is not supported: Type conversion cannot be done")
+            // Reaching this line means a non-scalar slipped past build-time validation.
+            // Treat it as a conversion failure (400) rather than crashing with a 500.
+            throw TypeConversionFailed(this, targetClass.simpleName)
     }
 }
 
+private inline fun <T> String.convertOrFail(targetType: String, block: (String) -> T): T =
+    try {
+        block(this)
+    } catch (e: Exception) {
+        throw TypeConversionFailed(this, targetType, e)
+    }
+
 /**
- * Converts a string to a boolean using lenient rules.
+ * Converts a string to an enum constant of [targetClass].
  *
- * Accepted true values:
- * - "true", "1", "yes", "y" (case-insensitive)
- *
- * Any other value is interpreted as false.
+ * Matches by exact constant name first, then case-insensitively.
  */
-internal fun String.toLenientBoolean(): Boolean {
-    return lowercase() in setOf("true", "1", "yes", "y")
+private fun String.toEnumConstant(targetClass: Class<*>): Any {
+    val constants = targetClass.enumConstants
+    return constants.firstOrNull { (it as Enum<*>).name == this }
+        ?: constants.firstOrNull { (it as Enum<*>).name.equals(this, ignoreCase = true) }
+        ?: throw TypeConversionFailed(this, targetClass.simpleName)
+}
+
+/**
+ * Converts a string to a boolean using a strict, explicit rule set.
+ *
+ * - true:  "true", "1", "yes", "y", "on"   (case-insensitive)
+ * - false: "false", "0", "no", "n", "off"  (case-insensitive)
+ *
+ * Anything else throws [TypeConversionFailed] instead of silently becoming
+ * `false` — silently mapping unknown values (e.g. a typo like "ture") to
+ * false hides client bugs, and "on" is what HTML checkboxes submit.
+ */
+internal fun String.toStrictBoolean(): Boolean = when (lowercase()) {
+    "true", "1", "yes", "y", "on" -> true
+    "false", "0", "no", "n", "off" -> false
+    else -> throw TypeConversionFailed(this, "Boolean")
 }
 
 /**
  * Checks whether this class represents a simple scalar type
  * supported by Colleen's built-in converters.
  */
-internal fun Class<*>.isScalar() = this in SIMPLE_TYPES
+internal fun Class<*>.isScalar() = this in SIMPLE_TYPES || this.isEnum
 
 /**
  * Checks whether this class represents a Map type.
@@ -1234,6 +1352,7 @@ internal fun Class<*>.isList() = List::class.java.isAssignableFrom(this)
  * Set of scalar types supported by Colleen's default string conversion logic.
  *
  * These types are safe to construct directly from textual HTTP data.
+ * Kept in sync with [convertTo] and the OpenAPI schema generator.
  */
 @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
 internal val SIMPLE_TYPES = setOf(
@@ -1242,5 +1361,18 @@ internal val SIMPLE_TYPES = setOf(
     Long::class.java, java.lang.Long::class.java,
     Double::class.java, java.lang.Double::class.java,
     Float::class.java, java.lang.Float::class.java,
-    Boolean::class.java, java.lang.Boolean::class.java
+    Short::class.java, java.lang.Short::class.java,
+    Byte::class.java, java.lang.Byte::class.java,
+    Char::class.java, Character::class.java,
+    Boolean::class.java, java.lang.Boolean::class.java,
+    java.util.UUID::class.java,
+    java.math.BigDecimal::class.java,
+    java.math.BigInteger::class.java,
+    java.time.LocalDate::class.java,
+    java.time.LocalTime::class.java,
+    java.time.LocalDateTime::class.java,
+    java.time.Instant::class.java,
+    java.time.OffsetDateTime::class.java,
+    java.time.ZonedDateTime::class.java,
+    java.util.Date::class.java,
 )

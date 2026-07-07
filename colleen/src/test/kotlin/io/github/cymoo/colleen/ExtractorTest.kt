@@ -171,7 +171,8 @@ class ExtractorTest {
 
     @Test
     fun `should extract Query Boolean parameter - true variants`() {
-        listOf("true", "True", "TRUE", "1", "yes", "Yes", "y", "Y").forEach { value ->
+        // "on" is what HTML checkboxes submit when checked
+        listOf("true", "True", "TRUE", "1", "yes", "Yes", "y", "Y", "on", "ON").forEach { value ->
             val ctx = createContext(queryString = "active=$value")
             val result = cx(::handler14)(ctx) as Boolean
             assertTrue(result, "Failed for value: $value")
@@ -182,10 +183,21 @@ class ExtractorTest {
 
     @Test
     fun `should extract Query Boolean parameter - false variants`() {
-        listOf("false", "False", "0", "no", "n", "anything").forEach { value ->
+        listOf("false", "False", "0", "no", "n", "off", "OFF").forEach { value ->
             val ctx = createContext(queryString = "active=$value")
             val result = cx(::handler15)(ctx) as Boolean
             assertFalse(result, "Failed for value: $value")
+        }
+    }
+
+    @Test
+    fun `should reject unrecognized Boolean values instead of defaulting to false`() {
+        // Silently mapping typos like "ture" to false hides client bugs
+        listOf("anything", "ture", "2").forEach { value ->
+            val ctx = createContext(queryString = "active=$value")
+            assertThrows<TypeConversionFailed>("Expected failure for value: $value") {
+                cx(::handler15)(ctx)
+            }
         }
     }
 

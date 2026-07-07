@@ -577,14 +577,22 @@ class ContextTest {
     }
 
     @Test
-    fun `createSubContext should share response object`() {
+    fun `createSubContext should copy response state without sharing headers`() {
         val parentCtx = createTestContext()
         parentCtx.response.status = 200
+        parentCtx.response.header("X-Parent", "yes")
 
         val childCtx = parentCtx.createSubContext("/new-path", createTestApp())
 
-        assertEquals(parentCtx.response, childCtx.response)
+        // Status and existing headers are carried over...
         assertEquals(200, childCtx.response.status)
+        assertEquals("yes", childCtx.response.header("X-Parent"))
+
+        // ...but headers written by the sub-app must NOT leak back implicitly:
+        // a sub-app that fails with 404 (mount fallthrough) would otherwise
+        // pollute the parent response. Successful sub-apps are merged explicitly.
+        childCtx.response.header("X-Child", "yes")
+        assertEquals(null, parentCtx.response.header("X-Child"))
     }
 
     // === Full Path Tests ===

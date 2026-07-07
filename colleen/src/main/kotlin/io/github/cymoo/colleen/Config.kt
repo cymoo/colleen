@@ -54,6 +54,20 @@ data class ServerConfig(
     /** Connection idle timeout in milliseconds (0 = infinite, default: 30s). */
     @JvmField
     var idleTimeout: Long = 30_000,
+
+    /**
+     * Number of trusted reverse proxies in front of the server (default: 0).
+     *
+     * When 0 (default), `X-Forwarded-For` / `X-Forwarded-Proto` are IGNORED —
+     * these headers are client-supplied and trivially forged, so trusting them
+     * unconditionally would let clients spoof `Request.ip` (bypassing IP rate
+     * limiting and polluting audit logs) and `isSecure`.
+     *
+     * Set to the number of proxy layers you control (e.g. 1 for a single Nginx)
+     * to resolve the real client IP and original scheme from those headers.
+     */
+    @JvmField
+    var trustedProxyCount: Int = 0,
 )
 
 /**
@@ -125,18 +139,39 @@ data class Config(
     @JvmField
     var ws: WsConfig = WsConfig(),
 ) {
+    @Volatile
     internal var jsonMapperInstance: JsonMapper? = null
+
+    // Guards lazy creation of the default mapper. The first burst of concurrent
+    // requests would otherwise each build their own JacksonMapper (KotlinModule +
+    // JavaTime registration is not cheap). ReentrantLock keeps it Loom-friendly.
+    private val jsonMapperLock = java.util.concurrent.locks.ReentrantLock()
 
     /**
      * The configured JsonMapper instance.
      *
-     * Lazily initialized on first access using the default [JacksonMapper]
-     * with settings from [json] and [server] configurations.
+     * Lazily initialized (thread-safe) on first access using the default
+     * [JacksonMapper] with settings from [json] and [server] configurations.
      *
      * Can be replaced using [jsonMapper] setter.
      */
     val jsonMapper: JsonMapper
-        get() = jsonMapperInstance ?: createDefaultJsonMapper().also { jsonMapperInstance = it }
+        get() = jsonMapperInstance ?: withJsonMapperLock {
+            jsonMapperInstance ?: createDefaultJsonMapper().also { jsonMapperInstance = it }
+        }
+
+    /**
+     * Runs [block] under the mapper-creation lock; used by [jsonMapper] and the
+     * `jackson { }` extension so all get-or-create paths share one lock.
+     */
+    internal fun <T> withJsonMapperLock(block: () -> T): T {
+        jsonMapperLock.lock()
+        try {
+            return block()
+        } finally {
+            jsonMapperLock.unlock()
+        }
+    }
 
     /**
      * Replace the default JsonMapper with a custom implementation.
@@ -154,7 +189,7 @@ data class Config(
      * @param mapper The custom JsonMapper implementation to use
      */
     fun jsonMapper(mapper: JsonMapper) {
-        jsonMapperInstance = mapper
+        withJsonMapperLock { jsonMapperInstance = mapper }
     }
 
     /**

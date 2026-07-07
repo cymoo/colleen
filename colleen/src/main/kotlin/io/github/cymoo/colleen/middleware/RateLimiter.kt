@@ -38,7 +38,11 @@ class RateLimiter @JvmOverloads constructor(
     private val capacity: Long = 100,
     private val refillRate: Double = 10.0,
     private val keyExtractor: (Context) -> String = { ctx -> ctx.request.ip },
-    private val onLimitExceeded: (Context) -> Unit = { _ -> throw TooManyRequests() },
+    // Default 429 carries Retry-After = time to earn one token (rounded up),
+    // which the framework's default error handler emits as a Retry-After header.
+    private val onLimitExceeded: (Context) -> Unit = { _ ->
+        throw TooManyRequests(retryAfter = kotlin.math.ceil(1.0 / refillRate).toInt().coerceAtLeast(1))
+    },
     private val bucketTtlSeconds: Long = 3600,
     private val cleanupProbability: Double = 0.01
 ) : Middleware {
@@ -70,7 +74,10 @@ class RateLimiter @JvmOverloads constructor(
 
         ctx.response.header("X-RateLimit-Remaining", remaining.toString())
 
-        // Calculate when the bucket will be full again
+        // X-RateLimit-Reset: epoch seconds when the bucket is FULLY replenished
+        // (token-bucket analog of "window reset"). It deliberately does NOT mean
+        // "when the next request is allowed" — that actionable signal is carried
+        // by the Retry-After header on 429 responses.
         val secondsToFull = ((capacity - remaining).toDouble() / refillRate).toLong()
         val resetTime = System.currentTimeMillis() / 1000 + secondsToFull
         ctx.response.header("X-RateLimit-Reset", resetTime.toString())

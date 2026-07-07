@@ -202,7 +202,10 @@ class TestClient(private val app: Colleen) {
 
             val request = Request(
                 method = method,
-                path = UrlPath.normalize(path),
+                // Real servers (Undertow) percent-decode the path exactly once before
+                // the framework sees it; decodePath reproduces that here so tests and
+                // production observe identical paths.
+                path = UrlPath.normalize(UrlPath.decodePath(path)),
                 queryString = queryString,
                 headers = headers,
                 stream = body?.let { ByteArrayInputStream(it) },
@@ -356,6 +359,7 @@ class TestClient(private val app: Colleen) {
                 is ResponseBody.Text -> body.value
                 is ResponseBody.Json -> when (val value = body.value) {
                     null -> "null"
+                    is io.github.cymoo.colleen.json.RawJson -> value.json
                     else -> jsonMapper.toJsonString(value)
                 }
 
@@ -375,8 +379,9 @@ class TestClient(private val app: Colleen) {
                     jsonMapper.fromJsonString<T>(body.input.readAllBytes().toString(UTF_8))
                 }
 
-                is ResponseBody.Json -> {
-                    body.value as T?
+                is ResponseBody.Json -> when (val value = body.value) {
+                    is io.github.cymoo.colleen.json.RawJson -> jsonMapper.fromJsonString<T>(value.json)
+                    else -> value as T?
                 }
 
                 is ResponseBody.Text -> {
@@ -401,6 +406,7 @@ class TestClient(private val app: Colleen) {
                 is ResponseBody.Text -> body.value.toByteArray(Charsets.UTF_8)
                 is ResponseBody.Json -> when (val value = body.value) {
                     null -> "null".encodeToByteArray()
+                    is io.github.cymoo.colleen.json.RawJson -> value.json.encodeToByteArray()
                     else -> jsonMapper.toJsonString(value).encodeToByteArray()
                 }
 

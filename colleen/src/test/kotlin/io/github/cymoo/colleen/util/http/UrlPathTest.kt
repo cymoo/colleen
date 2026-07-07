@@ -56,21 +56,23 @@ class UrlPathTest {
     }
 
     @Test
-    fun `normalize should decode percent-encoded characters`() {
-        // Arrange & Act
+    fun `normalize should NOT percent-decode`() {
+        // Decoding is the server layer's job (done exactly once by Undertow /
+        // TestClient); decoding here again would corrupt %2541 into A, crash on
+        // a literal %, and re-interpret %2F as a path separator.
         val result = UrlPath.normalize("/api/users/%E4%B8%AD%E6%96%87")
 
         // Assert
-        assertEquals("/api/users/中文", result)
+        assertEquals("/api/users/%E4%B8%AD%E6%96%87", result)
     }
 
     @Test
-    fun `normalize should decode spaces`() {
+    fun `normalize should keep already-decoded characters as-is`() {
         // Arrange & Act
-        val result = UrlPath.normalize("/api/hello%20world")
+        val result = UrlPath.normalize("/api/hello world/中文")
 
         // Assert
-        assertEquals("/api/hello world", result)
+        assertEquals("/api/hello world/中文", result)
     }
 
     @Test
@@ -103,18 +105,14 @@ class UrlPathTest {
     }
 
     @Test
-    fun `normalize should reject encoded dot segment`() {
-        // Arrange & Act & Assert
+    fun `normalize should reject dot segments after server-side decoding`() {
+        // At real ingress the server decodes %2E to '.' BEFORE normalize runs,
+        // so encoded traversal attempts are still rejected — at the right layer.
         assertFailsWith<IllegalArgumentException> {
-            UrlPath.normalize("/api/%2E/users")
+            UrlPath.normalize(UrlPath.decodePath("/api/%2E/users"))
         }
-    }
-
-    @Test
-    fun `normalize should reject encoded double dot segment`() {
-        // Arrange & Act & Assert
         assertFailsWith<IllegalArgumentException> {
-            UrlPath.normalize("/api/%2E%2E/users")
+            UrlPath.normalize(UrlPath.decodePath("/api/%2E%2E/users"))
         }
     }
 
@@ -159,12 +157,12 @@ class UrlPathTest {
     }
 
     @Test
-    fun `split should decode percent-encoded segments`() {
+    fun `split should NOT percent-decode segments`() {
         // Arrange & Act
         val result = UrlPath.split("/api/%E4%B8%AD%E6%96%87/test")
 
         // Assert
-        assertEquals(listOf("api", "中文", "test"), result)
+        assertEquals(listOf("api", "%E4%B8%AD%E6%96%87", "test"), result)
     }
 
     @Test
@@ -270,12 +268,12 @@ class UrlPathTest {
     }
 
     @Test
-    fun `join should decode percent-encoded paths`() {
+    fun `join should NOT percent-decode paths`() {
         // Arrange & Act
         val result = UrlPath.join("/api", "%E4%B8%AD%E6%96%87")
 
         // Assert
-        assertEquals("/api/中文", result)
+        assertEquals("/api/%E4%B8%AD%E6%96%87", result)
     }
 
     // ========================================
@@ -305,5 +303,47 @@ class UrlPathTest {
 
         // Assert
         assertEquals("/api/users", result)
+    }
+
+    // ========================================
+    // decodePath() - server-equivalent single decode
+    // ========================================
+
+    @Test
+    fun `decodePath should decode percent escapes once`() {
+        assertEquals("/api/中文", UrlPath.decodePath("/api/%E4%B8%AD%E6%96%87"))
+        assertEquals("/api/hello world", UrlPath.decodePath("/api/hello%20world"))
+    }
+
+    @Test
+    fun `decodePath should decode exactly once, not twice`() {
+        // %2541 -> %41 (one decode); a second decode would corrupt it into "A"
+        assertEquals("/echo/100%41", UrlPath.decodePath("/echo/100%2541"))
+    }
+
+    @Test
+    fun `decodePath should not convert plus to space`() {
+        // '+' means space only in query strings, never in paths
+        assertEquals("/echo/a+b", UrlPath.decodePath("/echo/a+b"))
+    }
+
+    @Test
+    fun `decodePath should keep encoded slashes opaque`() {
+        // Decoding %2F would change the path structure (security issue)
+        assertEquals("/files/a%2Fb", UrlPath.decodePath("/files/a%2Fb"))
+        assertEquals("/files/a%5Cb", UrlPath.decodePath("/files/a%5Cb"))
+    }
+
+    @Test
+    fun `decodePath should reject malformed escape sequences`() {
+        // A real server answers 400 for these
+        assertFailsWith<IllegalArgumentException> { UrlPath.decodePath("/echo/50%") }
+        assertFailsWith<IllegalArgumentException> { UrlPath.decodePath("/echo/50%2") }
+        assertFailsWith<IllegalArgumentException> { UrlPath.decodePath("/echo/50%zz") }
+    }
+
+    @Test
+    fun `decodePath should pass through paths without escapes`() {
+        assertEquals("/plain/path", UrlPath.decodePath("/plain/path"))
     }
 }

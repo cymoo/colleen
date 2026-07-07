@@ -585,19 +585,23 @@ class ColleenTest {
     }
 
     @Test
-    fun `controller registration should emit event`() {
+    fun `controller registration should register its routes`() {
         // Arrange
         val app = Colleen()
 
         // Act
-        class TestController
+        @Controller("/tc")
+        class TestController {
+            @Get("/ping")
+            fun ping(): String = "pong"
+        }
 
-        val controller = TestController()
-        app.addController(controller)
+        app.addController(TestController())
 
         // Assert
-        val controllerObj = app.router.controllers[0].second
-        assertSame(controller, controllerObj)
+        val response = TestClient(app).get("/tc/ping").send()
+        assertEquals(200, response.status)
+        assertEquals("pong", response.text())
     }
 
     // ========================================================================

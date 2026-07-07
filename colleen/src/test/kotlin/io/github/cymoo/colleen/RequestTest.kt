@@ -661,11 +661,48 @@ class RequestTest {
     inner class IpAddressTest {
 
         @Test
-        fun `should extract IP from X-Forwarded-For header`() {
+        fun `should ignore X-Forwarded-For by default (untrusted)`() {
+            // The header is client-supplied; without trustedProxyCount it must
+            // not be honored, or IP rate limiting could be bypassed by spoofing.
+            val headers = Headers().apply {
+                add("x-forwarded-for", "203.0.113.1")
+            }
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1")
+            val request = Request(
+                method = "GET",
+                path = "/api",
+                headers = headers,
+                serverInfo = metadata
+            )
+
+            assertEquals("10.0.0.1", request.ip)
+        }
+
+        @Test
+        fun `should take entry appended by the trusted proxy with one trusted hop`() {
+            // Chain seen by us: client-forgeable part + entry appended by our proxy.
+            // With trustedProxyCount=1 the LAST entry ("192.0.2.1") is the client
+            // address as observed by the trusted proxy; earlier entries are spoofable.
             val headers = Headers().apply {
                 add("x-forwarded-for", "203.0.113.1, 198.51.100.1, 192.0.2.1")
             }
-            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1")
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1", trustedProxyCount = 1)
+            val request = Request(
+                method = "GET",
+                path = "/api",
+                headers = headers,
+                serverInfo = metadata
+            )
+
+            assertEquals("192.0.2.1", request.ip)
+        }
+
+        @Test
+        fun `should walk further left with more trusted hops`() {
+            val headers = Headers().apply {
+                add("x-forwarded-for", "203.0.113.1, 198.51.100.1, 192.0.2.1")
+            }
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1", trustedProxyCount = 3)
             val request = Request(
                 method = "GET",
                 path = "/api",
@@ -681,7 +718,7 @@ class RequestTest {
             val headers = Headers().apply {
                 add("x-real-ip", "203.0.113.1")
             }
-            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1")
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1", trustedProxyCount = 1)
             val request = Request(
                 method = "GET",
                 path = "/api",
@@ -694,7 +731,7 @@ class RequestTest {
 
         @Test
         fun `should use remoteAddr when no proxy headers present`() {
-            val metadata = Request.ServerInfo(remoteAddr = "192.168.1.100")
+            val metadata = Request.ServerInfo(remoteAddr = "192.168.1.100", trustedProxyCount = 1)
             val request = Request(
                 method = "GET",
                 path = "/api",
@@ -707,9 +744,9 @@ class RequestTest {
         @Test
         fun `should skip unknown values in X-Forwarded-For`() {
             val headers = Headers().apply {
-                add("x-forwarded-for", "unknown, 203.0.113.1, 198.51.100.1")
+                add("x-forwarded-for", "203.0.113.1, 198.51.100.1, unknown")
             }
-            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1")
+            val metadata = Request.ServerInfo(remoteAddr = "10.0.0.1", trustedProxyCount = 1)
             val request = Request(
                 method = "GET",
                 path = "/api",
@@ -717,7 +754,7 @@ class RequestTest {
                 serverInfo = metadata
             )
 
-            assertEquals("203.0.113.1", request.ip)
+            assertEquals("198.51.100.1", request.ip)
         }
     }
 

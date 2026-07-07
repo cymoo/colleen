@@ -553,27 +553,23 @@ class PathSegmentParseAllTest {
 }
 
 // ============================================================================
-// PathSegment.priority() Tests
+// PathSegment.compareSpecificity() Tests
 // ============================================================================
 
-class PathSegmentPriorityTest {
+class PathSegmentSpecificityTest {
 
     @Test
-    fun `priority - static is higher than param`() {
+    fun `specificity - static is higher than param`() {
         // Arrange
         val staticPath = listOf(PathSegment.Static("users"))
         val paramPath = listOf(PathSegment.Param("id"))
 
-        // Act
-        val staticPriority = PathSegment.priority(staticPath)
-        val paramPriority = PathSegment.priority(paramPath)
-
         // Assert
-        assertTrue(staticPriority > paramPriority)
+        assertTrue(PathSegment.compareSpecificity(staticPath, paramPath) > 0)
     }
 
     @Test
-    fun `priority - complex is higher than param`() {
+    fun `specificity - complex is higher than param`() {
         // Arrange
         val complexParts = listOf(
             PathSegment.Complex.Part.Text("file-"),
@@ -582,30 +578,22 @@ class PathSegmentPriorityTest {
         val complexPath = listOf(PathSegment.Complex(complexParts))
         val paramPath = listOf(PathSegment.Param("id"))
 
-        // Act
-        val complexPriority = PathSegment.priority(complexPath)
-        val paramPriority = PathSegment.priority(paramPath)
-
         // Assert
-        assertTrue(complexPriority > paramPriority)
+        assertTrue(PathSegment.compareSpecificity(complexPath, paramPath) > 0)
     }
 
     @Test
-    fun `priority - param is higher than wildcard`() {
+    fun `specificity - param is higher than wildcard`() {
         // Arrange
         val paramPath = listOf(PathSegment.Param("id"))
         val wildcardPath = listOf(PathSegment.Wildcard("path"))
 
-        // Act
-        val paramPriority = PathSegment.priority(paramPath)
-        val wildcardPriority = PathSegment.priority(wildcardPath)
-
         // Assert
-        assertTrue(paramPriority > wildcardPriority)
+        assertTrue(PathSegment.compareSpecificity(paramPath, wildcardPath) > 0)
     }
 
     @Test
-    fun `priority - more specific path wins`() {
+    fun `specificity - more specific path wins`() {
         // Arrange
         val specificPath = listOf(
             PathSegment.Static("users"),
@@ -616,16 +604,12 @@ class PathSegmentPriorityTest {
             PathSegment.Param("id")
         )
 
-        // Act
-        val specificPriority = PathSegment.priority(specificPath)
-        val genericPriority = PathSegment.priority(genericPath)
-
         // Assert
-        assertTrue(specificPriority > genericPriority)
+        assertTrue(PathSegment.compareSpecificity(specificPath, genericPath) > 0)
     }
 
     @Test
-    fun `priority - longer path with static has higher priority`() {
+    fun `specificity - longer path with static has higher specificity`() {
         // Arrange
         val longPath = listOf(
             PathSegment.Static("api"),
@@ -637,24 +621,31 @@ class PathSegmentPriorityTest {
             PathSegment.Param("resource")
         )
 
-        // Act
-        val longPriority = PathSegment.priority(longPath)
-        val shortPriority = PathSegment.priority(shortPath)
-
         // Assert
-        assertTrue(longPriority > shortPriority)
+        assertTrue(PathSegment.compareSpecificity(longPath, shortPath) > 0)
     }
 
     @Test
-    fun `priority - empty path has zero priority`() {
-        // Arrange
-        val emptyPath = emptyList<PathSegment>()
-
-        // Act
-        val result = PathSegment.priority(emptyPath)
+    fun `specificity - exact route beats zero-segment wildcard match`() {
+        // /users must not be shadowed by /users/{path...} matching zero segments
+        val exactPath = listOf(PathSegment.Static("users"))
+        val wildcardPath = listOf(
+            PathSegment.Static("users"),
+            PathSegment.Wildcard("path")
+        )
 
         // Assert
-        assertEquals(0, result)
+        assertTrue(PathSegment.compareSpecificity(exactPath, wildcardPath) > 0)
+    }
+
+    @Test
+    fun `specificity - identical shapes tie`() {
+        // Arrange
+        val a = listOf(PathSegment.Static("users"), PathSegment.Param("id"))
+        val b = listOf(PathSegment.Static("users"), PathSegment.Param("name"))
+
+        // Assert
+        assertEquals(0, PathSegment.compareSpecificity(a, b))
     }
 }
 
