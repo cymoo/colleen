@@ -228,12 +228,16 @@ data class Request @JvmOverloads constructor(
      */
     inline fun <reified T> json(mapper: JsonMapper): T? {
         val data = text() ?: return null
-        try {
-            return mapper.fromJsonString(data, object : TypeRef<T>() {}.type)
+        // Validation runs OUTSIDE the try: a ValidationException must reach the
+        // error pipeline as 422, not be re-classified as a 400 binding failure.
+        val value: T = try {
+            mapper.fromJsonString(data, object : TypeRef<T>() {}.type)
         } catch (e: Exception) {
             val failure = mapper.classifyError(e) ?: BindingFailure.InvalidStructure(e)
             throw failure.toHttpException()
         }
+        autoValidate(value)
+        return value
     }
 
     // ========================================================================
@@ -381,7 +385,7 @@ data class Request @JvmOverloads constructor(
         val convertedData = data.mapValues { (_, values) ->
             if (values.size == 1) values[0] else values
         }
-        return try {
+        val value: T = try {
             mapper.convertValue(convertedData, clazz)
         } catch (e: Exception) {
             val root = unwrapIllegalArgumentException(e)
@@ -392,6 +396,9 @@ data class Request @JvmOverloads constructor(
 
             throw failure.toHttpException()
         }
+        // Outside the try — see the note in json()
+        autoValidate(value)
+        return value
     }
 
     private fun unwrapIllegalArgumentException(e: Throwable): Throwable {
@@ -448,24 +455,30 @@ data class Request @JvmOverloads constructor(
 
     fun <T> json(mapper: JsonMapper, typeRef: TypeRef<T>): T? {
         val data = text() ?: return null
-        try {
+        val value: T = try {
             @Suppress("UNCHECKED_CAST")
-            return mapper.fromJsonString(data, typeRef.type) as T
+            mapper.fromJsonString(data, typeRef.type) as T
         } catch (e: Exception) {
             val failure = mapper.classifyError(e) ?: BindingFailure.InvalidStructure(e)
             throw failure.toHttpException()
         }
+        // Outside the try — see the note in the reified json()
+        autoValidate(value)
+        return value
     }
 
     fun <T> json(mapper: JsonMapper, clazz: Class<T>): T? {
         val data = text() ?: return null
-        try {
+        val value: T = try {
             @Suppress("UNCHECKED_CAST")
-            return mapper.fromJsonString(data, clazz) as T
+            mapper.fromJsonString(data, clazz) as T
         } catch (e: Exception) {
             val failure = mapper.classifyError(e) ?: BindingFailure.InvalidStructure(e)
             throw failure.toHttpException()
         }
+        // Outside the try — see the note in the reified json()
+        autoValidate(value)
+        return value
     }
 
     fun <T> queries(clazz: Class<T>, mapper: JsonMapper): T? = mapToClass(queries, clazz, mapper)
