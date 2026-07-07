@@ -106,12 +106,12 @@
 | 2.10 | Context/Request/Response 改普通 class | **暂不动**：data class 隐患点已消除大半，后续要改也方便 |
 | 2.11(部分) | SSE `Connection: keep-alive` 对 h2 不合法 | **暂不动**（当前仅 HTTP/1.1 无实际影响）；h2 改造思路见 PR 讨论。cookie `secure`/`httpOnly` 默认值确定**不改** |
 | 2.13 / 5.8 | Range / 206 断点续传 | **待办**：本 PR 提交后新开独立 PR |
-| 3.4 | SSE `close()` 可能被卡死的 write 拖住 | **已提 issue**（含解决方案），见仓库 issue 列表 |
+| 3.4 | SSE `close()` 可能被卡死的 write 拖住 | **已提 issue [#25](https://github.com/cymoo/colleen/issues/25)**（含两个候选方案：XNIO WRITE_TIMEOUT / close 与 write 解耦） |
 | 3.10 | 请求处理超时 | **待办**：本 PR 提交后新开独立 PR |
 | 3.11 | HTTP/2 / TLS 配置入口 | **设计取舍，不做**：轻量框架定位，TLS/h2 交由 Nginx 等反代终结；已写入 README 生产建议（含 `trustedProxyCount` 配合说明） |
 | 4.10 | 校验自动接入提取管线 | **待讨论**：属 API 设计取舍，说明见 PR 讨论 |
 | 4.11 | Scanner 不扫继承的注解方法 | **已修**（见阶段 4） |
-| 5.3 | after-next 设头对流式响应无效 | **已提 issue**（含背景与解决方案），见仓库 issue 列表 |
+| 5.3 | after-next 设头对流式响应无效 | **复核为误报，不提 issue**。已用真实服务器验证：`use { next(); ctx.response.header(...) }` 设置的头在 SSE 响应中正常出现。原因是本框架中 SSE/Stream body 只是"描述"，实际写出发生在 `UndertowServer.writeResponse`——即整条中间件链结束**之后**，因此 after-next 设头总是先于任何字节写出。review 的推断（"handler 在 next() 内已开始写出"）不符合本框架的执行模型 |
 | 5.7(部分) | RateLimiter `X-RateLimit-Reset` 语义 | **保留现语义并文档化**：令牌桶下"桶满时刻"是 window-reset 的合理对应且单调有信息量；"何时可重试"已由 429 的 Retry-After 承担；改动只会破坏两个刻意编写的测试。已在代码处注释明确语义 |
 | 5.9 | 响应压缩中间件 | **不做（暂缓）**：性能优化类，后续再议 |
 
