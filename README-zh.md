@@ -233,7 +233,7 @@ app.get("/images/{name}.{ext}") { ctx -> "${ctx.pathParam("name")}.${ctx.pathPar
 - 解码后路径中含 `.` 或 `..` 段的请求会被拒绝为 `400 Bad Request`。
 - **HEAD 与 OPTIONS 自动处理。** `HEAD` 请求由匹配的 `GET` 路由服务（body 在
   服务器层被抑制，`Content-Length` 等响应头保留）；`OPTIONS` 自动应答 `204` 并携带
-  列出已注册方法的 `Allow` 头。显式注册的 `HEAD`/`OPTIONS` 路由始终优先，自行处理
+  列出可用方法的 `Allow` 头（含自动服务的 `HEAD`/`OPTIONS`）。显式注册的 `HEAD`/`OPTIONS` 路由始终优先，自行处理
   `OPTIONS` 的中间件（如 CORS 预检）不受影响。
 
 ### 路由组
