@@ -2,7 +2,7 @@
 
 > 分支：`fix/review-findings` · 基线：main @ eaa3790 · 日期：2026-07-07
 > 对应报告：[REVIEW.md](./REVIEW.md)（条目编号与报告一致）
-> 测试：全量 1907 个测试通过（含新增回归测试 `ReviewFixesTest`、`IngressE2ETest`）
+> 测试：全量 1911 个测试通过（含新增回归测试 `ReviewFixesTest`、`IngressE2ETest`）
 
 按用户要求，**会大幅改动代码结构或引入高复杂度的条目暂缓**，见文末[暂缓清单](#暂缓清单)。
 
@@ -76,6 +76,7 @@
 - **4.2 🟠 宽松布尔静默 false — 已修（行为变更）**。见上表；`on`（HTML 复选框）现在为 true。
 - **4.4 🟡 DI 循环依赖报错晦涩 — 已修**。ThreadLocal 解析栈检测同线程循环，报完整链路（`A -> B -> A`）；同时工厂不再运行于 `ConcurrentHashMap.computeIfAbsent` 内部（嵌套 compute 是未定义行为），改为 per-key ReentrantLock，保持"工厂恰好执行一次"的既有保证（既有并发测试通过）。
 - **4.5 🟡 Java 空参数名报错滞后 — 已修**。`Query`/`Form` 的标量与 List 形态在 build 期校验参数名非空（与 Path/Header/Cookie 一致）。
+- **4.11 ⚪ Scanner 不扫继承的注解方法 — 已修**。`ControllerScanner` 沿继承链收集方法（过滤 bridge/synthetic）；覆写链上**优先取带注解的最派生声明**——Java 方法注解不被继承，未重新标注的覆写不会让基类路由消失（反射调用仍虚分派到覆写实现），重新标注的覆写则完全取代基类声明（不会重复注册路由/中间件）。`SchemaGenerator` 同样沿继承链收集 DTO 字段（子类遮蔽字段优先）。回归测试覆盖四种场景。
 - **4.6 🟡 每请求 `callBy` 反射开销 — 已修**。build 期判定无 optional 参数的 handler（绝大多数）走位置化 `call(*args)` 快路径，省去每请求的 KParameter Map 分配与默认值掩码开销；有默认参数的仍走 `callBy`。
 - **4.7 ⚪ extractorFactoryCache 非线程安全 — 已修**。`ConcurrentHashMap.computeIfAbsent`。
 - **4.8 ⚪ `printStackTrace` 吞异常 / 重载选错 — 已修**。解析失败抛 `IllegalArgumentException` 并携带原始 cause；用 SerializedLambda 的方法签名（JVM descriptor）精确匹配重载。
@@ -95,29 +96,30 @@
 
 以下条目按用户要求暂缓（会大幅更改代码结构 / 引入高复杂度 / 属新功能需求，建议单独立项）：
 
-| 条目 | 内容 | 暂缓原因 |
+状态更新（2026-07-07 第二轮，按作者决定）：
+
+| 条目 | 内容 | 状态 / 决定 |
 |---|---|---|
-| 1.10 | 请求路径每次匹配重复 split | 需要把 `List<String>` segments 贯穿 Router/Middleware/Mount 全部匹配签名，改动面大；当前每次 split 为 O(段数) 纯 CPU 操作，中小路由表下非瓶颈。建议与 1.11 一起做路由匹配层重构 |
-| 1.11 | 路由全表线性扫描无索引 | 结构性改造（method 分桶 + 首段哈希/Trie），建议独立性能专项 |
-| 1.19 / 1.22 | WS 升级与 HTTP 中间件时序、尾斜杠策略、路由命名/反向 URL、复杂段非回溯语义等文档化 | README 文档工作，随下次文档修订一起做（代码内关键处已补注释） |
-| 1.21 | 自动 HEAD / 自动 OPTIONS | 新功能：HEAD 需要"执行 GET 但抑制 body"贯通到写出层，OPTIONS 需要聚合 Allow；`findAllowedMethods` 已具备信息，实现建议独立 PR |
-| 2.10 | Context/Request/Response 从 data class 改普通 class | 破坏公开 API（copy/equals 消失），属结构性变更。本轮已把"哪些字段共享、哪些复制"的语义集中修正并注释（BodyCache / headers 深拷贝），data class 的隐患点已消除大半 |
-| 2.11(部分) | SSE `Connection: keep-alive` 对 h2 不合法；cookie `secure`/`httpOnly` 默认值翻转 | 前者依赖 3.11（当前服务器仅 HTTP/1.1，无实际影响）；后者是影响所有用户的默认值变更，建议随主版本号调整 |
-| 2.13 / 5.8 | Range / 206 断点续传 | 新功能（Range 解析、多段、If-Range），复杂度高，建议独立 PR |
-| 3.4 | SSE `close()` 可能被卡死的 write 拖住 | 正确修法是写超时或 close 与 write 解耦锁，涉及 SseWriter 接口契约变更；3.5 修复后卡死客户端已不能拖累其他连接，影响面缩小为"该连接自身的 close 延迟" |
-| 3.10 | 请求处理超时 | 新功能（per-request timeout 需要可中断的执行模型），虚拟线程下建议配合结构化并发做，独立立项 |
-| 3.11 | HTTP/2 / TLS 配置入口 | 新功能（addHttpsListener/ALPN/证书配置面），独立立项；当前建议文档明示由反代终结 TLS |
-| 4.10 | 校验自动接入提取管线 | 设计取舍类（声明式校验钩子），需要 API 设计讨论 |
-| 4.11 | Scanner 不扫继承的注解方法 | 行为变更需设计定夺（继承 controller 的语义、路由顺序保证），建议文档明示现状后再决定 |
-| 5.3 | after-next 设头对流式响应无效 | 通用解需要"响应提交前回调"机制（洋葱模型内无自然挂点），属架构级改动 |
-| 5.7(部分) | RateLimiter `X-RateLimit-Reset` 语义 | 令牌桶下"桶满时刻"与"下个令牌时刻"皆是业界可见解释；已通过默认 Retry-After 提供可操作信息，头语义变更暂缓 |
-| 5.9 | 响应压缩中间件 | 新功能（内容协商 + 与流式/SSE 交互），独立立项 |
+| 1.10 / 1.11 | 路由匹配热路径优化（split 复用、索引） | **不做**：性能优化类，当前无瓶颈 |
+| 1.19 / 1.22 | WS 与 HTTP 中间件时序、尾斜杠策略、复杂段非回溯语义、单次解码约定 | **已完成**：README / README-zh 已补充（路由约定小节 + WS 时序小节 + 生产建议） |
+| 1.21 | 自动 HEAD / 自动 OPTIONS | **待办**：本 PR 提交后新开独立 PR |
+| 2.10 | Context/Request/Response 改普通 class | **暂不动**：data class 隐患点已消除大半，后续要改也方便 |
+| 2.11(部分) | SSE `Connection: keep-alive` 对 h2 不合法 | **暂不动**（当前仅 HTTP/1.1 无实际影响）；h2 改造思路见 PR 讨论。cookie `secure`/`httpOnly` 默认值确定**不改** |
+| 2.13 / 5.8 | Range / 206 断点续传 | **待办**：本 PR 提交后新开独立 PR |
+| 3.4 | SSE `close()` 可能被卡死的 write 拖住 | **已提 issue**（含解决方案），见仓库 issue 列表 |
+| 3.10 | 请求处理超时 | **待办**：本 PR 提交后新开独立 PR |
+| 3.11 | HTTP/2 / TLS 配置入口 | **设计取舍，不做**：轻量框架定位，TLS/h2 交由 Nginx 等反代终结；已写入 README 生产建议（含 `trustedProxyCount` 配合说明） |
+| 4.10 | 校验自动接入提取管线 | **待讨论**：属 API 设计取舍，说明见 PR 讨论 |
+| 4.11 | Scanner 不扫继承的注解方法 | **已修**（见阶段 4） |
+| 5.3 | after-next 设头对流式响应无效 | **已提 issue**（含背景与解决方案），见仓库 issue 列表 |
+| 5.7(部分) | RateLimiter `X-RateLimit-Reset` 语义 | **保留现语义并文档化**：令牌桶下"桶满时刻"是 window-reset 的合理对应且单调有信息量；"何时可重试"已由 429 的 Retry-After 承担；改动只会破坏两个刻意编写的测试。已在代码处注释明确语义 |
+| 5.9 | 响应压缩中间件 | **不做（暂缓）**：性能优化类，后续再议 |
 
 ---
 
 ## 验证
 
-- `mvn -pl colleen test`：**1907 个测试全部通过**（0 失败 0 错误）。
+- `mvn -pl colleen test`：**1911 个测试全部通过**（0 失败 0 错误）。
 - `examples` 模块随框架变更编译通过。
 - 新增回归测试：
   - `ReviewFixesTest`（20 例）：1.2/1.3/1.4/1.5/1.6/1.7/1.8/2.1/2.3/2.5/2.6/2.7/2.8/2.12/4.1/4.3/4.4。

@@ -354,6 +354,65 @@ class ReviewFixesTest {
     }
 
     // ========================================================================
+    // Controller / DTO inheritance (4.11)
+    // ========================================================================
+
+    @Nested
+    inner class ControllerInheritance {
+
+        fun createDog(@Suppress("unused") dog: Json<DogDto>): String = "ok"
+
+        @Test
+        fun `4_11 - annotated methods inherited from a base controller are registered`() {
+            val app = Colleen()
+            app.addController(SubController())
+
+            val client = TestClient(app)
+            assertEquals("own", client.get("/sub/own").send().text())
+            assertEquals("from-base", client.get("/sub/inherited").send().text())
+        }
+
+        @Test
+        fun `4_11 - un-annotated override keeps the route and dispatches to the override`() {
+            val app = Colleen()
+            app.addController(SubController())
+
+            // @Get lives on the base declaration; the response must come from
+            // the subclass implementation (virtual dispatch)
+            assertEquals("sub-impl", TestClient(app).get("/sub/overridden").send().text())
+        }
+
+        @Test
+        fun `4_11 - re-annotated override replaces the base registration`() {
+            val app = Colleen()
+            app.addController(SubController())
+
+            assertEquals("sub-impl", TestClient(app).get("/sub/re-annotated").send().text())
+        }
+
+        @Test
+        fun `4_11 - inherited DTO fields appear in the OpenAPI schema`() {
+            val app = Colleen()
+            app.openApi()
+            app.post("/dogs", ::createDog)
+
+            val spec = TestClient(app).get("/openapi.json").send().json<Map<String, Any?>>()!!
+
+            @Suppress("UNCHECKED_CAST")
+            val components = spec["components"] as Map<String, Any?>
+            @Suppress("UNCHECKED_CAST")
+            val schemas = components["schemas"] as Map<String, Any?>
+            @Suppress("UNCHECKED_CAST")
+            val dog = schemas["DogDto"] as Map<String, Any?>
+            @Suppress("UNCHECKED_CAST")
+            val properties = dog["properties"] as Map<String, Any?>
+
+            assertTrue("barks" in properties, "own field must be present")
+            assertTrue("kind" in properties, "inherited field must be present")
+        }
+    }
+
+    // ========================================================================
     // Dependency injection
     // ========================================================================
 
@@ -379,4 +438,37 @@ class ReviewFixesTest {
     enum class Color { RED, GREEN, BLUE }
     class ServiceA(@Suppress("unused") val b: ServiceB)
     class ServiceB(@Suppress("unused") val a: ServiceA)
+
+    open class BaseController {
+        @Get("/inherited")
+        fun inherited(): String = "from-base"
+
+        @Get("/overridden")
+        open fun overridden(): String = "base-impl"
+
+        @Get("/re-annotated")
+        open fun reAnnotated(): String = "base-impl"
+    }
+
+    @Controller("/sub")
+    class SubController : BaseController() {
+        @Get("/own")
+        fun own(): String = "own"
+
+        // No annotation here: the route defined on the base method must survive
+        override fun overridden(): String = "sub-impl"
+
+        @Get("/re-annotated")
+        override fun reAnnotated(): String = "sub-impl"
+    }
+
+    open class BaseDto {
+        @Suppress("unused")
+        val kind: String = "animal"
+    }
+
+    class DogDto : BaseDto() {
+        @Suppress("unused")
+        val barks: Boolean = true
+    }
 }

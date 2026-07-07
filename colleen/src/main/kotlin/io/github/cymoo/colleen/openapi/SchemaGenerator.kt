@@ -169,9 +169,7 @@ private fun buildObjectSchema(
         null
     }
 
-    for (field in clazz.declaredFields) {
-        if (Modifier.isStatic(field.modifiers) || field.isSynthetic) continue
-
+    for (field in collectInstanceFields(clazz)) {
         val schemaAnnotation = field.getAnnotation(Schema::class.java)
 
         // Skip hidden fields
@@ -222,4 +220,27 @@ private fun buildObjectSchema(
         if (properties.isNotEmpty()) put("properties", properties)
         if (requiredFields.isNotEmpty()) put("required", requiredFields)
     }
+}
+
+/**
+ * Collects non-static, non-synthetic instance fields of [clazz] and all its
+ * superclasses (excluding Object), so inherited DTO fields appear in the
+ * schema. Walks bottom-up; a shadowing subclass field wins (deduplicated by name).
+ */
+private fun collectInstanceFields(clazz: Class<*>): List<java.lang.reflect.Field> {
+    val seen = HashSet<String>()
+    val fields = mutableListOf<java.lang.reflect.Field>()
+
+    var current: Class<*>? = clazz
+    while (current != null && current != Any::class.java) {
+        for (field in current.declaredFields) {
+            if (Modifier.isStatic(field.modifiers) || field.isSynthetic) continue
+            if (seen.add(field.name)) {
+                fields.add(field)
+            }
+        }
+        current = current.superclass
+    }
+
+    return fields
 }

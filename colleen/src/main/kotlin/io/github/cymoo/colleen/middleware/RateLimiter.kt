@@ -74,7 +74,10 @@ class RateLimiter @JvmOverloads constructor(
 
         ctx.response.header("X-RateLimit-Remaining", remaining.toString())
 
-        // Calculate when the bucket will be full again
+        // X-RateLimit-Reset: epoch seconds when the bucket is FULLY replenished
+        // (token-bucket analog of "window reset"). It deliberately does NOT mean
+        // "when the next request is allowed" — that actionable signal is carried
+        // by the Retry-After header on 429 responses.
         val secondsToFull = ((capacity - remaining).toDouble() / refillRate).toLong()
         val resetTime = System.currentTimeMillis() / 1000 + secondsToFull
         ctx.response.header("X-RateLimit-Reset", resetTime.toString())
