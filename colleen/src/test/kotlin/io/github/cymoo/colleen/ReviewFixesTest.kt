@@ -13,8 +13,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Regression tests for the fixes from the 2026-07 code review (see REVIEW.md /
- * FIXES.md; test names reference the finding numbers).
+ * Regression tests for the fixes from the 2026-07 code review (see docs/reviews/REVIEW.md
+ * and docs/reviews/FIXES.md; test names reference the finding numbers).
  */
 class ReviewFixesTest {
 
