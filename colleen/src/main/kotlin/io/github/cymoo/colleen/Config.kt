@@ -56,6 +56,25 @@ data class ServerConfig(
     var idleTimeout: Long = 30_000,
 
     /**
+     * Per-request processing timeout in milliseconds (default: 0 = disabled).
+     *
+     * When the routing + handler phase of a request exceeds this deadline, the
+     * worker thread is interrupted and the request answers 503 with the error
+     * code `REQUEST_TIMEOUT` (customizable via `onError<RequestTimeout>`).
+     *
+     * The mechanism is **cooperative**: interruption wakes blocking operations
+     * that support it (sleep, lock waits, interruptible NIO, drivers with
+     * interrupt support). Pure CPU loops or non-interruptible IO will not be
+     * stopped — pair those with their own timeouts (e.g. JDBC socket timeout).
+     *
+     * The deadline covers handler execution only; streaming a response body,
+     * SSE and WebSocket sessions run after this phase and are governed by
+     * [idleTimeout] instead.
+     */
+    @JvmField
+    var requestTimeout: Long = 0,
+
+    /**
      * Number of trusted reverse proxies in front of the server (default: 0).
      *
      * When 0 (default), `X-Forwarded-For` / `X-Forwarded-Proto` are IGNORED —

@@ -222,6 +222,23 @@ class GatewayTimeout(
     cause: Throwable? = null
 ) : HttpException(504, message, cause)
 
+/**
+ * Thrown when request processing exceeds [io.github.cymoo.colleen.ServerConfig.requestTimeout].
+ *
+ * Maps to 503 with the stable error code `REQUEST_TIMEOUT` (408 deliberately
+ * not used — it means "the CLIENT took too long to send its request").
+ * Register `onError<RequestTimeout>` to customize the response.
+ */
+class RequestTimeout(
+    val timeoutMillis: Long,
+    cause: Throwable? = null
+) : HttpException(
+    status = 503,
+    message = "Request processing exceeded ${timeoutMillis}ms",
+    cause = cause,
+    code = "REQUEST_TIMEOUT",
+)
+
 // ========================================================================
 // Route Not Found
 // ========================================================================

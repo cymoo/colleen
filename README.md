@@ -947,6 +947,7 @@ app.config {
         fileSizeThreshold = 256 * 1024
         shutdownTimeout = 30_000
         idleTimeout = 30_000
+        requestTimeout = 0
         trustedProxyCount = 0
     }
 
@@ -995,6 +996,12 @@ app.config {
   for small responses.
 - **Global middleware**: every global middleware runs for every request. Prefer prefix
   middleware when possible.
+- **Request timeout**: set `server { requestTimeout = 10_000 }` to answer 503
+  (`REQUEST_TIMEOUT`, customizable via `onError<RequestTimeout>`) when a handler
+  exceeds the deadline. The mechanism is cooperative (thread interruption): it wakes
+  sleeps, lock waits and interruptible IO, but cannot stop pure CPU loops or
+  non-interruptible IO — give those their own timeouts (e.g. JDBC socket timeout).
+  Streaming/SSE/WebSocket phases are governed by `idleTimeout` instead.
 - **Structured logging**: prefer `Event.ResponseSent` when logs need final status,
   duration, and bytes sent.
 - **Static files**: use `sendFile(..., baseDir = "...")` or `ServeStatic` when paths

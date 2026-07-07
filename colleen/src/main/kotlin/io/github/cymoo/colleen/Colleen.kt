@@ -803,7 +803,7 @@ class Colleen {
      */
     internal fun handleRequest(ctx: Context) {
         try {
-            router.handleRequest(ctx)
+            routeWithTimeout(ctx)
             // Materialize the response body once routing and error handling are complete.
             // This binds the high-level ResponseBody to a concrete RawResponseBody
             ctx.response.materialize(ctx)
@@ -826,6 +826,95 @@ class Colleen {
                 else -> throw e
             }
         }
+    }
+
+    /**
+     * Runs the router under [ServerConfig.requestTimeout] when configured.
+     *
+     * Only the root application arms the watchdog — mounted sub-apps execute
+     * within the parent's deadline. On timeout the worker thread is interrupted
+     * (cooperative — see the config KDoc for limitations) and whatever exception
+     * escapes is translated into [RequestTimeout], which then flows through the
+     * normal error-handling pipeline (`onError<RequestTimeout>` / default 503).
+     */
+    private fun routeWithTimeout(ctx: Context) {
+        val timeoutMillis = config.server.requestTimeout
+        if (timeoutMillis <= 0 || parent != null) {
+            router.handleRequest(ctx)
+            return
+        }
+
+        val worker = Thread.currentThread()
+
+        // The lock makes "interrupt the worker" and "worker finishes + clears
+        // the flag" mutually exclusive. Without it, cancel(false) can race an
+        // already-running watchdog task: the interrupt would land AFTER the
+        // finally block, leaking interrupted status into response writing —
+        // or, with platform worker threads, into an unrelated next request.
+        val timeoutLock = java.util.concurrent.locks.ReentrantLock()
+        var timedOut = false // the watchdog fired and interrupted the worker
+        var settled = false  // the worker has left the guarded section
+
+        val watchdog = RequestWatchdog.schedule(timeoutMillis) {
+            timeoutLock.lock()
+            try {
+                if (!settled) {
+                    timedOut = true
+                    worker.interrupt()
+                }
+            } finally {
+                timeoutLock.unlock()
+            }
+        }
+
+        try {
+            router.handleRequest(ctx)
+            // Completed despite a late-firing watchdog: the response is intact,
+            // serve it — the finally block clears the pending interrupt.
+        } catch (e: Exception) {
+            timeoutLock.lock()
+            val expired = try { timedOut } finally { timeoutLock.unlock() }
+            if (expired) {
+                // The deadline passed; attribute whatever escaped (typically an
+                // InterruptedException from a blocking call) to the timeout.
+                throw RequestTimeout(timeoutMillis, e)
+            }
+            throw e
+        } finally {
+            watchdog.cancel(false)
+            timeoutLock.lock()
+            try {
+                // After this point the watchdog can no longer interrupt us
+                settled = true
+                if (timedOut) {
+                    // The interrupt was issued inside the lock, so it has
+                    // definitely landed — clear it so response writing isn't
+                    // poisoned (nor, on pooled platform threads, the next request).
+                    Thread.interrupted()
+                }
+            } finally {
+                timeoutLock.unlock()
+            }
+        }
+    }
+
+    /**
+     * Shared daemon scheduler whose only job is interrupting request threads
+     * when their deadline passes. One thread suffices: tasks are O(1) and the
+     * common case (request finishes in time) cancels before firing.
+     */
+    private object RequestWatchdog {
+        private val scheduler by lazy {
+            java.util.concurrent.ScheduledThreadPoolExecutor(1) { runnable ->
+                Thread(runnable, "request-timeout-watchdog").apply { isDaemon = true }
+            }.apply {
+                // Cancelled tasks (the common case) must not linger in the queue
+                removeOnCancelPolicy = true
+            }
+        }
+
+        fun schedule(delayMillis: Long, task: () -> Unit): java.util.concurrent.ScheduledFuture<*> =
+            scheduler.schedule(task, delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     // ========================================================================
