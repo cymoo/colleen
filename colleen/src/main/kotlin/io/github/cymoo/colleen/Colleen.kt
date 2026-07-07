@@ -845,10 +845,26 @@ class Colleen {
         }
 
         val worker = Thread.currentThread()
-        val timedOut = AtomicBoolean(false)
+
+        // The lock makes "interrupt the worker" and "worker finishes + clears
+        // the flag" mutually exclusive. Without it, cancel(false) can race an
+        // already-running watchdog task: the interrupt would land AFTER the
+        // finally block, leaking interrupted status into response writing —
+        // or, with platform worker threads, into an unrelated next request.
+        val timeoutLock = java.util.concurrent.locks.ReentrantLock()
+        var timedOut = false // the watchdog fired and interrupted the worker
+        var settled = false  // the worker has left the guarded section
+
         val watchdog = RequestWatchdog.schedule(timeoutMillis) {
-            timedOut.set(true)
-            worker.interrupt()
+            timeoutLock.lock()
+            try {
+                if (!settled) {
+                    timedOut = true
+                    worker.interrupt()
+                }
+            } finally {
+                timeoutLock.unlock()
+            }
         }
 
         try {
@@ -856,7 +872,9 @@ class Colleen {
             // Completed despite a late-firing watchdog: the response is intact,
             // serve it — the finally block clears the pending interrupt.
         } catch (e: Exception) {
-            if (timedOut.get()) {
+            timeoutLock.lock()
+            val expired = try { timedOut } finally { timeoutLock.unlock() }
+            if (expired) {
                 // The deadline passed; attribute whatever escaped (typically an
                 // InterruptedException from a blocking call) to the timeout.
                 throw RequestTimeout(timeoutMillis, e)
@@ -864,10 +882,18 @@ class Colleen {
             throw e
         } finally {
             watchdog.cancel(false)
-            if (timedOut.get()) {
-                // Clear the interrupt flag so response writing isn't poisoned
-                // by a leftover interrupted status.
-                Thread.interrupted()
+            timeoutLock.lock()
+            try {
+                // After this point the watchdog can no longer interrupt us
+                settled = true
+                if (timedOut) {
+                    // The interrupt was issued inside the lock, so it has
+                    // definitely landed — clear it so response writing isn't
+                    // poisoned (nor, on pooled platform threads, the next request).
+                    Thread.interrupted()
+                }
+            } finally {
+                timeoutLock.unlock()
             }
         }
     }
